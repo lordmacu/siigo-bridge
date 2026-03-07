@@ -445,20 +445,28 @@ var (
 // ExtfhDebug enables verbose EXTFH logging when true
 var ExtfhDebug = false
 
-// extfhCfgPaths are known locations for EXTFH.CFG
-var extfhCfgPaths = []string{
-	`C:\Siigo\EXTFH.CFG`,
-	`C:\EXTFH.CFG`,
-}
-
 // setupEnvironment ensures Micro Focus environment variables are set for EXTFH.
-// Sets COBCONFIG to point to EXTFH.CFG and adds DLL directory to PATH.
+//
+// Three separate config mechanisms:
+//   - COBCONFIG → COBOL runtime config (format: "set variable=value"), e.g. COBCONFIG.CFG
+//   - EXTFH     → File handler config (INI format with [XFH-DEFAULT]), e.g. EXTFH.CFG
+//   - COBOPT    → COBOL options (format: "set variable=value"), e.g. COBOPT.CFG
+//
+// IMPORTANT: COBCONFIG must NOT point to EXTFH.CFG — they have different formats.
 func setupEnvironment(dllDir string) {
-	// Set COBCONFIG if not already set and EXTFH.CFG exists
+	// COBCONFIG: COBOL runtime config (set no_mfredir=TRUE, etc.)
 	if os.Getenv("COBCONFIG") == "" {
-		for _, cfgPath := range extfhCfgPaths {
+		cobconfigPath := `C:\Siigo\COBCONFIG.CFG`
+		if _, err := os.Stat(cobconfigPath); err == nil {
+			os.Setenv("COBCONFIG", cobconfigPath)
+		}
+	}
+
+	// EXTFH: File handler config (INI format with [XFH-DEFAULT] section)
+	if os.Getenv("EXTFH") == "" {
+		for _, cfgPath := range []string{`C:\Siigo\EXTFH.CFG`, `C:\EXTFH.CFG`} {
 			if _, err := os.Stat(cfgPath); err == nil {
-				os.Setenv("COBCONFIG", cfgPath)
+				os.Setenv("EXTFH", cfgPath)
 				break
 			}
 		}
@@ -470,7 +478,7 @@ func setupEnvironment(dllDir string) {
 		os.Setenv("PATH", dllDir+";"+path)
 	}
 
-	// Set memory strategy if not already set (matches Siigo's COBOPT.CFG)
+	// COBOPT: COBOL options (set memory_strategy=0x40000000, etc.)
 	if os.Getenv("COBOPT") == "" {
 		coboptPath := `C:\Siigo\COBOPT.CFG`
 		if _, err := os.Stat(coboptPath); err == nil {
