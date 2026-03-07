@@ -22,36 +22,51 @@ var LockRetryDelay = 200 * time.Millisecond
 
 // ---------------------------------------------------------------------------
 // EXTFH opcodes (Micro Focus Callable File Handler)
+// Reference: xfhfcd3.cpy, Micro Focus Visual COBOL documentation
 // ---------------------------------------------------------------------------
 const (
-	OpGetInfo      = 0x0006
-	OpFlush        = 0x000C
-	OpUnlockRecord = 0x000F
-	OpOpenInput    = 0xFA00
-	OpOpenOutput   = 0xFA01
-	OpOpenIO       = 0xFA02
-	OpOpenExtend   = 0xFA03
-	OpClose        = 0xFA80
-	OpCloseLock    = 0xFA84
-	OpUnlock       = 0xFA0F
-	OpReadSeq      = 0xFAF5
-	OpReadPrev     = 0xFAF8
-	OpReadRan      = 0xFAF6
-	OpWrite        = 0xFAF3
-	OpRewrite      = 0xFAF4
-	OpDelete       = 0xFAF7
-	OpStepFirst    = 0xFACC
-	OpStepNext     = 0xFACA
-	OpStepPrev     = 0xFACB
-	OpStartEQ      = 0xFAE9
-	OpStartGE      = 0xFAEB
-	OpStartGT      = 0xFAE5
-	OpStartLE      = 0xFAD9
-	OpStartLT      = 0xFADA
-	OpCommit       = 0xFADC
-	OpRollback     = 0xFADD
+	// Special opcodes (0x00xx)
+	OpGetInfo      = 0x0006 // Query file attributes without opening
+	OpFlush        = 0x000C // Flush file buffers
+	OpUnlockRecord = 0x000F // Unlock a specific record
+
+	// Standard opcodes (0xFAxx)
+	OpOpenInput  = 0xFA00 // OPEN INPUT (read-only)
+	OpOpenOutput = 0xFA01 // OPEN OUTPUT (write, creates file)
+	OpOpenIO     = 0xFA02 // OPEN I-O (read-write)
+	OpOpenExtend = 0xFA03 // OPEN EXTEND (append)
+	OpClose      = 0xFA80 // CLOSE file
+	OpCloseLock  = 0xFA84 // CLOSE WITH LOCK
+	OpUnlock     = 0xFA0F // UNLOCK records
+
+	// Sequential operations
+	OpReadSeq  = 0xFAF5 // READ NEXT (sequential)
+	OpReadPrev = 0xFAF8 // READ PREVIOUS
+
+	// Random operations
+	OpReadRan = 0xFAF6 // READ by key (random)
+	OpWrite   = 0xFAF3 // WRITE record
+	OpRewrite = 0xFAF4 // REWRITE record
+	OpDelete  = 0xFAF7 // DELETE record
+
+	// Positioning (STEP = low-level cursor movement)
+	OpStepFirst = 0xFACC // Position to first record
+	OpStepNext  = 0xFACA // Step to next record
+	OpStepPrev  = 0xFACB // Step to previous record
+
+	// START operations (position cursor for subsequent READ)
+	OpStartEQ = 0xFAE9 // START = (equal)
+	OpStartGE = 0xFAEB // START >= (greater or equal)
+	OpStartGT = 0xFAE5 // START > (greater than)
+	OpStartLE = 0xFAD9 // START <= (less or equal)
+	OpStartLT = 0xFADA // START < (less than)
+
+	// Transaction control
+	OpCommit   = 0xFADC // COMMIT transaction
+	OpRollback = 0xFADD // ROLLBACK transaction
 )
 
+// File organizations
 const (
 	OrgLineSeq  = 0
 	OrgSeq      = 1
@@ -59,59 +74,66 @@ const (
 	OrgRelative = 3
 )
 
+// Access modes
 const (
 	AccessSeq     = 0
 	AccessRandom  = 4
 	AccessDynamic = 8
 )
 
+// File format constants (IDXFORMAT values)
 const (
-	FormatDefault = 0
-	FormatCISAM   = 1
-	FormatLIIV1   = 2
-	FormatCOBOL   = 3
-	FormatIDX4    = 4
-	FormatIDX8    = 8
-	FormatDISAM   = 16
-	FormatVBISAM  = 17
+	FormatDefault = 0  // Auto-detect
+	FormatCISAM   = 1  // C-ISAM
+	FormatLIIV1   = 2  // Level II v1
+	FormatCOBOL   = 3  // IDXFORMAT "3"
+	FormatIDX4    = 4  // IDXFORMAT "4"
+	FormatIDX8    = 8  // IDXFORMAT "8" (Siigo uses this)
+	FormatDISAM   = 16 // D-ISAM
+	FormatVBISAM  = 17 // VBISAM
 )
 
+// Configuration flags (ConfFlags field)
 const (
-	ConfWRTHRU  = 0x80
-	ConfRELADRS = 0x40
-	ConfUPPTR   = 0x20
-	ConfREC64   = 0x10
+	ConfWRTHRU  = 0x80 // Write through to disk
+	ConfRELADRS = 0x40 // Use relative byte address
+	ConfUPPTR   = 0x20 // Update current record pointer
+	ConfREC64   = 0x10 // Use 64-bit record address
 )
 
 // ---------------------------------------------------------------------------
-// KDB structures
+// KDB (Key Definition Block) structures
 // ---------------------------------------------------------------------------
 
+// KDB_KEY is a key definition (16 bytes per key)
 type KDB_KEY struct {
-	Count     [2]byte
-	Offset    [2]byte
-	KeyFlags  byte
-	CompFlags byte
-	Sparse    byte
+	Count     [2]byte // Number of components in this key
+	Offset    [2]byte // Offset to component definitions
+	KeyFlags  byte    // Flags: 0x10=primary, 0x40=duplicates, 0x02=sparse
+	CompFlags byte    // Compression flags
+	Sparse    byte    // Sparse character
 	Reserved  [9]byte
 }
 
+// Key flag constants
 const (
-	KeyPrimary    = 0x10
-	KeyDuplicates = 0x40
-	KeySparse     = 0x02
+	KeyPrimary    = 0x10 // Primary key
+	KeyDuplicates = 0x40 // Duplicates allowed
+	KeySparse     = 0x02 // Sparse key
 )
 
+// KDB is the Key Definition Block header
 type KDB struct {
 	KdbLen  [2]byte
 	Filler  [4]byte
 	Nkeys   [2]byte
 	Filler2 [6]byte
-	Keys    [1]KDB_KEY
+	Keys    [1]KDB_KEY // First key; for multi-key, allocate larger buffer
 }
 
 // ---------------------------------------------------------------------------
-// FCD3 (280 bytes, 64-bit)
+// FCD3 - File Control Description version 3 (64-bit)
+// Binary-compatible with Micro Focus's definition (280 bytes)
 // ---------------------------------------------------------------------------
 type FCD3 struct {
 	FileStatus   [2]byte
@@ -180,7 +202,8 @@ type FCD3 struct {
 }
 
 // ---------------------------------------------------------------------------
-// FileStatus
+// FileStatus - EXTFH file status code with rich error info
+// Reference: Chapter 31 of Micro Focus COBOL docs
 // ---------------------------------------------------------------------------
 type FileStatus struct {
 	S1, S2 byte
@@ -191,7 +214,9 @@ func (fs FileStatus) IsEOF() bool     { return fs.S1 == '1' && fs.S2 == '0' }
 func (fs FileStatus) IsNotFound() bool { return fs.S1 == '2' && fs.S2 == '3' }
 func (fs FileStatus) IsDupKey() bool   { return fs.S1 == '0' && fs.S2 == '2' }
 
+// IsLocked returns true if the file or record is locked
 func (fs FileStatus) IsLocked() bool {
+	// Extended: 9/065 (file locked), 9/068 (record locked)
 	if fs.S1 == '9' {
 		code := int(fs.S2)
 		return code == 65 || code == 68
@@ -199,9 +224,17 @@ func (fs FileStatus) IsLocked() bool {
 	return false
 }
 
-func (fs FileStatus) IsPermError() bool    { return fs.S1 == '3' && fs.S2 == '0' }
-func (fs FileStatus) IsAttrConflict() bool { return fs.S1 == '3' && fs.S2 == '9' }
+// IsPermError returns true for permanent/fatal I/O errors
+func (fs FileStatus) IsPermError() bool {
+	return fs.S1 == '3' && fs.S2 == '0'
+}
 
+// IsAttrConflict returns true for attribute mismatch (status 39)
+func (fs FileStatus) IsAttrConflict() bool {
+	return fs.S1 == '3' && fs.S2 == '9'
+}
+
+// ExtendedCode returns the 9/nnn code if this is an extended status, or 0
 func (fs FileStatus) ExtendedCode() int {
 	if fs.S1 == '9' {
 		return int(fs.S2)
@@ -209,6 +242,7 @@ func (fs FileStatus) ExtendedCode() int {
 	return 0
 }
 
+// Error returns a human-readable error message
 func (fs FileStatus) Error() string {
 	desc := fs.Description()
 	if desc != "" {
@@ -217,60 +251,96 @@ func (fs FileStatus) Error() string {
 	return fmt.Sprintf("status %c%c (0x%02x/0x%02x)", fs.S1, fs.S2, fs.S1, fs.S2)
 }
 
+// Description returns a human-readable description of the status code
 func (fs FileStatus) Description() string {
 	key := [2]byte{fs.S1, fs.S2}
+
+	// Standard ANSI codes
 	ansi := map[[2]byte]string{
-		{'0', '0'}: "successful", {'0', 0}: "successful",
-		{'0', '2'}: "duplicate key (allowed)", {'0', '4'}: "wrong record length",
-		{'0', '5'}: "optional file not present", {'1', '0'}: "end of file",
+		{'0', '0'}: "successful",
+		{'0', 0}:   "successful",
+		{'0', '2'}: "duplicate key (allowed)",
+		{'0', '4'}: "wrong record length",
+		{'0', '5'}: "optional file not present",
+		{'1', '0'}: "end of file",
 		{'1', '4'}: "relative record number too large",
-		{'2', '1'}: "key sequence error", {'2', '2'}: "duplicate key (not allowed)",
-		{'2', '3'}: "record not found", {'2', '4'}: "boundary violation / disk full",
-		{'3', '0'}: "permanent I/O error", {'3', '4'}: "boundary violation (sequential)",
-		{'3', '5'}: "file not found", {'3', '7'}: "open mode not supported",
-		{'3', '8'}: "file closed with lock", {'3', '9'}: "fixed file attribute conflict",
-		{'4', '1'}: "file already open", {'4', '2'}: "file not open",
+		{'2', '1'}: "key sequence error",
+		{'2', '2'}: "duplicate key (not allowed)",
+		{'2', '3'}: "record not found",
+		{'2', '4'}: "boundary violation / disk full",
+		{'3', '0'}: "permanent I/O error",
+		{'3', '4'}: "boundary violation (sequential)",
+		{'3', '5'}: "file not found",
+		{'3', '7'}: "open mode not supported",
+		{'3', '8'}: "file closed with lock",
+		{'3', '9'}: "fixed file attribute conflict",
+		{'4', '1'}: "file already open",
+		{'4', '2'}: "file not open",
 		{'4', '3'}: "DELETE/REWRITE without prior READ",
 		{'4', '4'}: "record size boundary violation",
-		{'4', '6'}: "no valid next record", {'4', '7'}: "READ on OUTPUT/EXTEND file",
-		{'4', '8'}: "WRITE on INPUT file", {'4', '9'}: "DELETE/REWRITE on non-I-O file",
+		{'4', '6'}: "no valid next record",
+		{'4', '7'}: "READ on OUTPUT/EXTEND file",
+		{'4', '8'}: "WRITE on INPUT file",
+		{'4', '9'}: "DELETE/REWRITE on non-I-O file",
 	}
+
 	if desc, ok := ansi[key]; ok {
 		return desc
 	}
+
+	// Extended 9/nnn codes (S2 is binary nnn)
 	if fs.S1 == '9' {
 		code := int(fs.S2)
 		extended := map[int]string{
-			1: "insufficient buffer/memory (RT001)", 2: "file not open (RT002)",
-			3: "serial mode error (RT003)", 4: "illegal file name (RT004)",
-			5: "illegal device (RT005)", 6: "write to INPUT file (RT006)",
-			7: "disk space exhausted (RT007)", 8: "read from OUTPUT file (RT008)",
-			9: "directory not found (RT009)", 10: "file name not supplied (RT010)",
-			12: "file already open (RT012)", 13: "file not found (RT013)",
-			14: "too many files open (RT014)", 15: "too many indexed files open (RT015)",
-			17: "record error: zero length (RT017)", 18: "read part record: EOF before EOR (RT018)",
-			19: "rewrite error: wrong mode (RT019)", 20: "device or resource busy (RT020)",
-			21: "file is a directory (RT021)", 22: "illegal access mode (RT022)",
-			24: "disk I/O error (RT024)", 30: "file system is read-only (RT030)",
-			35: "incorrect access permission (RT035)", 37: "file access denied (RT037)",
-			39: "file not compatible (RT039)", 41: "corrupt index file (RT041)",
-			43: "file info missing for indexed file (RT043)",
-			47: "index structure overflow (RT047)",
-			65: "file locked by another process (RT065)",
-			66: "duplicate record key (RT066)",
-			68: "record locked by another process (RT068)",
-			69: "illegal argument to ISAM module (RT069)",
-			71: "bad indexed file format (RT071)", 72: "end of indexed file (RT072)",
-			100: "invalid file operation (RT100)", 105: "memory allocation error (RT105)",
+			1:   "insufficient buffer/memory (RT001)",
+			2:   "file not open (RT002)",
+			3:   "serial mode error (RT003)",
+			4:   "illegal file name (RT004)",
+			5:   "illegal device (RT005)",
+			6:   "write to INPUT file (RT006)",
+			7:   "disk space exhausted (RT007)",
+			8:   "read from OUTPUT file (RT008)",
+			9:   "directory not found (RT009)",
+			10:  "file name not supplied (RT010)",
+			12:  "file already open (RT012)",
+			13:  "file not found (RT013)",
+			14:  "too many files open (RT014)",
+			15:  "too many indexed files open (RT015)",
+			17:  "record error: zero length (RT017)",
+			18:  "read part record: EOF before EOR (RT018)",
+			19:  "rewrite error: wrong mode (RT019)",
+			20:  "device or resource busy (RT020)",
+			21:  "file is a directory (RT021)",
+			22:  "illegal access mode (RT022)",
+			24:  "disk I/O error (RT024)",
+			30:  "file system is read-only (RT030)",
+			35:  "incorrect access permission (RT035)",
+			37:  "file access denied (RT037)",
+			39:  "file not compatible (RT039)",
+			41:  "corrupt index file (RT041)",
+			43:  "file info missing for indexed file (RT043)",
+			47:  "index structure overflow (RT047)",
+			65:  "file locked by another process (RT065)",
+			66:  "duplicate record key (RT066)",
+			68:  "record locked by another process (RT068)",
+			69:  "illegal argument to ISAM module (RT069)",
+			71:  "bad indexed file format (RT071)",
+			72:  "end of indexed file (RT072)",
+			100: "invalid file operation (RT100)",
+			105: "memory allocation error (RT105)",
 			138: "file closed with lock (RT138)",
 			139: "record length or key inconsistency (RT139)",
-			141: "file already open (RT141)", 142: "file not open (RT142)",
+			141: "file already open (RT141)",
+			142: "file not open (RT142)",
 			146: "no current record for sequential read (RT146)",
-			147: "wrong mode for READ/START (RT147)", 148: "wrong mode for WRITE (RT148)",
+			147: "wrong mode for READ/START (RT147)",
+			148: "wrong mode for WRITE (RT148)",
 			149: "wrong mode for REWRITE/DELETE (RT149)",
 			161: "file header not found/corrupted (RT161)",
-			194: "file size too large (RT194)", 210: "file closed with lock (RT210)",
-			213: "too many locks (RT213)", 218: "sharing conflict (RT218)",
+			194: "file size too large (RT194)",
+			210: "file closed with lock (RT210)",
+			213: "too many locks (RT213)",
+			218: "sharing conflict (RT218)",
 			219: "OS shared file limit exceeded (RT219)",
 		}
 		if desc, ok := extended[code]; ok {
@@ -278,42 +348,91 @@ func (fs FileStatus) Description() string {
 		}
 		return fmt.Sprintf("9/%03d unknown extended status", code)
 	}
+
 	return ""
 }
 
 // ---------------------------------------------------------------------------
-// KeyInfo / IsamFile
+// KeyComponent describes one component of a composite key
 // ---------------------------------------------------------------------------
-type KeyInfo struct {
-	Index     int
-	IsPrimary bool
-	AllowDups bool
-	IsSparse  bool
-	CompCount int
+type KeyComponent struct {
+	Offset int // Byte offset within the record
+	Length int // Length in bytes
+	Type   int // 0=alphanumeric, other=numeric/binary
 }
 
+// ---------------------------------------------------------------------------
+// KeyInfo describes a discovered key from the file
+// ---------------------------------------------------------------------------
+type KeyInfo struct {
+	Index      int            // Key number (0=primary, 1+=alternate)
+	IsPrimary  bool           // True if primary key
+	AllowDups  bool           // True if duplicates allowed
+	IsSparse   bool           // True if sparse key
+	CompCount  int            // Number of components
+	Components []KeyComponent // Component definitions (offset, length, type)
+	TotalLen   int            // Total key length (sum of all component lengths)
+}
+
+// ExtractKey extracts the key value from a record using the key's component definitions.
+// Returns the concatenated key bytes from the record.
+func (k *KeyInfo) ExtractKey(rec []byte) []byte {
+	if len(k.Components) == 0 {
+		return nil
+	}
+	key := make([]byte, 0, k.TotalLen)
+	for _, c := range k.Components {
+		end := c.Offset + c.Length
+		if end > len(rec) {
+			end = len(rec)
+		}
+		if c.Offset < len(rec) {
+			key = append(key, rec[c.Offset:end]...)
+		}
+	}
+	return key
+}
+
+// ExtractKeyString extracts and decodes the key as a trimmed string.
+func (k *KeyInfo) ExtractKeyString(rec []byte) string {
+	raw := k.ExtractKey(rec)
+	if raw == nil {
+		return ""
+	}
+	// Trim trailing spaces and nulls
+	end := len(raw)
+	for end > 0 && (raw[end-1] == ' ' || raw[end-1] == 0) {
+		end--
+	}
+	return string(raw[:end])
+}
+
+// ---------------------------------------------------------------------------
+// IsamFile represents an open ISAM file via EXTFH
+// ---------------------------------------------------------------------------
 type IsamFile struct {
 	path   string
 	fcd    FCD3
-	kdb    []byte
-	kdbHdr *KDB
+	kdb    []byte // Raw KDB buffer (dynamic size for multi-key)
+	kdbHdr *KDB   // Pointer into kdb buffer
 	recBuf []byte
 	fname  []byte
 	opened bool
 
-	RecSize    int
-	MinRec     int
-	Format     int
-	NumKeys    int
-	Keys       []KeyInfo
-	IsVarLen   bool
-	LastStatus FileStatus
-	CallCount  int
+	// File metadata (populated after Open)
+	RecSize  int       // Max record size
+	MinRec   int       // Min record size (for variable-length)
+	Format   int       // IDXFORMAT (0=default, 8=large, etc.)
+	NumKeys  int       // Number of keys
+	Keys     []KeyInfo // All key definitions
+	IsVarLen bool      // True if variable-length records
+
+	// Diagnostics
+	LastStatus FileStatus // Last EXTFH call status
+	CallCount  int        // Total EXTFH calls made on this file
 }
 
-// ---------------------------------------------------------------------------
 // DLL management
-// ---------------------------------------------------------------------------
 var (
 	extfhDLL  *syscall.LazyDLL
 	extfhProc *syscall.LazyProc
@@ -323,14 +442,19 @@ var (
 	dllPath   string
 )
 
+// ExtfhDebug enables verbose EXTFH logging when true
 var ExtfhDebug = false
 
+// extfhCfgPaths are known locations for EXTFH.CFG
 var extfhCfgPaths = []string{
 	`C:\Siigo\EXTFH.CFG`,
 	`C:\EXTFH.CFG`,
 }
 
+// setupEnvironment ensures Micro Focus environment variables are set for EXTFH.
+// Sets COBCONFIG to point to EXTFH.CFG and adds DLL directory to PATH.
 func setupEnvironment(dllDir string) {
+	// Set COBCONFIG if not already set and EXTFH.CFG exists
 	if os.Getenv("COBCONFIG") == "" {
 		for _, cfgPath := range extfhCfgPaths {
 			if _, err := os.Stat(cfgPath); err == nil {
@@ -339,10 +463,14 @@ func setupEnvironment(dllDir string) {
 			}
 		}
 	}
+
+	// Ensure DLL directory is in PATH so dependent DLLs can be found
 	path := os.Getenv("PATH")
 	if !strings.Contains(strings.ToLower(path), strings.ToLower(dllDir)) {
 		os.Setenv("PATH", dllDir+";"+path)
 	}
+
+	// Set memory strategy if not already set (matches Siigo's COBOPT.CFG)
 	if os.Getenv("COBOPT") == "" {
 		coboptPath := `C:\Siigo\COBOPT.CFG`
 		if _, err := os.Stat(coboptPath); err == nil {
@@ -352,22 +480,52 @@ func setupEnvironment(dllDir string) {
 }
 
 func initDLL() {
-	paths := []string{
+	var paths []string
+
+	// Check COBDIR environment variable first (most specific)
+	if cobdir := os.Getenv("COBDIR"); cobdir != "" {
+		paths = append(paths,
+			cobdir+`\bin64\cblrtsm.dll`,
+			cobdir+`\bin\cblrtsm.dll`,
+		)
+	}
+
+	// Siigo's own installation directory
+	paths = append(paths,
+		`C:\Siigo\cblrtsm.dll`,
+	)
+
+	// Micro Focus standard install locations
+	paths = append(paths,
 		`C:\Microfocus\bin64\cblrtsm.dll`,
 		`C:\Microfocus\bin\cblrtsm.dll`,
+	)
+
+	// Program Files locations (both 64-bit and 32-bit)
+	for _, pf := range []string{
+		os.Getenv("ProgramFiles"),
+		os.Getenv("ProgramFiles(x86)"),
+	} {
+		if pf == "" {
+			continue
+		}
+		paths = append(paths,
+			pf+`\Micro Focus\Visual COBOL\bin64\cblrtsm.dll`,
+			pf+`\Micro Focus\Visual COBOL\bin\cblrtsm.dll`,
+			pf+`\Micro Focus\COBOL Server\bin64\cblrtsm.dll`,
+			pf+`\Micro Focus\COBOL Server\bin\cblrtsm.dll`,
+		)
 	}
-	if cobdir := os.Getenv("COBDIR"); cobdir != "" {
-		paths = append([]string{
-			cobdir + `\bin64\cblrtsm.dll`,
-			cobdir + `\bin\cblrtsm.dll`,
-		}, paths...)
-	}
+
 	for _, p := range paths {
 		if _, err := os.Stat(p); err != nil {
 			continue
 		}
+
+		// Setup environment before loading the DLL
 		dllDir := p[:strings.LastIndex(p, `\`)]
 		setupEnvironment(dllDir)
+
 		extfhDLL = syscall.NewLazyDLL(p)
 		extfhProc = extfhDLL.NewProc("EXTFH")
 		if err := extfhProc.Find(); err != nil {
@@ -377,12 +535,22 @@ func initDLL() {
 		dllPath = p
 		return
 	}
-	dllErr = fmt.Errorf("cblrtsm.dll not found (checked COBDIR, Microfocus bin/bin64)")
+	dllErr = fmt.Errorf("cblrtsm.dll not found (checked COBDIR, Siigo, Microfocus, Program Files)")
 }
 
-func ExtfhAvailable() bool { dllOnce.Do(initDLL); return dllAvail }
-func ExtfhDLLPath() string { dllOnce.Do(initDLL); return dllPath }
+// ExtfhAvailable returns true if the Micro Focus EXTFH DLL is loaded
+func ExtfhAvailable() bool {
+	dllOnce.Do(initDLL)
+	return dllAvail
+}
 
+// ExtfhDLLPath returns the path of the loaded DLL, or "" if not loaded
+func ExtfhDLLPath() string {
+	dllOnce.Do(initDLL)
+	return dllPath
+}
+
+// opcodeName returns a human-readable name for an opcode (for debug logging)
 func opcodeName(opcode uint16) string {
 	names := map[uint16]string{
 		OpGetInfo: "GETINFO", OpFlush: "FLUSH",
@@ -415,6 +583,7 @@ func callEXTFH(opcode uint16, fcd *FCD3) FileStatus {
 	return st
 }
 
+// callEXTFHRetry calls EXTFH with automatic retry on lock status (9/065, 9/068).
 func callEXTFHRetry(opcode uint16, fcd *FCD3) FileStatus {
 	for attempt := 0; attempt <= MaxLockRetries; attempt++ {
 		st := callEXTFH(opcode, fcd)
@@ -435,7 +604,8 @@ func setPointer(field *[8]byte, ptr unsafe.Pointer) {
 }
 
 // ---------------------------------------------------------------------------
-// OpenIsamFile
+// OpenIsamFile opens an ISAM file for reading via EXTFH.
+// Always call Close() when done (use defer).
 // ---------------------------------------------------------------------------
 func OpenIsamFile(path string) (*IsamFile, error) {
 	if !ExtfhAvailable() {
@@ -448,17 +618,21 @@ func OpenIsamFile(path string) (*IsamFile, error) {
 		recBuf: make([]byte, 65536),
 	}
 
+	// Allocate KDB large enough for up to 32 keys (matching EXTFH.CFG INDEXCOUNT=32)
+	// KDB header (14 bytes) + 32 keys * 16 bytes = 526 bytes
 	f.kdb = make([]byte, 14+32*16)
 	f.kdbHdr = (*KDB)(unsafe.Pointer(&f.kdb[0]))
 	binary.BigEndian.PutUint16(f.kdbHdr.KdbLen[:], uint16(len(f.kdb)))
 	binary.BigEndian.PutUint16(f.kdbHdr.Nkeys[:], 1)
 	f.kdbHdr.Keys[0].KeyFlags = KeyPrimary
 
+	// Initialize FCD3 - struct is zero-valued by default (critical per MF docs)
 	f.fcd = FCD3{}
-	f.fcd.FcdVer = 1
+
+	f.fcd.FcdVer = 1 // 64-bit FCD3
 	f.fcd.FileOrg = OrgIndexed
 	f.fcd.AccessFlags = AccessDynamic
-	f.fcd.OpenMode = 128
+	f.fcd.OpenMode = 128 // OPEN_NOT_OPEN
 	f.fcd.FileFormat = FormatDefault
 	f.fcd.FstatusType = 0x80
 	f.fcd.OtherFlags = 0x80
@@ -473,6 +647,7 @@ func OpenIsamFile(path string) (*IsamFile, error) {
 	setPointer(&f.fcd.FnamePtr, unsafe.Pointer(&f.fname[0]))
 	setPointer(&f.fcd.KdbPtr, unsafe.Pointer(&f.kdb[0]))
 
+	// GETINFO: discover file attributes before opening
 	st := callEXTFH(OpGetInfo, &f.fcd)
 	if !st.IsOK() {
 		if ExtfhDebug {
@@ -482,6 +657,7 @@ func OpenIsamFile(path string) (*IsamFile, error) {
 		f.fcd.FileStatus[1] = '0'
 	}
 
+	// OPEN INPUT (read-only) with retry on lock
 	st = callEXTFHRetry(OpOpenInput, &f.fcd)
 	if !st.IsOK() {
 		return nil, fmt.Errorf("open %s: %s", path, st.Error())
@@ -489,16 +665,20 @@ func OpenIsamFile(path string) (*IsamFile, error) {
 
 	f.opened = true
 	f.LastStatus = st
+
+	// Read discovered attributes
 	f.RecSize = int(binary.BigEndian.Uint32(f.fcd.MaxRecLen[:]))
 	f.MinRec = int(binary.BigEndian.Uint32(f.fcd.MinRecLen[:]))
 	f.Format = int(f.fcd.FileFormat)
 	f.NumKeys = int(binary.BigEndian.Uint16(f.kdbHdr.Nkeys[:]))
 	f.IsVarLen = f.MinRec > 0 && f.MinRec != f.RecSize
 
+	// Validate IDXFORMAT
 	if f.Format != 0 && f.Format != FormatIDX8 {
 		log.Printf("[EXTFH] WARNING: %s has IDXFORMAT=%d, expected 8", path, f.Format)
 	}
 
+	// Parse key definitions from KDB
 	f.parseKeys()
 
 	if ExtfhDebug {
@@ -513,32 +693,103 @@ func OpenIsamFile(path string) (*IsamFile, error) {
 	return f, nil
 }
 
+// parseKeys extracts key definitions and their component offsets/lengths from the KDB buffer.
+// KDB layout:
+//   Header: 14 bytes (kdbLen[2] + filler[4] + nkeys[2] + filler2[6])
+//   Key entries: nkeys * 16 bytes each (KDB_KEY)
+//   Component entries: follow key entries, 8 bytes each (offset[2] + length[2] + type[2] + filler[2])
 func (f *IsamFile) parseKeys() {
 	f.Keys = nil
 	nkeys := f.NumKeys
 	if nkeys <= 0 || nkeys > 32 {
 		return
 	}
+
+	// First pass: read key entries and compute total component count
+	type rawKey struct {
+		flags     byte
+		compCount int
+		compOff   int // offset in KDB to first component (from KDB_KEY.Offset)
+	}
+	rawKeys := make([]rawKey, 0, nkeys)
+
 	for i := 0; i < nkeys; i++ {
-		offset := 14 + i*16
-		if offset+16 > len(f.kdb) {
+		kdbOff := 14 + i*16
+		if kdbOff+16 > len(f.kdb) {
 			break
 		}
-		kk := (*KDB_KEY)(unsafe.Pointer(&f.kdb[offset]))
+		kk := (*KDB_KEY)(unsafe.Pointer(&f.kdb[kdbOff]))
 		compCount := int(binary.BigEndian.Uint16(kk.Count[:]))
 		if compCount <= 0 {
 			compCount = 1
 		}
-		f.Keys = append(f.Keys, KeyInfo{
-			Index:     i,
-			IsPrimary: kk.KeyFlags&KeyPrimary != 0,
-			AllowDups: kk.KeyFlags&KeyDuplicates != 0,
-			IsSparse:  kk.KeyFlags&KeySparse != 0,
-			CompCount: compCount,
+		compOff := int(binary.BigEndian.Uint16(kk.Offset[:]))
+		rawKeys = append(rawKeys, rawKey{
+			flags:     kk.KeyFlags,
+			compCount: compCount,
+			compOff:   compOff,
 		})
+	}
+
+	// Second pass: read component definitions for each key
+	// Components are 8 bytes each: recOffset[2] + length[2] + type[2] + filler[2]
+	for i, rk := range rawKeys {
+		ki := KeyInfo{
+			Index:     i,
+			IsPrimary: rk.flags&KeyPrimary != 0,
+			AllowDups: rk.flags&KeyDuplicates != 0,
+			IsSparse:  rk.flags&KeySparse != 0,
+			CompCount: rk.compCount,
+		}
+
+		// Try to read component definitions from KDB buffer
+		// Component offset in KDB_KEY.Offset points to the byte offset within the KDB
+		// where component definitions start
+		compBase := rk.compOff
+		if compBase <= 0 {
+			// Fallback: components follow the key entries sequentially
+			// Each key's components are at: headerSize + nkeys*16 + (sum of prior components)*8
+			compBase = 14 + nkeys*16
+			for j := 0; j < i; j++ {
+				compBase += rawKeys[j].compCount * 8
+			}
+		}
+
+		for c := 0; c < rk.compCount; c++ {
+			cOff := compBase + c*8
+			if cOff+6 > len(f.kdb) {
+				break
+			}
+			recOffset := int(binary.BigEndian.Uint16(f.kdb[cOff : cOff+2]))
+			compLen := int(binary.BigEndian.Uint16(f.kdb[cOff+2 : cOff+4]))
+			compType := int(binary.BigEndian.Uint16(f.kdb[cOff+4 : cOff+6]))
+
+			if compLen > 0 && compLen < 10000 && recOffset < 65536 {
+				ki.Components = append(ki.Components, KeyComponent{
+					Offset: recOffset,
+					Length: compLen,
+					Type:   compType,
+				})
+				ki.TotalLen += compLen
+			}
+		}
+
+		f.Keys = append(f.Keys, ki)
+	}
+
+	if ExtfhDebug {
+		for _, k := range f.Keys {
+			for _, c := range k.Components {
+				log.Printf("[EXTFH]   Key[%d] component: offset=%d length=%d type=%d",
+					k.Index, c.Offset, c.Length, c.Type)
+			}
+		}
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Close closes the ISAM file. Safe to call multiple times.
+// ---------------------------------------------------------------------------
 func (f *IsamFile) Close() {
 	if !f.opened {
 		return
@@ -549,11 +800,16 @@ func (f *IsamFile) Close() {
 	f.CallCount++
 }
 
+// ---------------------------------------------------------------------------
+// Sequential read operations
+// ---------------------------------------------------------------------------
+
+// ReadFirst reads the first record (by primary key order).
 func (f *IsamFile) ReadFirst() ([]byte, error) {
 	if !f.opened {
 		return nil, fmt.Errorf("file not open")
 	}
-	st := callEXTFH(OpStepFirst, &f.fcd)
+	st := callEXTFHRetry(OpStepFirst, &f.fcd)
 	f.LastStatus = st
 	f.CallCount++
 	if st.IsEOF() {
@@ -565,11 +821,12 @@ func (f *IsamFile) ReadFirst() ([]byte, error) {
 	return f.copyRecord(), nil
 }
 
+// ReadNext reads the next record sequentially. Returns nil, nil at EOF.
 func (f *IsamFile) ReadNext() ([]byte, error) {
 	if !f.opened {
 		return nil, fmt.Errorf("file not open")
 	}
-	st := callEXTFH(OpStepNext, &f.fcd)
+	st := callEXTFHRetry(OpStepNext, &f.fcd)
 	f.LastStatus = st
 	f.CallCount++
 	if st.IsEOF() {
@@ -581,11 +838,12 @@ func (f *IsamFile) ReadNext() ([]byte, error) {
 	return f.copyRecord(), nil
 }
 
+// ReadPrev reads the previous record. Returns nil, nil at beginning of file.
 func (f *IsamFile) ReadPrev() ([]byte, error) {
 	if !f.opened {
 		return nil, fmt.Errorf("file not open")
 	}
-	st := callEXTFH(OpStepPrev, &f.fcd)
+	st := callEXTFHRetry(OpStepPrev, &f.fcd)
 	f.LastStatus = st
 	f.CallCount++
 	if st.IsEOF() {
@@ -597,6 +855,12 @@ func (f *IsamFile) ReadPrev() ([]byte, error) {
 	return f.copyRecord(), nil
 }
 
+// ---------------------------------------------------------------------------
+// Key-based read operations
+// ---------------------------------------------------------------------------
+
+// ReadByKey reads a record by exact key match.
+// keyNum is 0 for primary key, 1+ for alternate keys.
 func (f *IsamFile) ReadByKey(key []byte, keyNum int) ([]byte, error) {
 	if !f.opened {
 		return nil, fmt.Errorf("file not open")
@@ -604,12 +868,15 @@ func (f *IsamFile) ReadByKey(key []byte, keyNum int) ([]byte, error) {
 	if keyNum < 0 || keyNum >= f.NumKeys {
 		return nil, fmt.Errorf("invalid key number %d (file has %d keys)", keyNum, f.NumKeys)
 	}
+
 	binary.BigEndian.PutUint16(f.fcd.RefKey[:], uint16(keyNum))
 	copy(f.recBuf, key)
 	binary.BigEndian.PutUint16(f.fcd.EffKeyLen[:], uint16(len(key)))
-	st := callEXTFH(OpReadRan, &f.fcd)
+
+	st := callEXTFHRetry(OpReadRan, &f.fcd)
 	f.LastStatus = st
 	f.CallCount++
+
 	if st.IsNotFound() {
 		return nil, nil
 	}
@@ -619,6 +886,10 @@ func (f *IsamFile) ReadByKey(key []byte, keyNum int) ([]byte, error) {
 	return f.copyRecord(), nil
 }
 
+// ---------------------------------------------------------------------------
+// START operations (position cursor, then use ReadNext/ReadPrev)
+// ---------------------------------------------------------------------------
+
 func (f *IsamFile) startOp(opcode uint16, key []byte, keyNum int) error {
 	if !f.opened {
 		return fmt.Errorf("file not open")
@@ -626,12 +897,15 @@ func (f *IsamFile) startOp(opcode uint16, key []byte, keyNum int) error {
 	if keyNum < 0 || keyNum >= f.NumKeys {
 		return fmt.Errorf("invalid key number %d (file has %d keys)", keyNum, f.NumKeys)
 	}
+
 	binary.BigEndian.PutUint16(f.fcd.RefKey[:], uint16(keyNum))
 	copy(f.recBuf, key)
 	binary.BigEndian.PutUint16(f.fcd.EffKeyLen[:], uint16(len(key)))
-	st := callEXTFH(opcode, &f.fcd)
+
+	st := callEXTFHRetry(opcode, &f.fcd)
 	f.LastStatus = st
 	f.CallCount++
+
 	if st.IsEOF() || st.IsNotFound() {
 		return fmt.Errorf("no records matching criteria (%s)", opcodeName(opcode))
 	}
@@ -641,11 +915,34 @@ func (f *IsamFile) startOp(opcode uint16, key []byte, keyNum int) error {
 	return nil
 }
 
-func (f *IsamFile) StartEQ(key []byte, keyNum int) error { return f.startOp(OpStartEQ, key, keyNum) }
-func (f *IsamFile) StartGE(key []byte, keyNum int) error { return f.startOp(OpStartGE, key, keyNum) }
-func (f *IsamFile) StartGT(key []byte, keyNum int) error { return f.startOp(OpStartGT, key, keyNum) }
-func (f *IsamFile) StartLE(key []byte, keyNum int) error { return f.startOp(OpStartLE, key, keyNum) }
-func (f *IsamFile) StartLT(key []byte, keyNum int) error { return f.startOp(OpStartLT, key, keyNum) }
+// StartEQ positions to the first record = key.
+func (f *IsamFile) StartEQ(key []byte, keyNum int) error {
+	return f.startOp(OpStartEQ, key, keyNum)
+}
+
+// StartGE positions to the first record >= key.
+func (f *IsamFile) StartGE(key []byte, keyNum int) error {
+	return f.startOp(OpStartGE, key, keyNum)
+}
+
+// StartGT positions to the first record > key.
+func (f *IsamFile) StartGT(key []byte, keyNum int) error {
+	return f.startOp(OpStartGT, key, keyNum)
+}
+
+// StartLE positions to the last record <= key.
+func (f *IsamFile) StartLE(key []byte, keyNum int) error {
+	return f.startOp(OpStartLE, key, keyNum)
+}
+
+// StartLT positions to the last record < key.
+func (f *IsamFile) StartLT(key []byte, keyNum int) error {
+	return f.startOp(OpStartLT, key, keyNum)
+}
+
+// ---------------------------------------------------------------------------
+// Convenience methods
+// ---------------------------------------------------------------------------
 
 func (f *IsamFile) copyRecord() []byte {
 	curLen := int(binary.BigEndian.Uint32(f.fcd.CurRecLen[:]))
@@ -660,6 +957,7 @@ func (f *IsamFile) copyRecord() []byte {
 	return rec
 }
 
+// ReadAll reads all records sequentially.
 func (f *IsamFile) ReadAll() ([][]byte, error) {
 	rec, err := f.ReadFirst()
 	if err != nil {
@@ -668,8 +966,10 @@ func (f *IsamFile) ReadAll() ([][]byte, error) {
 	if rec == nil {
 		return nil, nil
 	}
+
 	var records [][]byte
 	records = append(records, rec)
+
 	for {
 		rec, err = f.ReadNext()
 		if err != nil {
@@ -683,6 +983,8 @@ func (f *IsamFile) ReadAll() ([][]byte, error) {
 	return records, nil
 }
 
+// ForEach iterates all records calling fn for each.
+// Return false from fn to stop early.
 func (f *IsamFile) ForEach(fn func(rec []byte) bool) error {
 	rec, err := f.ReadFirst()
 	if err != nil {
@@ -694,6 +996,7 @@ func (f *IsamFile) ForEach(fn func(rec []byte) bool) error {
 	if !fn(rec) {
 		return nil
 	}
+
 	for {
 		rec, err = f.ReadNext()
 		if err != nil {
@@ -708,10 +1011,13 @@ func (f *IsamFile) ForEach(fn func(rec []byte) bool) error {
 	}
 }
 
+// ForEachByKey iterates records starting from a key position.
+// Uses START GE + READ NEXT. Return false from fn to stop early.
 func (f *IsamFile) ForEachByKey(startKey []byte, keyNum int, fn func(rec []byte) bool) error {
 	if err := f.StartGE(startKey, keyNum); err != nil {
 		return err
 	}
+
 	for {
 		rec, err := f.ReadNext()
 		if err != nil {
@@ -726,30 +1032,45 @@ func (f *IsamFile) ForEachByKey(startKey []byte, keyNum int, fn func(rec []byte)
 	}
 }
 
+// Count counts all records in the file (full sequential scan).
 func (f *IsamFile) Count() (int, error) {
 	count := 0
-	err := f.ForEach(func(rec []byte) bool { count++; return true })
+	err := f.ForEach(func(rec []byte) bool {
+		count++
+		return true
+	})
 	return count, err
 }
 
-func (f *IsamFile) Path() string  { return f.path }
-func (f *IsamFile) IsOpen() bool { return f.opened }
-
-// ---------------------------------------------------------------------------
-// Unified API
-// ---------------------------------------------------------------------------
-
-type IsamFileMeta struct {
-	RecSize         int
-	RecordCount     int
-	ExpectedRecords int
-	NumKeys         int
-	Format          int
-	HasIndex        bool
-	UsedEXTFH       bool
-	DLLPath         string
+// Path returns the file path
+func (f *IsamFile) Path() string {
+	return f.path
 }
 
+// IsOpen returns true if the file is currently open
+func (f *IsamFile) IsOpen() bool {
+	return f.opened
+}
+
+// ---------------------------------------------------------------------------
+// Unified API: works with EXTFH or falls back to binary reader
+// ---------------------------------------------------------------------------
+
+// IsamFileMeta contains metadata about a read operation
+type IsamFileMeta struct {
+	RecSize         int       // Record size
+	RecordCount     int       // Number of records read
+	ExpectedRecords int       // Expected record count from header (binary reader only)
+	NumKeys         int       // Number of keys (EXTFH only)
+	Format          int       // IDXFORMAT (EXTFH only)
+	Keys            []KeyInfo // Key definitions with offset/length (EXTFH only)
+	HasIndex        bool      // True if .idx file exists
+	UsedEXTFH       bool      // True if EXTFH was used (vs binary fallback)
+	DLLPath         string    // Path to DLL used (if EXTFH)
+}
+
+// ReadIsamFile reads all records from an ISAM file.
+// Uses EXTFH if available, falls back to binary reader.
 func ReadIsamFile(path string) ([][]byte, int, error) {
 	if ExtfhAvailable() {
 		f, err := OpenIsamFile(path)
@@ -757,9 +1078,12 @@ func ReadIsamFile(path string) ([][]byte, int, error) {
 			return nil, 0, err
 		}
 		defer f.Close()
+
 		records, err := f.ReadAll()
 		return records, f.RecSize, err
 	}
+
+	// Fallback: binary reader
 	info, err := ReadFile(path)
 	if err != nil {
 		return nil, 0, err
@@ -771,26 +1095,33 @@ func ReadIsamFile(path string) ([][]byte, int, error) {
 	return records, info.RecordSize, nil
 }
 
+// ReadIsamFileWithMeta reads all records and returns detailed metadata.
 func ReadIsamFileWithMeta(path string) ([][]byte, *IsamFileMeta, error) {
 	meta := &IsamFileMeta{}
+
 	if ExtfhAvailable() {
 		f, err := OpenIsamFile(path)
 		if err != nil {
 			return nil, nil, err
 		}
 		defer f.Close()
+
 		records, err := f.ReadAll()
 		meta.RecSize = f.RecSize
 		meta.RecordCount = len(records)
 		meta.NumKeys = f.NumKeys
 		meta.Format = f.Format
+		meta.Keys = f.Keys
 		meta.UsedEXTFH = true
 		meta.DLLPath = dllPath
+		// Check for .idx file
 		if _, idxErr := os.Stat(path + ".idx"); idxErr == nil {
 			meta.HasIndex = true
 		}
 		return records, meta, err
 	}
+
+	// Fallback: binary reader
 	info, err := ReadFile(path)
 	if err != nil {
 		return nil, nil, err
@@ -811,10 +1142,12 @@ func ReadIsamFileWithMeta(path string) ([][]byte, *IsamFileMeta, error) {
 // Field extraction and decoding
 // ---------------------------------------------------------------------------
 
+// DecodeExtfhField extracts and decodes a field from a record
 func DecodeExtfhField(rec []byte, offset, length int) string {
 	return ExtractField(rec, offset, length)
 }
 
+// DecodeField extracts and decodes a Windows-1252 field with trimming
 func DecodeField(rec []byte, offset, length int) string {
 	if offset >= len(rec) {
 		return ""
@@ -824,10 +1157,12 @@ func DecodeField(rec []byte, offset, length int) string {
 		end = len(rec)
 	}
 	field := rec[offset:end]
+
 	trimEnd := len(field)
 	for trimEnd > 0 && (field[trimEnd-1] == ' ' || field[trimEnd-1] == 0) {
 		trimEnd--
 	}
+
 	decoder := charmap.Windows1252.NewDecoder()
 	result, err := decoder.Bytes(field[:trimEnd])
 	if err != nil {
@@ -836,6 +1171,7 @@ func DecodeField(rec []byte, offset, length int) string {
 	return string(result)
 }
 
+// DecodeFieldTrimLeft extracts a field and trims leading zeros/spaces
 func DecodeFieldTrimLeft(rec []byte, offset, length int) string {
 	s := DecodeField(rec, offset, length)
 	return strings.TrimLeft(s, "0 ")
@@ -843,17 +1179,23 @@ func DecodeFieldTrimLeft(rec []byte, offset, length int) string {
 
 // ---------------------------------------------------------------------------
 // IsamIndex - in-memory index for key-based lookups
+// Works with both EXTFH and binary fallback records.
 // ---------------------------------------------------------------------------
 
+// KeyExtractor extracts a lookup key from a raw record.
+// Example for Z17 (NIT): func(rec []byte) string { return strings.TrimRight(string(rec[4:17]), " \x00") }
+// Example for Z06 (code): func(rec []byte) string { return strings.TrimRight(string(rec[0:20]), " \x00") }
 type KeyExtractor func(rec []byte) string
 
+// IsamIndex provides key-based lookups over a set of records.
 type IsamIndex struct {
 	records  [][]byte
 	recSize  int
-	byKey    map[string][][]byte
+	byKey    map[string][][]byte // key -> matching records (supports duplicates)
 	keyField KeyExtractor
 }
 
+// NewIsamIndex builds an in-memory index from records using the given key extractor.
 func NewIsamIndex(records [][]byte, recSize int, keyFn KeyExtractor) *IsamIndex {
 	idx := &IsamIndex{
 		records:  records,
@@ -870,6 +1212,7 @@ func NewIsamIndex(records [][]byte, recSize int, keyFn KeyExtractor) *IsamIndex 
 	return idx
 }
 
+// Lookup returns the first record matching the key, or nil if not found.
 func (idx *IsamIndex) Lookup(key string) []byte {
 	recs := idx.byKey[key]
 	if len(recs) == 0 {
@@ -878,14 +1221,17 @@ func (idx *IsamIndex) Lookup(key string) []byte {
 	return recs[0]
 }
 
+// LookupAll returns all records matching the key.
 func (idx *IsamIndex) LookupAll(key string) [][]byte {
 	return idx.byKey[key]
 }
 
+// Has returns true if the key exists in the index.
 func (idx *IsamIndex) Has(key string) bool {
 	return len(idx.byKey[key]) > 0
 }
 
+// Keys returns all unique keys in the index.
 func (idx *IsamIndex) Keys() []string {
 	keys := make([]string, 0, len(idx.byKey))
 	for k := range idx.byKey {
@@ -894,10 +1240,22 @@ func (idx *IsamIndex) Keys() []string {
 	return keys
 }
 
-func (idx *IsamIndex) Count() int  { return len(idx.records) }
-func (idx *IsamIndex) All() [][]byte { return idx.records }
-func (idx *IsamIndex) RecSize() int { return idx.recSize }
+// Count returns the total number of records.
+func (idx *IsamIndex) Count() int {
+	return len(idx.records)
+}
 
+// All returns all records.
+func (idx *IsamIndex) All() [][]byte {
+	return idx.records
+}
+
+// RecSize returns the record size.
+func (idx *IsamIndex) RecSize() int {
+	return idx.recSize
+}
+
+// ForEach iterates all records. Return false to stop.
 func (idx *IsamIndex) ForEach(fn func(key string, rec []byte) bool) {
 	for _, rec := range idx.records {
 		key := idx.keyField(rec)
@@ -907,6 +1265,8 @@ func (idx *IsamIndex) ForEach(fn func(key string, rec []byte) bool) {
 	}
 }
 
+// ReadIsamFileIndexed reads all records and builds an in-memory index.
+// Combines ReadIsamFile + NewIsamIndex in one call.
 func ReadIsamFileIndexed(path string, keyFn KeyExtractor) (*IsamIndex, error) {
 	records, recSize, err := ReadIsamFile(path)
 	if err != nil {
@@ -915,24 +1275,64 @@ func ReadIsamFileIndexed(path string, keyFn KeyExtractor) (*IsamIndex, error) {
 	return NewIsamIndex(records, recSize, keyFn), nil
 }
 
+// ReadIsamFileAutoIndexed reads all records and builds an index using the primary key
+// discovered from the file's KDB (EXTFH only). Falls back to the provided keyFn if
+// EXTFH is not available or the KDB has no key component info.
+func ReadIsamFileAutoIndexed(path string, fallbackKeyFn KeyExtractor) (*IsamIndex, error) {
+	if ExtfhAvailable() {
+		f, err := OpenIsamFile(path)
+		if err == nil {
+			defer f.Close()
+
+			// Check if we have primary key component info
+			if len(f.Keys) > 0 && len(f.Keys[0].Components) > 0 {
+				primaryKey := f.Keys[0]
+				records, err := f.ReadAll()
+				if err != nil {
+					return nil, err
+				}
+				keyFn := func(rec []byte) string {
+					return primaryKey.ExtractKeyString(rec)
+				}
+				return NewIsamIndex(records, f.RecSize, keyFn), nil
+			}
+
+			// KDB didn't have component info, fall through to fallback
+			records, err := f.ReadAll()
+			if err != nil {
+				return nil, err
+			}
+			return NewIsamIndex(records, f.RecSize, fallbackKeyFn), nil
+		}
+	}
+
+	// Fallback: binary reader + manual key extractor
+	return ReadIsamFileIndexed(path, fallbackKeyFn)
+}
+
 // ---------------------------------------------------------------------------
 // Legacy compatibility
 // ---------------------------------------------------------------------------
 
+// ExtfhRecord represents a record read via EXTFH (legacy)
 type ExtfhRecord struct {
 	Data []byte
 }
 
+// ReadFileExtfh reads an ISAM file using EXTFH (legacy API).
+// Prefer ReadIsamFile or OpenIsamFile for new code.
 func ReadFileExtfh(path string) ([]ExtfhRecord, error) {
 	f, err := OpenIsamFile(path)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
+
 	records, err := f.ReadAll()
 	if err != nil {
 		return nil, err
 	}
+
 	result := make([]ExtfhRecord, len(records))
 	for i, r := range records {
 		result[i] = ExtfhRecord{Data: r}

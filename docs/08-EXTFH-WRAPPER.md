@@ -45,18 +45,49 @@ Tamano total: 280 bytes (alineado para 64-bit).
 
 Define las claves del archivo indexado. Soporta hasta 32 claves.
 
+### Estructura del KDB
+
 ```
 Offset  Bytes  Campo
 --------------------------------------------------------------
-0x00    4      kdb-total-length    Tamano total del KDB
-0x04    4      filler
-0x08    2      kdb-num-keys        Numero de claves
-0x0A    2      filler
-0x0C    2      kdb-key-length      Longitud de la clave primaria
-0x0E    2      kdb-component-count Componentes de la clave
-0x10    2      kdb-component-offset  Offset del componente en el registro
-0x12    2      kdb-component-length  Longitud del componente
-0x14    2      kdb-component-type   Tipo (0=alphanumeric)
+HEADER (14 bytes):
+0x00    2      kdb-total-length    Tamano total del KDB
+0x02    4      filler
+0x06    2      kdb-num-keys        Numero de claves
+0x08    6      filler
+
+KEY ENTRIES (16 bytes cada una, nkeys entradas):
++0x00   2      comp-count          Numero de componentes
++0x02   2      comp-offset         Offset en KDB a las definiciones de componentes
++0x04   1      key-flags           0x10=primary, 0x40=duplicates, 0x02=sparse
++0x05   1      comp-flags          Compression flags
++0x06   1      sparse-char         Sparse character
++0x07   9      reserved
+
+COMPONENT ENTRIES (8 bytes cada una, despues de las key entries):
++0x00   2      rec-offset          Offset del componente dentro del registro
++0x02   2      comp-length         Longitud del componente en bytes
++0x04   2      comp-type           0=alphanumeric, otro=numerico/binario
++0x06   2      filler
+```
+
+### Extraccion automatica de claves
+
+El wrapper extrae offset y length de cada componente de clave del KDB.
+Esto permite construir un `IsamIndex` automaticamente sin hardcodear offsets:
+
+```go
+f, _ := isam.OpenIsamFile(`C:\DEMOS01\Z17`)
+defer f.Close()
+
+// f.Keys[0] = primary key con Components[].Offset y Components[].Length
+// Extraer la clave de un registro:
+keyBytes := f.Keys[0].ExtractKey(record)
+keyString := f.Keys[0].ExtractKeyString(record)
+
+// O usar ReadIsamFileAutoIndexed para indexar automaticamente por clave primaria:
+idx, _ := isam.ReadIsamFileAutoIndexed(`C:\DEMOS01\Z17`, fallbackKeyFn)
+rec := idx.Lookup("G0010000000000020")
 ```
 
 ## Opcodes Principales
@@ -96,7 +127,9 @@ Offset  Bytes  Campo
    - Agregar directorio de DLLs al PATH
 
 2. findDLL()
-   - Buscar cblrtsm.dll en PATH, C:\Siigo\, Micro Focus install dirs
+   - Buscar cblrtsm.dll en: COBDIR, C:\Siigo\, C:\Microfocus\,
+     Program Files\Micro Focus\Visual COBOL\,
+     Program Files\Micro Focus\COBOL Server\
 
 3. OpenIsamFile(path)
    - Crear FCD3 (280 bytes) + KDB
@@ -105,8 +138,8 @@ Offset  Bytes  Campo
    - Si status 9/065 o 9/068 -> retry hasta 3 veces
 
 4. ReadAllRecords(fcd)
-   - EXTFH(OpStepFirst) -> posicionar al inicio
-   - Loop: EXTFH(OpStepNext) hasta status != 0
+   - EXTFH(OpStepFirst) -> posicionar al inicio (con lock retry)
+   - Loop: EXTFH(OpStepNext) hasta status != 0 (con lock retry)
    - Cada iteracion: copiar record buffer a slice de Go
 
 5. CloseIsamFile(fcd)
@@ -125,7 +158,7 @@ Status 9/068 = registro bloqueado (record lock)
 El wrapper reintenta automaticamente:
 - **MaxLockRetries**: 3 intentos
 - **LockRetryDelay**: 200ms entre intentos
-- Se aplica a OPEN y STEP/READ
+- Se aplica a **todas** las operaciones: OPEN, STEP FIRST/NEXT/PREV, READ RANDOM, START
 
 ## Environment Auto-Setup
 
@@ -160,15 +193,34 @@ API extendida con diagnosticos:
 
 ```go
 type IsamFileMeta struct {
-    RecSize         int    // Tamano del registro
-    RecordCount     int    // Registros encontrados
-    ExpectedRecords int    // Registros esperados (del header)
-    NumKeys         int    // Numero de claves (solo EXTFH)
-    Format          int    // Formato del archivo (solo EXTFH)
-    HasIndex        bool   // Si existe archivo .idx
-    UsedEXTFH       bool   // true=EXTFH, false=binary fallback
-    DLLPath         string // Ruta de cblrtsm.dll usada
+    RecSize         int       // Tamano del registro
+    RecordCount     int       // Registros encontrados
+    ExpectedRecords int       // Registros esperados (del header)
+    NumKeys         int       // Numero de claves (solo EXTFH)
+    Format          int       // Formato del archivo (solo EXTFH)
+    Keys            []KeyInfo // Claves con offset/length de componentes (solo EXTFH)
+    HasIndex        bool      // Si existe archivo .idx
+    UsedEXTFH       bool      // true=EXTFH, false=binary fallback
+    DLLPath         string    // Ruta de cblrtsm.dll usada
 }
+```
+
+### ReadIsamFileIndexed(path, keyFn) (*IsamIndex, error)
+Lee registros y construye un indice en memoria con un key extractor manual.
+
+### ReadIsamFileAutoIndexed(path, fallbackKeyFn) (*IsamIndex, error)
+Lee registros y construye un indice usando la clave primaria descubierta del KDB.
+Si EXTFH no esta disponible o el KDB no tiene info de componentes, usa fallbackKeyFn.
+
+### IsamIndex - Busquedas por clave en memoria
+```go
+idx, _ := isam.ReadIsamFileAutoIndexed(`C:\DEMOS01\Z17`, fallbackKeyFn)
+
+rec := idx.Lookup("G0010000000000020")   // primer registro con esa clave
+recs := idx.LookupAll("G001...")         // todos con esa clave
+exists := idx.Has("G001...")             // verificar existencia
+keys := idx.Keys()                       // claves unicas
+idx.ForEach(func(key string, rec []byte) bool { ... })
 ```
 
 ## Binary Fallback
