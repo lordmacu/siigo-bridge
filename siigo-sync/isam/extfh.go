@@ -1044,6 +1044,104 @@ func DecodeFieldTrimLeft(rec []byte, offset, length int) string {
 }
 
 // ---------------------------------------------------------------------------
+// IsamIndex - in-memory index for key-based lookups
+// Works with both EXTFH and binary fallback records.
+// ---------------------------------------------------------------------------
+
+// KeyExtractor extracts a lookup key from a raw record.
+// Example for Z17 (NIT): func(rec []byte) string { return strings.TrimRight(string(rec[4:17]), " \x00") }
+// Example for Z06 (code): func(rec []byte) string { return strings.TrimRight(string(rec[0:20]), " \x00") }
+type KeyExtractor func(rec []byte) string
+
+// IsamIndex provides key-based lookups over a set of records.
+type IsamIndex struct {
+	records  [][]byte
+	recSize  int
+	byKey    map[string][][]byte // key -> matching records (supports duplicates)
+	keyField KeyExtractor
+}
+
+// NewIsamIndex builds an in-memory index from records using the given key extractor.
+func NewIsamIndex(records [][]byte, recSize int, keyFn KeyExtractor) *IsamIndex {
+	idx := &IsamIndex{
+		records:  records,
+		recSize:  recSize,
+		byKey:    make(map[string][][]byte, len(records)),
+		keyField: keyFn,
+	}
+	for _, rec := range records {
+		key := keyFn(rec)
+		if key != "" {
+			idx.byKey[key] = append(idx.byKey[key], rec)
+		}
+	}
+	return idx
+}
+
+// Lookup returns the first record matching the key, or nil if not found.
+func (idx *IsamIndex) Lookup(key string) []byte {
+	recs := idx.byKey[key]
+	if len(recs) == 0 {
+		return nil
+	}
+	return recs[0]
+}
+
+// LookupAll returns all records matching the key.
+func (idx *IsamIndex) LookupAll(key string) [][]byte {
+	return idx.byKey[key]
+}
+
+// Has returns true if the key exists in the index.
+func (idx *IsamIndex) Has(key string) bool {
+	return len(idx.byKey[key]) > 0
+}
+
+// Keys returns all unique keys in the index.
+func (idx *IsamIndex) Keys() []string {
+	keys := make([]string, 0, len(idx.byKey))
+	for k := range idx.byKey {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+// Count returns the total number of records.
+func (idx *IsamIndex) Count() int {
+	return len(idx.records)
+}
+
+// All returns all records.
+func (idx *IsamIndex) All() [][]byte {
+	return idx.records
+}
+
+// RecSize returns the record size.
+func (idx *IsamIndex) RecSize() int {
+	return idx.recSize
+}
+
+// ForEach iterates all records. Return false to stop.
+func (idx *IsamIndex) ForEach(fn func(key string, rec []byte) bool) {
+	for _, rec := range idx.records {
+		key := idx.keyField(rec)
+		if !fn(key, rec) {
+			return
+		}
+	}
+}
+
+// ReadIsamFileIndexed reads all records and builds an in-memory index.
+// Combines ReadIsamFile + NewIsamIndex in one call.
+func ReadIsamFileIndexed(path string, keyFn KeyExtractor) (*IsamIndex, error) {
+	records, recSize, err := ReadIsamFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return NewIsamIndex(records, recSize, keyFn), nil
+}
+
+// ---------------------------------------------------------------------------
 // Legacy compatibility
 // ---------------------------------------------------------------------------
 

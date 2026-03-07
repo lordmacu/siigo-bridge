@@ -842,6 +842,80 @@ func DecodeFieldTrimLeft(rec []byte, offset, length int) string {
 }
 
 // ---------------------------------------------------------------------------
+// IsamIndex - in-memory index for key-based lookups
+// ---------------------------------------------------------------------------
+
+type KeyExtractor func(rec []byte) string
+
+type IsamIndex struct {
+	records  [][]byte
+	recSize  int
+	byKey    map[string][][]byte
+	keyField KeyExtractor
+}
+
+func NewIsamIndex(records [][]byte, recSize int, keyFn KeyExtractor) *IsamIndex {
+	idx := &IsamIndex{
+		records:  records,
+		recSize:  recSize,
+		byKey:    make(map[string][][]byte, len(records)),
+		keyField: keyFn,
+	}
+	for _, rec := range records {
+		key := keyFn(rec)
+		if key != "" {
+			idx.byKey[key] = append(idx.byKey[key], rec)
+		}
+	}
+	return idx
+}
+
+func (idx *IsamIndex) Lookup(key string) []byte {
+	recs := idx.byKey[key]
+	if len(recs) == 0 {
+		return nil
+	}
+	return recs[0]
+}
+
+func (idx *IsamIndex) LookupAll(key string) [][]byte {
+	return idx.byKey[key]
+}
+
+func (idx *IsamIndex) Has(key string) bool {
+	return len(idx.byKey[key]) > 0
+}
+
+func (idx *IsamIndex) Keys() []string {
+	keys := make([]string, 0, len(idx.byKey))
+	for k := range idx.byKey {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+func (idx *IsamIndex) Count() int  { return len(idx.records) }
+func (idx *IsamIndex) All() [][]byte { return idx.records }
+func (idx *IsamIndex) RecSize() int { return idx.recSize }
+
+func (idx *IsamIndex) ForEach(fn func(key string, rec []byte) bool) {
+	for _, rec := range idx.records {
+		key := idx.keyField(rec)
+		if !fn(key, rec) {
+			return
+		}
+	}
+}
+
+func ReadIsamFileIndexed(path string, keyFn KeyExtractor) (*IsamIndex, error) {
+	records, recSize, err := ReadIsamFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return NewIsamIndex(records, recSize, keyFn), nil
+}
+
+// ---------------------------------------------------------------------------
 // Legacy compatibility
 // ---------------------------------------------------------------------------
 
