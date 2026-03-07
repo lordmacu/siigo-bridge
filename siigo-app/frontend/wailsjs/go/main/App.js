@@ -10,6 +10,10 @@ export function ClearLogs() {
   return window['go']['main']['App']['ClearLogs']();
 }
 
+export function GetCartera(arg1, arg2) {
+  return window['go']['main']['App']['GetCartera'](arg1, arg2);
+}
+
 export function GetClientes(arg1, arg2) {
   return window['go']['main']['App']['GetClientes'](arg1, arg2);
 }
@@ -38,16 +42,12 @@ export function GetProductos(arg1, arg2) {
   return window['go']['main']['App']['GetProductos'](arg1, arg2);
 }
 
-export function GetRecordDetail(arg1) {
-  return window['go']['main']['App']['GetRecordDetail'](arg1);
-}
-
-export function GetSentRecords(arg1, arg2) {
-  return window['go']['main']['App']['GetSentRecords'](arg1, arg2);
-}
-
 export function GetStats() {
   return window['go']['main']['App']['GetStats']();
+}
+
+export function GetSyncHistory(arg1, arg2) {
+  return window['go']['main']['App']['GetSyncHistory'](arg1, arg2);
 }
 
 export function IsPaused() {
@@ -60,6 +60,10 @@ export function IsSyncing() {
 
 export function LookupByNIT(arg1) {
   return window['go']['main']['App']['LookupByNIT'](arg1);
+}
+
+export function LookupCarteraPorNIT(arg1) {
+  return window['go']['main']['App']['LookupCarteraPorNIT'](arg1);
 }
 
 export function LookupMovimientosPorNIT(arg1) {
@@ -78,24 +82,20 @@ export function RefreshCache(arg1) {
   return window['go']['main']['App']['RefreshCache'](arg1);
 }
 
-export function ResendRecord(arg1) {
-  return window['go']['main']['App']['ResendRecord'](arg1);
-}
-
 export function ResumeSync() {
   return window['go']['main']['App']['ResumeSync']();
+}
+
+export function RetryErrors(arg1) {
+  return window['go']['main']['App']['RetryErrors'](arg1);
 }
 
 export function SaveConfig(arg1, arg2, arg3, arg4, arg5) {
   return window['go']['main']['App']['SaveConfig'](arg1, arg2, arg3, arg4, arg5);
 }
 
-export function SearchSentRecords(arg1, arg2, arg3) {
-  return window['go']['main']['App']['SearchSentRecords'](arg1, arg2, arg3);
-}
-
-export function SearchSentRecordsWithDates(arg1, arg2, arg3, arg4, arg5, arg6) {
-  return window['go']['main']['App']['SearchSentRecordsWithDates'](arg1, arg2, arg3, arg4, arg5, arg6);
+export function SearchSyncHistory(arg1, arg2, arg3, arg4, arg5, arg6) {
+  return window['go']['main']['App']['SearchSyncHistory'](arg1, arg2, arg3, arg4, arg5, arg6);
 }
 
 export function SyncNow() {

@@ -10,7 +10,6 @@ import (
 	"time"
 )
 
-// Client is the HTTP client for the Finearom API
 type Client struct {
 	baseURL    string
 	email      string
@@ -19,7 +18,14 @@ type Client struct {
 	httpClient *http.Client
 }
 
-// NewClient creates a new Finearom API client
+// SyncPayload is the universal payload sent to the server
+type SyncPayload struct {
+	Table  string                 `json:"table"`  // clients, products, movements, cartera
+	Action string                 `json:"action"` // add, edit, delete
+	Key    string                 `json:"key"`    // unique identifier (NIT, code, etc.)
+	Data   map[string]interface{} `json:"data"`   // record fields
+}
+
 func NewClient(baseURL, email, password string) *Client {
 	return &Client{
 		baseURL:  baseURL,
@@ -48,7 +54,6 @@ func (c *Client) Login() error {
 		return fmt.Errorf("login response parse error: %w", err)
 	}
 
-	// Laravel Sanctum returns token in different formats
 	if token, ok := result["token"].(string); ok {
 		c.token = token
 	} else if data, ok := result["data"].(map[string]interface{}); ok {
@@ -67,31 +72,25 @@ func (c *Client) Login() error {
 	return nil
 }
 
-// SyncClient sends a client record to Finearom
-func (c *Client) SyncClient(data map[string]interface{}) error {
-	_, err := c.doRequest("POST", "/siigo/clients", data, true)
+// Sync sends a single record change to the server via the universal endpoint
+func (c *Client) Sync(table, action, key string, data map[string]interface{}) error {
+	payload := SyncPayload{
+		Table:  table,
+		Action: action,
+		Key:    key,
+		Data:   data,
+	}
+
+	_, err := c.doRequest("POST", "/siigo/sync", payload, true)
 	if err != nil {
-		return fmt.Errorf("sync client failed: %w", err)
+		return fmt.Errorf("sync %s/%s failed: %w", table, action, err)
 	}
 	return nil
 }
 
-// SyncProduct sends a product record to Finearom
-func (c *Client) SyncProduct(data map[string]interface{}) error {
-	_, err := c.doRequest("POST", "/siigo/products", data, true)
-	if err != nil {
-		return fmt.Errorf("sync product failed: %w", err)
-	}
-	return nil
-}
-
-// SyncMovement sends a movement/transaction to Finearom
-func (c *Client) SyncMovement(data map[string]interface{}) error {
-	_, err := c.doRequest("POST", "/siigo/movements", data, true)
-	if err != nil {
-		return fmt.Errorf("sync movement failed: %w", err)
-	}
-	return nil
+// IsAuthenticated returns true if the client has a valid token
+func (c *Client) IsAuthenticated() bool {
+	return c.token != ""
 }
 
 func (c *Client) doRequest(method, endpoint string, body interface{}, auth bool) ([]byte, error) {
@@ -133,9 +132,4 @@ func (c *Client) doRequest(method, endpoint string, body interface{}, auth bool)
 	}
 
 	return respBody, nil
-}
-
-// IsAuthenticated returns true if the client has a valid token
-func (c *Client) IsAuthenticated() bool {
-	return c.token != ""
 }

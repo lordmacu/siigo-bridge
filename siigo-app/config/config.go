@@ -23,7 +23,7 @@ type FinearomConfig struct {
 
 type SyncConfig struct {
 	IntervalSeconds int      `json:"interval_seconds"` // cada cuántos segundos hacer polling
-	Files           []string `json:"files"`            // archivos a monitorear: ["Z17", "Z06", "Z49"]
+	Files           []string `json:"files"`            // archivos a monitorear: ["Z17", "Z06CP", "Z49", "Z092024"]
 	StatePath       string   `json:"state_path"`       // donde guardar el estado local
 }
 
@@ -51,7 +51,7 @@ func Default() *Config {
 		},
 		Sync: SyncConfig{
 			IntervalSeconds: 60,
-			Files:           []string{"Z17", "Z06", "Z49"},
+			Files:           []string{"Z17", "Z06CP", "Z49", "Z092024"},
 			StatePath:       "sync_state.json",
 		},
 	}

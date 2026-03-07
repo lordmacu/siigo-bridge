@@ -10,21 +10,19 @@ import (
 	"siigo-common/isam"
 	"siigo-common/parsers"
 	"siigo-app/storage"
-	gosync "siigo-app/sync"
 	"strings"
 	"time"
 )
 
 type App struct {
-	ctx      context.Context
-	db       *storage.DB
-	cfg      *config.Config
-	client   *api.Client
-	state    *gosync.SyncState
-	syncing  bool
-	looping  bool      // auto-sync loop running
-	paused   bool      // user paused the loop
-	stopCh   chan bool
+	ctx     context.Context
+	db      *storage.DB
+	cfg     *config.Config
+	client  *api.Client
+	syncing bool
+	looping bool
+	paused  bool
+	stopCh  chan bool
 }
 
 func NewApp() *App {
@@ -52,26 +50,15 @@ func (a *App) startup(ctx context.Context) {
 	}
 	a.cfg = cfg
 
-	state, err := gosync.LoadState(cfg.Sync.StatePath)
-	if err != nil {
-		state = gosync.NewSyncState()
-	}
-	a.state = state
-
-	// Auto-start sync loop
 	go a.startSyncLoop()
 }
 
 func (a *App) shutdown(ctx context.Context) {
-	// Stop the loop
 	if a.looping {
 		a.stopCh <- true
 	}
 	if a.db != nil {
 		a.db.Close()
-	}
-	if a.state != nil && a.cfg != nil {
-		a.state.Save(a.cfg.Sync.StatePath)
 	}
 }
 
@@ -80,14 +67,13 @@ func (a *App) shutdown(ctx context.Context) {
 func (a *App) startSyncLoop() {
 	a.looping = true
 	a.paused = false
-	a.db.AddLog("info", "SYNC", "Sync loop iniciado automaticamente")
+	a.db.AddLog("info", "SYNC", "Sync loop iniciado")
 
 	interval := time.Duration(a.cfg.Sync.IntervalSeconds) * time.Second
 	if interval < 10*time.Second {
 		interval = 10 * time.Second
 	}
 
-	// Run first sync immediately
 	a.doOneSyncCycle()
 
 	ticker := time.NewTicker(interval)
@@ -111,20 +97,36 @@ func (a *App) doOneSyncCycle() {
 	a.syncing = true
 	defer func() { a.syncing = false }()
 
-	// Login
+	a.db.AddLog("info", "SYNC", "--- Ciclo iniciado ---")
+
+	// Step 1: Parse ISAM files and diff against SQLite
+	a.diffClientes()
+	a.diffProductos()
+	a.diffMovimientos()
+	a.diffCartera()
+
+	// Step 2: Send pending changes to server
+	if a.ensureLogin() {
+		a.sendPending("clients")
+		a.sendPending("products")
+		a.sendPending("movements")
+		a.sendPending("cartera")
+	}
+
+	a.db.AddLog("info", "SYNC", "--- Ciclo completado ---")
+}
+
+func (a *App) ensureLogin() bool {
+	if a.client != nil && a.client.IsAuthenticated() {
+		return true
+	}
 	client := api.NewClient(a.cfg.Finearom.BaseURL, a.cfg.Finearom.Email, a.cfg.Finearom.Password)
 	if err := client.Login(); err != nil {
 		a.db.AddLog("error", "API", "Login failed: "+err.Error())
-		return
+		return false
 	}
 	a.client = client
-
-	a.db.AddLog("info", "SYNC", "--- Ciclo de sincronizacion iniciado ---")
-	a.syncClientes()
-	a.syncProductos()
-	a.syncMovimientos()
-	a.state.Save(a.cfg.Sync.StatePath)
-	a.db.AddLog("info", "SYNC", "--- Ciclo de sincronizacion completado ---")
+	return true
 }
 
 // PauseSync pauses the auto-sync loop
@@ -147,23 +149,213 @@ func (a *App) ResumeSync() string {
 	return "ok"
 }
 
-// IsPaused returns whether the sync loop is paused
-func (a *App) IsPaused() bool {
-	return a.paused
-}
+func (a *App) IsPaused() bool  { return a.paused }
+func (a *App) IsSyncing() bool { return a.syncing }
 
-// SyncNow triggers an immediate sync cycle (even if paused)
+// SyncNow triggers an immediate sync cycle
 func (a *App) SyncNow() string {
 	if a.syncing {
 		return "Ya hay una sincronizacion en curso"
 	}
-
 	go a.doOneSyncCycle()
 	return "Sincronizacion manual iniciada"
 }
 
-func (a *App) IsSyncing() bool {
-	return a.syncing
+// RetryErrors resets all error records to pending for a given table
+func (a *App) RetryErrors(tableName string) string {
+	n := a.db.RetryErrors(tableName)
+	a.db.AddLog("info", "SYNC", fmt.Sprintf("Reintentando %d registros con error en %s", n, tableName))
+	return fmt.Sprintf("ok: %d registros marcados para reenvio", n)
+}
+
+// ==================== DIFF: Parse ISAM → Compare with SQLite ====================
+
+func (a *App) diffClientes() {
+	clientes, err := parsers.ParseTercerosClientes(a.cfg.Siigo.DataPath)
+	if err != nil {
+		a.db.AddLog("error", "Z17", "Error parseando: "+err.Error())
+		return
+	}
+
+	adds, edits := 0, 0
+	currentKeys := make(map[string]bool, len(clientes))
+
+	for _, t := range clientes {
+		nit := strings.TrimLeft(t.NumeroDoc, "0")
+		if nit == "" {
+			continue
+		}
+		currentKeys[nit] = true
+
+		data := t.ToFinearomClient()
+		jsonData, _ := json.Marshal(data)
+		action := a.db.UpsertRecord("clients", nit, string(jsonData), t.Hash)
+		switch action {
+		case "add":
+			adds++
+		case "edit":
+			edits++
+		}
+	}
+
+	deletes := a.db.MarkDeleted("clients", currentKeys)
+	a.db.AddLog("info", "Z17", fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(clientes)))
+}
+
+func (a *App) diffProductos() {
+	productos, err := parsers.ParseProductos(a.cfg.Siigo.DataPath)
+	if err != nil {
+		a.db.AddLog("error", "Z06CP", "Error parseando: "+err.Error())
+		return
+	}
+
+	adds, edits := 0, 0
+	currentKeys := make(map[string]bool, len(productos))
+
+	for _, p := range productos {
+		key := p.Comprobante + "-" + p.Secuencia
+		if key == "-" {
+			key = p.Hash
+		}
+		currentKeys[key] = true
+
+		data := p.ToFinearomProduct()
+		jsonData, _ := json.Marshal(data)
+		action := a.db.UpsertRecord("products", key, string(jsonData), p.Hash)
+		switch action {
+		case "add":
+			adds++
+		case "edit":
+			edits++
+		}
+	}
+
+	deletes := a.db.MarkDeleted("products", currentKeys)
+	a.db.AddLog("info", "Z06CP", fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(productos)))
+}
+
+func (a *App) diffMovimientos() {
+	movimientos, err := parsers.ParseMovimientos(a.cfg.Siigo.DataPath)
+	if err != nil {
+		a.db.AddLog("error", "Z49", "Error parseando: "+err.Error())
+		return
+	}
+
+	adds, edits := 0, 0
+	currentKeys := make(map[string]bool, len(movimientos))
+
+	for _, m := range movimientos {
+		key := m.TipoComprobante + "-" + m.NumeroDoc
+		if key == "-" {
+			key = m.Hash
+		}
+		currentKeys[key] = true
+
+		fecha := m.Fecha
+		if len(fecha) == 8 {
+			fecha = fecha[:4] + "-" + fecha[4:6] + "-" + fecha[6:8]
+		}
+		data := map[string]interface{}{
+			"tipo_comprobante": m.TipoComprobante,
+			"numero_doc":       m.NumeroDoc,
+			"fecha":            fecha,
+			"nit_tercero":      m.NitTercero,
+			"cuenta_contable":  m.CuentaContable,
+			"descripcion":      m.Descripcion,
+			"valor":            m.Valor,
+			"tipo_mov":         m.TipoMov,
+		}
+		jsonData, _ := json.Marshal(data)
+		action := a.db.UpsertRecord("movements", key, string(jsonData), m.Hash)
+		switch action {
+		case "add":
+			adds++
+		case "edit":
+			edits++
+		}
+	}
+
+	deletes := a.db.MarkDeleted("movements", currentKeys)
+	a.db.AddLog("info", "Z49", fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(movimientos)))
+}
+
+func (a *App) diffCartera() {
+	for _, file := range a.cfg.Sync.Files {
+		if len(file) < 3 || file[:3] != "Z09" {
+			continue
+		}
+		anio := ""
+		if len(file) > 3 {
+			anio = file[3:]
+		}
+
+		cartera, err := parsers.ParseCartera(a.cfg.Siigo.DataPath, anio)
+		if err != nil {
+			a.db.AddLog("error", file, "Error parseando: "+err.Error())
+			continue
+		}
+
+		adds, edits := 0, 0
+		currentKeys := make(map[string]bool, len(cartera))
+
+		for _, c := range cartera {
+			key := file + "-" + c.TipoRegistro + "-" + c.Empresa + "-" + c.Secuencia
+			currentKeys[key] = true
+
+			data := c.ToFinearomCartera()
+			jsonData, _ := json.Marshal(data)
+			action := a.db.UpsertRecord("cartera", key, string(jsonData), c.Hash)
+			switch action {
+			case "add":
+				adds++
+			case "edit":
+				edits++
+			}
+		}
+
+		// Only mark deletes for this specific year file
+		// We prefix keys with the file name so different years don't conflict
+		deletes := a.db.MarkDeleted("cartera", currentKeys)
+		a.db.AddLog("info", file, fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(cartera)))
+	}
+}
+
+// ==================== SEND PENDING: SQLite → Server ====================
+
+func (a *App) sendPending(tableName string) {
+	pending := a.db.GetPendingRecords(tableName)
+	if len(pending) == 0 {
+		return
+	}
+
+	sent, errors := 0, 0
+	for _, rec := range pending {
+		var data map[string]interface{}
+		if rec.SyncAction != "delete" {
+			if err := json.Unmarshal([]byte(rec.Data), &data); err != nil {
+				a.db.MarkSyncError(rec.ID, "JSON parse error: "+err.Error())
+				errors++
+				continue
+			}
+		}
+
+		err := a.client.Sync(tableName, rec.SyncAction, rec.Key, data)
+		if err != nil {
+			a.db.MarkSyncError(rec.ID, err.Error())
+			a.db.AddSyncHistory(tableName, rec.Key, rec.SyncAction, rec.Data, "error", err.Error())
+			errors++
+			continue
+		}
+
+		a.db.MarkSynced(rec.ID)
+		a.db.AddSyncHistory(tableName, rec.Key, rec.SyncAction, rec.Data, "sent", "")
+		sent++
+	}
+
+	// Clean up deleted records that were successfully synced
+	a.db.RemoveDeletedSynced(tableName)
+
+	a.db.AddLog("info", "API", fmt.Sprintf("[%s] Enviados: %d, Errores: %d (de %d pendientes)", tableName, sent, errors, len(pending)))
 }
 
 // ==================== CONFIG ====================
@@ -200,7 +392,7 @@ type ISAMPreview struct {
 }
 
 func (a *App) GetISAMInfo() []ISAMPreview {
-	files := []string{"Z17", "Z06", "Z49"}
+	files := []string{"Z17", "Z06", "Z06CP", "Z49"}
 	var result []ISAMPreview
 	for _, f := range files {
 		path := a.cfg.Siigo.DataPath + f
@@ -230,10 +422,11 @@ var (
 	cachedClientes    []parsers.Tercero
 	cachedProductos   []parsers.Producto
 	cachedMovimientos []parsers.Movimiento
-	// In-memory indexes for O(1) lookups (built from parsed structs)
-	clientesByNIT      map[string]*parsers.Tercero
-	productosByCodigo  map[string]*parsers.Producto
-	movimientosByNIT   map[string][]parsers.Movimiento
+	cachedCartera     []parsers.Cartera
+	clientesByNIT     map[string]*parsers.Tercero
+	productosByCodigo map[string]*parsers.Producto
+	movimientosByNIT  map[string][]parsers.Movimiento
+	carteraByNIT      map[string][]parsers.Cartera
 )
 
 func (a *App) RefreshCache(which string) {
@@ -245,7 +438,6 @@ func (a *App) RefreshCache(which string) {
 			return
 		}
 		cachedClientes = c
-		// Build NIT index for O(1) lookups
 		clientesByNIT = make(map[string]*parsers.Tercero, len(c))
 		for i := range c {
 			nit := strings.TrimLeft(c[i].NumeroDoc, "0")
@@ -253,7 +445,7 @@ func (a *App) RefreshCache(which string) {
 				clientesByNIT[nit] = &cachedClientes[i]
 			}
 		}
-		a.db.AddLog("info", "Z17", fmt.Sprintf("Cache actualizado: %d clientes", len(c)))
+		a.db.AddLog("info", "Z17", fmt.Sprintf("Cache: %d clientes", len(c)))
 	case "products":
 		p, err := parsers.ParseProductos(a.cfg.Siigo.DataPath)
 		if err != nil {
@@ -268,7 +460,7 @@ func (a *App) RefreshCache(which string) {
 				productosByCodigo[key] = &cachedProductos[i]
 			}
 		}
-		a.db.AddLog("info", "Z06CP", fmt.Sprintf("Cache actualizado: %d productos", len(p)))
+		a.db.AddLog("info", "Z06CP", fmt.Sprintf("Cache: %d productos", len(p)))
 	case "movements":
 		m, err := parsers.ParseMovimientos(a.cfg.Siigo.DataPath)
 		if err != nil {
@@ -283,7 +475,33 @@ func (a *App) RefreshCache(which string) {
 				movimientosByNIT[nit] = append(movimientosByNIT[nit], mov)
 			}
 		}
-		a.db.AddLog("info", "Z49", fmt.Sprintf("Cache actualizado: %d movimientos", len(m)))
+		a.db.AddLog("info", "Z49", fmt.Sprintf("Cache: %d movimientos", len(m)))
+	case "cartera":
+		var all []parsers.Cartera
+		for _, file := range a.cfg.Sync.Files {
+			if len(file) < 3 || file[:3] != "Z09" {
+				continue
+			}
+			anio := ""
+			if len(file) > 3 {
+				anio = file[3:]
+			}
+			c, err := parsers.ParseCartera(a.cfg.Siigo.DataPath, anio)
+			if err != nil {
+				a.db.AddLog("error", file, "Error leyendo cartera: "+err.Error())
+				continue
+			}
+			all = append(all, c...)
+		}
+		cachedCartera = all
+		carteraByNIT = make(map[string][]parsers.Cartera)
+		for _, c := range all {
+			nit := strings.TrimLeft(c.NitTercero, "0")
+			if nit != "" {
+				carteraByNIT[nit] = append(carteraByNIT[nit], c)
+			}
+		}
+		a.db.AddLog("info", "Z09", fmt.Sprintf("Cache: %d cartera", len(all)))
 	}
 }
 
@@ -356,6 +574,30 @@ func (a *App) GetMovimientos(page int, search string) PaginatedISAM {
 	return PaginatedISAM{Data: data[start:end], Total: total}
 }
 
+func (a *App) GetCartera(page int, search string) PaginatedISAM {
+	if cachedCartera == nil {
+		a.RefreshCache("cartera")
+	}
+	data := cachedCartera
+	if search != "" {
+		var filtered []parsers.Cartera
+		q := strings.ToLower(search)
+		for _, c := range data {
+			if strings.Contains(strings.ToLower(c.NitTercero), q) ||
+				strings.Contains(strings.ToLower(c.Descripcion), q) ||
+				strings.Contains(strings.ToLower(c.CuentaContable), q) ||
+				strings.Contains(strings.ToLower(c.Fecha), q) ||
+				strings.Contains(strings.ToLower(c.TipoRegistro), q) {
+				filtered = append(filtered, c)
+			}
+		}
+		data = filtered
+	}
+	total := len(data)
+	start, end := paginate(total, page, 50)
+	return PaginatedISAM{Data: data[start:end], Total: total}
+}
+
 func paginate(total, page, perPage int) (int, int) {
 	start := (page - 1) * perPage
 	if start > total {
@@ -370,7 +612,6 @@ func paginate(total, page, perPage int) (int, int) {
 
 // ==================== LOOKUPS ====================
 
-// LookupByNIT searches for a client by NIT using the in-memory index (O(1)).
 func (a *App) LookupByNIT(nit string) *parsers.Tercero {
 	if clientesByNIT == nil {
 		a.RefreshCache("clients")
@@ -379,22 +620,27 @@ func (a *App) LookupByNIT(nit string) *parsers.Tercero {
 	return clientesByNIT[nit]
 }
 
-// LookupProducto searches for a product by code using the in-memory index (O(1)).
 func (a *App) LookupProducto(codigo string) *parsers.Producto {
 	if productosByCodigo == nil {
 		a.RefreshCache("products")
 	}
-	codigo = strings.TrimSpace(codigo)
-	return productosByCodigo[codigo]
+	return productosByCodigo[strings.TrimSpace(codigo)]
 }
 
-// LookupMovimientosPorNIT returns all movements for a given NIT using the index (O(1)).
 func (a *App) LookupMovimientosPorNIT(nit string) []parsers.Movimiento {
 	if movimientosByNIT == nil {
 		a.RefreshCache("movements")
 	}
 	nit = strings.TrimLeft(strings.TrimSpace(nit), "0")
 	return movimientosByNIT[nit]
+}
+
+func (a *App) LookupCarteraPorNIT(nit string) []parsers.Cartera {
+	if carteraByNIT == nil {
+		a.RefreshCache("cartera")
+	}
+	nit = strings.TrimLeft(strings.TrimSpace(nit), "0")
+	return carteraByNIT[nit]
 }
 
 // GetExtfhStatus returns info about EXTFH availability
@@ -405,7 +651,7 @@ func (a *App) GetExtfhStatus() map[string]interface{} {
 	}
 }
 
-// ==================== SYNC WORKERS ====================
+// ==================== CONNECTION TEST ====================
 
 func (a *App) TestConnection() string {
 	client := api.NewClient(a.cfg.Finearom.BaseURL, a.cfg.Finearom.Email, a.cfg.Finearom.Password)
@@ -417,163 +663,6 @@ func (a *App) TestConnection() string {
 	return "ok"
 }
 
-func (a *App) syncClientes() {
-	clientes, err := parsers.ParseTercerosClientes(a.cfg.Siigo.DataPath)
-	if err != nil {
-		a.db.AddLog("error", "Z17", "Error: "+err.Error())
-		return
-	}
-
-	sent, skipped, errors := 0, 0, 0
-	for _, t := range clientes {
-		// Skip if already sent with same hash (no changes)
-		lastHash := a.db.GetLastSentHash("clients", t.NumeroDoc)
-		if lastHash == t.Hash {
-			skipped++
-			continue
-		}
-
-		data := t.ToFinearomClient()
-		jsonData, _ := json.Marshal(data)
-
-		if err := a.client.SyncClient(data); err != nil {
-			a.db.SaveSentRecord("clients", "Z17", t.NumeroDoc, string(jsonData), "error", err.Error(), t.Hash)
-			errors++
-			continue
-		}
-		a.db.SaveSentRecord("clients", "Z17", t.NumeroDoc, string(jsonData), "sent", "", t.Hash)
-		sent++
-	}
-	a.db.AddLog("info", "Z17", fmt.Sprintf("Clientes: %d enviados, %d sin cambios, %d errores", sent, skipped, errors))
-}
-
-func (a *App) syncProductos() {
-	productos, err := parsers.ParseProductos(a.cfg.Siigo.DataPath)
-	if err != nil {
-		a.db.AddLog("error", "Z06CP", "Error: "+err.Error())
-		return
-	}
-
-	sent, skipped, errors := 0, 0, 0
-	for _, p := range productos {
-		key := p.Comprobante + "-" + p.Secuencia
-		lastHash := a.db.GetLastSentHash("products", key)
-		if lastHash == p.Hash {
-			skipped++
-			continue
-		}
-
-		data := p.ToFinearomProduct()
-		jsonData, _ := json.Marshal(data)
-
-		if err := a.client.SyncProduct(data); err != nil {
-			a.db.SaveSentRecord("products", "Z06CP", key, string(jsonData), "error", err.Error(), p.Hash)
-			errors++
-			continue
-		}
-		a.db.SaveSentRecord("products", "Z06CP", key, string(jsonData), "sent", "", p.Hash)
-		sent++
-	}
-	a.db.AddLog("info", "Z06CP", fmt.Sprintf("Productos: %d enviados, %d sin cambios, %d errores", sent, skipped, errors))
-}
-
-func (a *App) syncMovimientos() {
-	movimientos, err := parsers.ParseMovimientos(a.cfg.Siigo.DataPath)
-	if err != nil {
-		a.db.AddLog("error", "Z49", "Error: "+err.Error())
-		return
-	}
-
-	sent, skipped, errors := 0, 0, 0
-	for _, m := range movimientos {
-		key := m.TipoComprobante + "-" + m.NumeroDoc
-
-		lastHash := a.db.GetLastSentHash("movements", key)
-		if lastHash == m.Hash {
-			skipped++
-			continue
-		}
-
-		fecha := m.Fecha
-		if len(fecha) == 8 {
-			fecha = fecha[:4] + "-" + fecha[4:6] + "-" + fecha[6:8]
-		}
-		data := map[string]interface{}{
-			"tipo_comprobante": m.TipoComprobante,
-			"numero_doc":      m.NumeroDoc,
-			"fecha":           fecha,
-			"nit_tercero":     m.NitTercero,
-			"cuenta_contable": m.CuentaContable,
-			"descripcion":     m.Descripcion,
-			"valor":           m.Valor,
-			"tipo_mov":        m.TipoMov,
-			"siigo_sync_hash": m.Hash,
-		}
-		jsonData, _ := json.Marshal(data)
-
-		if err := a.client.SyncMovement(data); err != nil {
-			a.db.SaveSentRecord("movements", "Z49", key, string(jsonData), "error", err.Error(), m.Hash)
-			errors++
-			continue
-		}
-		a.db.SaveSentRecord("movements", "Z49", key, string(jsonData), "sent", "", m.Hash)
-		sent++
-	}
-	a.db.AddLog("info", "Z49", fmt.Sprintf("Movimientos: %d enviados, %d sin cambios, %d errores", sent, skipped, errors))
-}
-
-// ==================== RECORD DETAIL ====================
-
-func (a *App) GetRecordDetail(id int64) *storage.SentRecord {
-	record, err := a.db.GetRecordByID(id)
-	if err != nil {
-		return nil
-	}
-	return record
-}
-
-// ==================== RESEND ====================
-
-func (a *App) ResendRecord(id int64) string {
-	record, err := a.db.GetRecordByID(id)
-	if err != nil {
-		return "Error: registro no encontrado"
-	}
-
-	if a.client == nil || !a.client.IsAuthenticated() {
-		client := api.NewClient(a.cfg.Finearom.BaseURL, a.cfg.Finearom.Email, a.cfg.Finearom.Password)
-		if err := client.Login(); err != nil {
-			return "Error login: " + err.Error()
-		}
-		a.client = client
-	}
-
-	var data map[string]interface{}
-	if err := json.Unmarshal([]byte(record.Data), &data); err != nil {
-		return "Error parsing data: " + err.Error()
-	}
-
-	var sendErr error
-	switch record.Table {
-	case "clients":
-		sendErr = a.client.SyncClient(data)
-	case "products":
-		sendErr = a.client.SyncProduct(data)
-	case "movements":
-		sendErr = a.client.SyncMovement(data)
-	}
-
-	if sendErr != nil {
-		a.db.UpdateSentRecord(id, "error", sendErr.Error())
-		a.db.AddLog("error", record.SourceFile, "Reenvio fallido: "+sendErr.Error())
-		return "Error: " + sendErr.Error()
-	}
-
-	a.db.UpdateSentRecord(id, "sent", "")
-	a.db.AddLog("info", record.SourceFile, "Reenvio exitoso: "+record.Key)
-	return "ok"
-}
-
 // ==================== HISTORY & LOGS ====================
 
 type PaginatedISAM struct {
@@ -582,7 +671,7 @@ type PaginatedISAM struct {
 }
 
 type PaginatedRecords struct {
-	Records []storage.SentRecord `json:"records"`
+	Records []storage.SyncRecord `json:"records"`
 	Total   int                  `json:"total"`
 }
 
@@ -591,18 +680,20 @@ type PaginatedLogs struct {
 	Total int                `json:"total"`
 }
 
-func (a *App) GetSentRecords(tableName string, page int) PaginatedRecords {
-	return a.SearchSentRecords(tableName, "", page)
-}
-
-func (a *App) SearchSentRecords(tableName, search string, page int) PaginatedRecords {
-	return a.SearchSentRecordsWithDates(tableName, search, "", "", "", page)
-}
-
-func (a *App) SearchSentRecordsWithDates(tableName, search, dateFrom, dateTo, status string, page int) PaginatedRecords {
+func (a *App) GetSyncHistory(tableName string, page int) PaginatedRecords {
 	limit := 50
 	offset := (page - 1) * limit
-	records, total, err := a.db.SearchSentRecordsWithDates(tableName, search, dateFrom, dateTo, status, limit, offset)
+	records, total, err := a.db.GetSyncHistory(tableName, limit, offset)
+	if err != nil {
+		return PaginatedRecords{}
+	}
+	return PaginatedRecords{Records: records, Total: total}
+}
+
+func (a *App) SearchSyncHistory(tableName, search, dateFrom, dateTo, status string, page int) PaginatedRecords {
+	limit := 50
+	offset := (page - 1) * limit
+	records, total, err := a.db.SearchSyncHistory(tableName, search, dateFrom, dateTo, status, limit, offset)
 	if err != nil {
 		return PaginatedRecords{}
 	}

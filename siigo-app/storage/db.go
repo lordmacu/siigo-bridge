@@ -12,23 +12,24 @@ type DB struct {
 	conn *sql.DB
 }
 
-type SentRecord struct {
-	ID        int64  `json:"id"`
-	Table     string `json:"table"`      // clients, products, movements
-	SourceFile string `json:"source_file"` // Z17, Z06, Z49
-	Key       string `json:"key"`        // NIT, codigo, hash
-	Data      string `json:"data"`       // JSON of sent data
-	Status    string `json:"status"`     // sent, error, pending
-	Error     string `json:"error"`
-	Hash      string `json:"hash"`
-	SentAt    string `json:"sent_at"`
-	CreatedAt string `json:"created_at"`
+// SyncRecord represents a record stored locally from ISAM, with sync status
+type SyncRecord struct {
+	ID         int64  `json:"id"`
+	Table      string `json:"table"`       // clients, products, movements, cartera
+	Key        string `json:"key"`         // unique key (NIT, code, etc.)
+	Data       string `json:"data"`        // JSON of the record fields
+	Hash       string `json:"hash"`        // SHA256 hash for change detection
+	SyncStatus string `json:"sync_status"` // synced, pending, error
+	SyncError  string `json:"sync_error"`
+	SyncAction string `json:"sync_action"` // add, edit, delete
+	UpdatedAt  string `json:"updated_at"`
+	SyncedAt   string `json:"synced_at"`
 }
 
 type LogEntry struct {
 	ID        int64  `json:"id"`
-	Level     string `json:"level"`   // info, error, warning
-	Source    string `json:"source"`  // Z17, Z06, Z49, API, SYNC
+	Level     string `json:"level"`
+	Source    string `json:"source"`
 	Message   string `json:"message"`
 	CreatedAt string `json:"created_at"`
 }
@@ -49,22 +50,39 @@ func NewDB(path string) (*DB, error) {
 
 func (db *DB) migrate() error {
 	queries := []string{
-		`CREATE TABLE IF NOT EXISTS sent_records (
+		// Main data table: mirrors what we parse from ISAM and send to server
+		`CREATE TABLE IF NOT EXISTS siigo_records (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			table_name TEXT NOT NULL,
-			source_file TEXT NOT NULL,
 			record_key TEXT NOT NULL,
+			data TEXT NOT NULL,
+			hash TEXT NOT NULL,
+			sync_status TEXT DEFAULT 'pending',
+			sync_error TEXT,
+			sync_action TEXT DEFAULT 'add',
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			synced_at DATETIME,
+			UNIQUE(table_name, record_key)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_siigo_table ON siigo_records(table_name)`,
+		`CREATE INDEX IF NOT EXISTS idx_siigo_status ON siigo_records(sync_status)`,
+		`CREATE INDEX IF NOT EXISTS idx_siigo_table_status ON siigo_records(table_name, sync_status)`,
+
+		// Sync history log (what was sent to server and when)
+		`CREATE TABLE IF NOT EXISTS sync_history (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			table_name TEXT NOT NULL,
+			record_key TEXT NOT NULL,
+			action TEXT NOT NULL,
 			data TEXT,
 			status TEXT DEFAULT 'sent',
 			error TEXT,
-			hash TEXT,
-			sent_at DATETIME,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
-		`CREATE INDEX IF NOT EXISTS idx_sent_table ON sent_records(table_name)`,
-		`CREATE INDEX IF NOT EXISTS idx_sent_status ON sent_records(status)`,
-		`CREATE INDEX IF NOT EXISTS idx_sent_key ON sent_records(record_key)`,
-		`CREATE INDEX IF NOT EXISTS idx_sent_table_key_status ON sent_records(table_name, record_key, status)`,
+		`CREATE INDEX IF NOT EXISTS idx_history_table ON sync_history(table_name)`,
+		`CREATE INDEX IF NOT EXISTS idx_history_status ON sync_history(status)`,
+
+		// App logs
 		`CREATE TABLE IF NOT EXISTS logs (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			level TEXT DEFAULT 'info',
@@ -83,46 +101,209 @@ func (db *DB) migrate() error {
 	return nil
 }
 
-func (db *DB) SaveSentRecord(tableName, sourceFile, key, data, status, errMsg, hash string) error {
-	_, err := db.conn.Exec(
-		`INSERT INTO sent_records (table_name, source_file, record_key, data, status, error, hash, sent_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		tableName, sourceFile, key, data, status, errMsg, hash, time.Now().Format(time.RFC3339),
+// ==================== SIIGO RECORDS (local mirror) ====================
+
+// GetAllHashes returns a map of key→hash for a given table (for diff detection)
+func (db *DB) GetAllHashes(tableName string) map[string]string {
+	hashes := make(map[string]string)
+	rows, err := db.conn.Query(
+		`SELECT record_key, hash FROM siigo_records WHERE table_name=?`, tableName,
 	)
-	return err
+	if err != nil {
+		return hashes
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var key, hash string
+		if err := rows.Scan(&key, &hash); err == nil {
+			hashes[key] = hash
+		}
+	}
+	return hashes
 }
 
-func (db *DB) UpdateSentRecord(id int64, status, errMsg string) error {
-	_, err := db.conn.Exec(
-		`UPDATE sent_records SET status=?, error=?, sent_at=? WHERE id=?`,
-		status, errMsg, time.Now().Format(time.RFC3339), id,
+// UpsertRecord inserts or updates a record in the local mirror.
+// Returns the action taken: "add" if new, "edit" if changed, "" if unchanged.
+func (db *DB) UpsertRecord(tableName, key, data, hash string) string {
+	var existingHash string
+	err := db.conn.QueryRow(
+		`SELECT hash FROM siigo_records WHERE table_name=? AND record_key=?`,
+		tableName, key,
+	).Scan(&existingHash)
+
+	now := time.Now().Format(time.RFC3339)
+
+	if err == sql.ErrNoRows {
+		// New record
+		db.conn.Exec(
+			`INSERT INTO siigo_records (table_name, record_key, data, hash, sync_status, sync_action, updated_at)
+			 VALUES (?, ?, ?, ?, 'pending', 'add', ?)`,
+			tableName, key, data, hash, now,
+		)
+		return "add"
+	}
+
+	if existingHash != hash {
+		// Changed record
+		db.conn.Exec(
+			`UPDATE siigo_records SET data=?, hash=?, sync_status='pending', sync_action='edit', updated_at=?
+			 WHERE table_name=? AND record_key=?`,
+			data, hash, now, tableName, key,
+		)
+		return "edit"
+	}
+
+	// Unchanged
+	return ""
+}
+
+// MarkDeleted marks records that no longer exist in ISAM as pending delete.
+// currentKeys is the set of keys that exist in the current ISAM parse.
+func (db *DB) MarkDeleted(tableName string, currentKeys map[string]bool) int {
+	rows, err := db.conn.Query(
+		`SELECT record_key FROM siigo_records WHERE table_name=? AND sync_action != 'delete'`,
+		tableName,
 	)
-	return err
+	if err != nil {
+		return 0
+	}
+	defer rows.Close()
+
+	var toDelete []string
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err == nil {
+			if !currentKeys[key] {
+				toDelete = append(toDelete, key)
+			}
+		}
+	}
+
+	now := time.Now().Format(time.RFC3339)
+	for _, key := range toDelete {
+		db.conn.Exec(
+			`UPDATE siigo_records SET sync_status='pending', sync_action='delete', updated_at=?
+			 WHERE table_name=? AND record_key=?`,
+			now, tableName, key,
+		)
+	}
+	return len(toDelete)
 }
 
-func (db *DB) GetSentRecords(tableName string, limit, offset int) ([]SentRecord, int, error) {
-	return db.SearchSentRecords(tableName, "", limit, offset)
+// GetPendingRecords returns all records that need to be synced to the server
+func (db *DB) GetPendingRecords(tableName string) []SyncRecord {
+	rows, err := db.conn.Query(
+		`SELECT id, table_name, record_key, data, hash, sync_status, COALESCE(sync_error,''), sync_action, updated_at, COALESCE(synced_at,'')
+		 FROM siigo_records WHERE table_name=? AND sync_status='pending'
+		 ORDER BY id`,
+		tableName,
+	)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	var records []SyncRecord
+	for rows.Next() {
+		var r SyncRecord
+		if err := rows.Scan(&r.ID, &r.Table, &r.Key, &r.Data, &r.Hash, &r.SyncStatus, &r.SyncError, &r.SyncAction, &r.UpdatedAt, &r.SyncedAt); err != nil {
+			log.Printf("scan error: %v", err)
+			continue
+		}
+		records = append(records, r)
+	}
+	return records
 }
 
-func (db *DB) SearchSentRecords(tableName, search string, limit, offset int) ([]SentRecord, int, error) {
-	return db.SearchSentRecordsWithDates(tableName, search, "", "", "", limit, offset)
+// MarkSynced marks a record as successfully synced
+func (db *DB) MarkSynced(id int64) {
+	now := time.Now().Format(time.RFC3339)
+	db.conn.Exec(
+		`UPDATE siigo_records SET sync_status='synced', sync_error='', synced_at=? WHERE id=?`,
+		now, id,
+	)
 }
 
-func (db *DB) SearchSentRecordsWithDates(tableName, search, dateFrom, dateTo, status string, limit, offset int) ([]SentRecord, int, error) {
+// MarkSyncError marks a record as failed to sync
+func (db *DB) MarkSyncError(id int64, errMsg string) {
+	db.conn.Exec(
+		`UPDATE siigo_records SET sync_status='error', sync_error=? WHERE id=?`,
+		errMsg, id,
+	)
+}
+
+// RemoveDeletedSynced removes records that were deleted and successfully synced
+func (db *DB) RemoveDeletedSynced(tableName string) {
+	db.conn.Exec(
+		`DELETE FROM siigo_records WHERE table_name=? AND sync_action='delete' AND sync_status='synced'`,
+		tableName,
+	)
+}
+
+// RetryErrors resets error records to pending so they get retried
+func (db *DB) RetryErrors(tableName string) int {
+	result, err := db.conn.Exec(
+		`UPDATE siigo_records SET sync_status='pending' WHERE table_name=? AND sync_status='error'`,
+		tableName,
+	)
+	if err != nil {
+		return 0
+	}
+	n, _ := result.RowsAffected()
+	return int(n)
+}
+
+// ==================== SYNC HISTORY ====================
+
+func (db *DB) AddSyncHistory(tableName, key, action, data, status, errMsg string) {
+	db.conn.Exec(
+		`INSERT INTO sync_history (table_name, record_key, action, data, status, error)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		tableName, key, action, data, status, errMsg,
+	)
+}
+
+func (db *DB) GetSyncHistory(tableName string, limit, offset int) ([]SyncRecord, int, error) {
+	var total int
+	db.conn.QueryRow(`SELECT COUNT(*) FROM sync_history WHERE table_name=?`, tableName).Scan(&total)
+
+	rows, err := db.conn.Query(
+		`SELECT id, table_name, record_key, COALESCE(data,''), '', status, COALESCE(error,''), action, created_at, ''
+		 FROM sync_history WHERE table_name=? ORDER BY id DESC LIMIT ? OFFSET ?`,
+		tableName, limit, offset,
+	)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	var records []SyncRecord
+	for rows.Next() {
+		var r SyncRecord
+		if err := rows.Scan(&r.ID, &r.Table, &r.Key, &r.Data, &r.Hash, &r.SyncStatus, &r.SyncError, &r.SyncAction, &r.UpdatedAt, &r.SyncedAt); err != nil {
+			continue
+		}
+		records = append(records, r)
+	}
+	return records, total, nil
+}
+
+func (db *DB) SearchSyncHistory(tableName, search, dateFrom, dateTo, status string, limit, offset int) ([]SyncRecord, int, error) {
 	where := "table_name=?"
 	args := []interface{}{tableName}
 
 	if search != "" {
 		like := "%" + search + "%"
-		where += " AND (record_key LIKE ? OR data LIKE ? OR status LIKE ? OR error LIKE ?)"
-		args = append(args, like, like, like, like)
+		where += " AND (record_key LIKE ? OR data LIKE ? OR action LIKE ?)"
+		args = append(args, like, like, like)
 	}
 	if dateFrom != "" {
-		where += " AND sent_at >= ?"
+		where += " AND created_at >= ?"
 		args = append(args, dateFrom+"T00:00:00")
 	}
 	if dateTo != "" {
-		where += " AND sent_at <= ?"
+		where += " AND created_at <= ?"
 		args = append(args, dateTo+"T23:59:59")
 	}
 	if status != "" {
@@ -133,14 +314,11 @@ func (db *DB) SearchSentRecordsWithDates(tableName, search, dateFrom, dateTo, st
 	var total int
 	countArgs := make([]interface{}, len(args))
 	copy(countArgs, args)
-	err := db.conn.QueryRow("SELECT COUNT(*) FROM sent_records WHERE "+where, countArgs...).Scan(&total)
-	if err != nil {
-		return nil, 0, err
-	}
+	db.conn.QueryRow("SELECT COUNT(*) FROM sync_history WHERE "+where, countArgs...).Scan(&total)
 
 	queryArgs := append(args, limit, offset)
 	rows, err := db.conn.Query(
-		"SELECT id, table_name, source_file, record_key, data, status, error, hash, sent_at, created_at FROM sent_records WHERE "+where+" ORDER BY id DESC LIMIT ? OFFSET ?",
+		"SELECT id, table_name, record_key, COALESCE(data,''), '', status, COALESCE(error,''), action, created_at, '' FROM sync_history WHERE "+where+" ORDER BY id DESC LIMIT ? OFFSET ?",
 		queryArgs...,
 	)
 	if err != nil {
@@ -148,46 +326,39 @@ func (db *DB) SearchSentRecordsWithDates(tableName, search, dateFrom, dateTo, st
 	}
 	defer rows.Close()
 
-	var records []SentRecord
+	var records []SyncRecord
 	for rows.Next() {
-		var r SentRecord
-		var errField, sentAt sql.NullString
-		if err := rows.Scan(&r.ID, &r.Table, &r.SourceFile, &r.Key, &r.Data, &r.Status, &errField, &r.Hash, &sentAt, &r.CreatedAt); err != nil {
-			log.Printf("scan error: %v", err)
+		var r SyncRecord
+		if err := rows.Scan(&r.ID, &r.Table, &r.Key, &r.Data, &r.Hash, &r.SyncStatus, &r.SyncError, &r.SyncAction, &r.UpdatedAt, &r.SyncedAt); err != nil {
 			continue
 		}
-		r.Error = errField.String
-		r.SentAt = sentAt.String
 		records = append(records, r)
 	}
 	return records, total, nil
 }
 
-func (db *DB) GetRecordByID(id int64) (*SentRecord, error) {
-	var r SentRecord
-	var errField, sentAt sql.NullString
-	err := db.conn.QueryRow(
-		`SELECT id, table_name, source_file, record_key, data, status, error, hash, sent_at, created_at
-		 FROM sent_records WHERE id=?`, id,
-	).Scan(&r.ID, &r.Table, &r.SourceFile, &r.Key, &r.Data, &r.Status, &errField, &r.Hash, &sentAt, &r.CreatedAt)
-	if err != nil {
-		return nil, err
+// ==================== STATS ====================
+
+func (db *DB) GetStats() map[string]interface{} {
+	stats := map[string]interface{}{}
+
+	tables := []string{"clients", "products", "movements", "cartera"}
+	for _, t := range tables {
+		var total, synced, pending, errors int
+		db.conn.QueryRow(`SELECT COUNT(*) FROM siigo_records WHERE table_name=?`, t).Scan(&total)
+		db.conn.QueryRow(`SELECT COUNT(*) FROM siigo_records WHERE table_name=? AND sync_status='synced'`, t).Scan(&synced)
+		db.conn.QueryRow(`SELECT COUNT(*) FROM siigo_records WHERE table_name=? AND sync_status='pending'`, t).Scan(&pending)
+		db.conn.QueryRow(`SELECT COUNT(*) FROM siigo_records WHERE table_name=? AND sync_status='error'`, t).Scan(&errors)
+		stats[t+"_total"] = total
+		stats[t+"_synced"] = synced
+		stats[t+"_pending"] = pending
+		stats[t+"_errors"] = errors
 	}
-	r.Error = errField.String
-	r.SentAt = sentAt.String
-	return &r, nil
+
+	return stats
 }
 
-// GetLastSentHash returns the hash of the last successfully sent record for a given table+key.
-// Returns empty string if not found.
-func (db *DB) GetLastSentHash(tableName, key string) string {
-	var hash sql.NullString
-	db.conn.QueryRow(
-		`SELECT hash FROM sent_records WHERE table_name=? AND record_key=? AND status='sent' ORDER BY id DESC LIMIT 1`,
-		tableName, key,
-	).Scan(&hash)
-	return hash.String
-}
+// ==================== LOGS ====================
 
 func (db *DB) AddLog(level, source, message string) {
 	db.conn.Exec(
@@ -220,22 +391,7 @@ func (db *DB) GetLogs(limit, offset int) ([]LogEntry, int, error) {
 	return logs, total, nil
 }
 
-func (db *DB) GetStats() map[string]interface{} {
-	stats := map[string]interface{}{}
-
-	var clientsSent, productsSent, movementsSent, errors int
-	db.conn.QueryRow(`SELECT COUNT(*) FROM sent_records WHERE table_name='clients' AND status='sent'`).Scan(&clientsSent)
-	db.conn.QueryRow(`SELECT COUNT(*) FROM sent_records WHERE table_name='products' AND status='sent'`).Scan(&productsSent)
-	db.conn.QueryRow(`SELECT COUNT(*) FROM sent_records WHERE table_name='movements' AND status='sent'`).Scan(&movementsSent)
-	db.conn.QueryRow(`SELECT COUNT(*) FROM sent_records WHERE status='error'`).Scan(&errors)
-
-	stats["clients_sent"] = clientsSent
-	stats["products_sent"] = productsSent
-	stats["movements_sent"] = movementsSent
-	stats["errors"] = errors
-
-	return stats
-}
+// ==================== CLEANUP ====================
 
 func (db *DB) ClearLogs() error {
 	_, err := db.conn.Exec(`DELETE FROM logs`)
@@ -243,11 +399,9 @@ func (db *DB) ClearLogs() error {
 }
 
 func (db *DB) ClearAll() error {
-	_, err := db.conn.Exec(`DELETE FROM sent_records`)
-	if err != nil {
-		return err
-	}
-	_, err = db.conn.Exec(`DELETE FROM logs`)
+	db.conn.Exec(`DELETE FROM siigo_records`)
+	db.conn.Exec(`DELETE FROM sync_history`)
+	_, err := db.conn.Exec(`DELETE FROM logs`)
 	return err
 }
 

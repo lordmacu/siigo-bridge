@@ -158,7 +158,7 @@ export namespace main {
 		}
 	}
 	export class PaginatedRecords {
-	    records: storage.SentRecord[];
+	    records: storage.SyncRecord[];
 	    total: number;
 	
 	    static createFrom(source: any = {}) {
@@ -167,7 +167,7 @@ export namespace main {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.records = this.convertValues(source["records"], storage.SentRecord);
+	        this.records = this.convertValues(source["records"], storage.SyncRecord);
 	        this.total = source["total"];
 	    }
 	
@@ -194,6 +194,36 @@ export namespace main {
 
 export namespace parsers {
 	
+	export class Cartera {
+	    tipo_registro: string;
+	    empresa: string;
+	    secuencia: string;
+	    tipo_doc: string;
+	    nit_tercero: string;
+	    cuenta_contable: string;
+	    fecha: string;
+	    descripcion: string;
+	    tipo_mov: string;
+	    hash: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Cartera(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.tipo_registro = source["tipo_registro"];
+	        this.empresa = source["empresa"];
+	        this.secuencia = source["secuencia"];
+	        this.tipo_doc = source["tipo_doc"];
+	        this.nit_tercero = source["nit_tercero"];
+	        this.cuenta_contable = source["cuenta_contable"];
+	        this.fecha = source["fecha"];
+	        this.descripcion = source["descripcion"];
+	        this.tipo_mov = source["tipo_mov"];
+	        this.hash = source["hash"];
+	    }
+	}
 	export class Movimiento {
 	    tipo_comprobante: string;
 	    empresa: string;
@@ -261,7 +291,6 @@ export namespace parsers {
 	    tipo_doc: string;
 	    numero_doc: string;
 	    fecha_creacion: string;
-	    tipo_tercero: string;
 	    nombre: string;
 	    tipo_cta_pref: string;
 	    hash: string;
@@ -278,7 +307,6 @@ export namespace parsers {
 	        this.tipo_doc = source["tipo_doc"];
 	        this.numero_doc = source["numero_doc"];
 	        this.fecha_creacion = source["fecha_creacion"];
-	        this.tipo_tercero = source["tipo_tercero"];
 	        this.nombre = source["nombre"];
 	        this.tipo_cta_pref = source["tipo_cta_pref"];
 	        this.hash = source["hash"];
@@ -309,34 +337,34 @@ export namespace storage {
 	        this.created_at = source["created_at"];
 	    }
 	}
-	export class SentRecord {
+	export class SyncRecord {
 	    id: number;
 	    table: string;
-	    source_file: string;
 	    key: string;
 	    data: string;
-	    status: string;
-	    error: string;
 	    hash: string;
-	    sent_at: string;
-	    created_at: string;
+	    sync_status: string;
+	    sync_error: string;
+	    sync_action: string;
+	    updated_at: string;
+	    synced_at: string;
 	
 	    static createFrom(source: any = {}) {
-	        return new SentRecord(source);
+	        return new SyncRecord(source);
 	    }
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
 	        this.table = source["table"];
-	        this.source_file = source["source_file"];
 	        this.key = source["key"];
 	        this.data = source["data"];
-	        this.status = source["status"];
-	        this.error = source["error"];
 	        this.hash = source["hash"];
-	        this.sent_at = source["sent_at"];
-	        this.created_at = source["created_at"];
+	        this.sync_status = source["sync_status"];
+	        this.sync_error = source["sync_error"];
+	        this.sync_action = source["sync_action"];
+	        this.updated_at = source["updated_at"];
+	        this.synced_at = source["synced_at"];
 	    }
 	}
 
