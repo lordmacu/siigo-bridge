@@ -7,9 +7,9 @@ import (
 	"log"
 	"siigo-app/api"
 	"siigo-app/config"
+	"siigo-app/storage"
 	"siigo-common/isam"
 	"siigo-common/parsers"
-	"siigo-app/storage"
 	"strings"
 	"time"
 )
@@ -187,9 +187,7 @@ func (a *App) diffClientes() {
 		}
 		currentKeys[nit] = true
 
-		data := t.ToFinearomClient()
-		jsonData, _ := json.Marshal(data)
-		action := a.db.UpsertRecord("clients", nit, string(jsonData), t.Hash)
+		action := a.db.UpsertClient(nit, t.Nombre, t.TipoDoc, t.TipoClave, t.Empresa, t.Codigo, t.FechaCreacion, t.TipoCtaPref, t.Hash)
 		switch action {
 		case "add":
 			adds++
@@ -198,7 +196,7 @@ func (a *App) diffClientes() {
 		}
 	}
 
-	deletes := a.db.MarkDeleted("clients", currentKeys)
+	deletes := a.db.MarkDeletedClients(currentKeys)
 	a.db.AddLog("info", "Z17", fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(clientes)))
 }
 
@@ -219,9 +217,7 @@ func (a *App) diffProductos() {
 		}
 		currentKeys[key] = true
 
-		data := p.ToFinearomProduct()
-		jsonData, _ := json.Marshal(data)
-		action := a.db.UpsertRecord("products", key, string(jsonData), p.Hash)
+		action := a.db.UpsertProduct(key, p.Nombre, p.Comprobante, p.Secuencia, p.TipoTercero, p.Grupo, p.CuentaContable, p.Fecha, p.TipoMov, p.Hash)
 		switch action {
 		case "add":
 			adds++
@@ -230,7 +226,7 @@ func (a *App) diffProductos() {
 		}
 	}
 
-	deletes := a.db.MarkDeleted("products", currentKeys)
+	deletes := a.db.MarkDeletedProducts(currentKeys)
 	a.db.AddLog("info", "Z06CP", fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(productos)))
 }
 
@@ -255,18 +251,8 @@ func (a *App) diffMovimientos() {
 		if len(fecha) == 8 {
 			fecha = fecha[:4] + "-" + fecha[4:6] + "-" + fecha[6:8]
 		}
-		data := map[string]interface{}{
-			"tipo_comprobante": m.TipoComprobante,
-			"numero_doc":       m.NumeroDoc,
-			"fecha":            fecha,
-			"nit_tercero":      m.NitTercero,
-			"cuenta_contable":  m.CuentaContable,
-			"descripcion":      m.Descripcion,
-			"valor":            m.Valor,
-			"tipo_mov":         m.TipoMov,
-		}
-		jsonData, _ := json.Marshal(data)
-		action := a.db.UpsertRecord("movements", key, string(jsonData), m.Hash)
+
+		action := a.db.UpsertMovement(key, m.TipoComprobante, m.Empresa, m.NumeroDoc, fecha, m.NitTercero, m.CuentaContable, m.Descripcion, m.Valor, m.TipoMov, m.Hash)
 		switch action {
 		case "add":
 			adds++
@@ -275,7 +261,7 @@ func (a *App) diffMovimientos() {
 		}
 	}
 
-	deletes := a.db.MarkDeleted("movements", currentKeys)
+	deletes := a.db.MarkDeletedMovements(currentKeys)
 	a.db.AddLog("info", "Z49", fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(movimientos)))
 }
 
@@ -302,9 +288,12 @@ func (a *App) diffCartera() {
 			key := file + "-" + c.TipoRegistro + "-" + c.Empresa + "-" + c.Secuencia
 			currentKeys[key] = true
 
-			data := c.ToFinearomCartera()
-			jsonData, _ := json.Marshal(data)
-			action := a.db.UpsertRecord("cartera", key, string(jsonData), c.Hash)
+			fecha := c.Fecha
+			if len(fecha) == 8 {
+				fecha = fecha[:4] + "-" + fecha[4:6] + "-" + fecha[6:8]
+			}
+
+			action := a.db.UpsertCartera(key, c.TipoRegistro, c.Empresa, c.Secuencia, c.TipoDoc, c.NitTercero, c.CuentaContable, fecha, c.Descripcion, c.TipoMov, c.Hash)
 			switch action {
 			case "add":
 				adds++
@@ -313,9 +302,7 @@ func (a *App) diffCartera() {
 			}
 		}
 
-		// Only mark deletes for this specific year file
-		// We prefix keys with the file name so different years don't conflict
-		deletes := a.db.MarkDeleted("cartera", currentKeys)
+		deletes := a.db.MarkDeletedCartera(currentKeys)
 		a.db.AddLog("info", file, fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(cartera)))
 	}
 }
@@ -323,36 +310,41 @@ func (a *App) diffCartera() {
 // ==================== SEND PENDING: SQLite → Server ====================
 
 func (a *App) sendPending(tableName string) {
-	pending := a.db.GetPendingRecords(tableName)
+	var pending []storage.PendingRecord
+	switch tableName {
+	case "clients":
+		pending = a.db.GetPendingClients()
+	case "products":
+		pending = a.db.GetPendingProducts()
+	case "movements":
+		pending = a.db.GetPendingMovements()
+	case "cartera":
+		pending = a.db.GetPendingCartera()
+	}
+
 	if len(pending) == 0 {
 		return
 	}
 
 	sent, errors := 0, 0
 	for _, rec := range pending {
-		var data map[string]interface{}
-		if rec.SyncAction != "delete" {
-			if err := json.Unmarshal([]byte(rec.Data), &data); err != nil {
-				a.db.MarkSyncError(rec.ID, "JSON parse error: "+err.Error())
-				errors++
-				continue
-			}
-		}
+		err := a.client.Sync(tableName, rec.SyncAction, rec.Key, rec.Data)
 
-		err := a.client.Sync(tableName, rec.SyncAction, rec.Key, data)
+		dataJSON, _ := json.Marshal(rec.Data)
+		dataStr := string(dataJSON)
+
 		if err != nil {
-			a.db.MarkSyncError(rec.ID, err.Error())
-			a.db.AddSyncHistory(tableName, rec.Key, rec.SyncAction, rec.Data, "error", err.Error())
+			a.db.MarkSyncError(tableName, rec.ID, err.Error())
+			a.db.AddSyncHistory(tableName, rec.Key, rec.SyncAction, dataStr, "error", err.Error())
 			errors++
 			continue
 		}
 
-		a.db.MarkSynced(rec.ID)
-		a.db.AddSyncHistory(tableName, rec.Key, rec.SyncAction, rec.Data, "sent", "")
+		a.db.MarkSynced(tableName, rec.ID)
+		a.db.AddSyncHistory(tableName, rec.Key, rec.SyncAction, dataStr, "sent", "")
 		sent++
 	}
 
-	// Clean up deleted records that were successfully synced
 	a.db.RemoveDeletedSynced(tableName)
 
 	a.db.AddLog("info", "API", fmt.Sprintf("[%s] Enviados: %d, Errores: %d (de %d pendientes)", tableName, sent, errors, len(pending)))
