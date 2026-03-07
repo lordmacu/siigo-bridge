@@ -230,8 +230,10 @@ var (
 	cachedClientes    []parsers.Tercero
 	cachedProductos   []parsers.Producto
 	cachedMovimientos []parsers.Movimiento
-	clienteIndex      *isam.IsamIndex // indexed by NIT
-	productoIndex     *isam.IsamIndex // indexed by codigo
+	// In-memory indexes for O(1) lookups (built from parsed structs)
+	clientesByNIT      map[string]*parsers.Tercero
+	productosByCodigo  map[string]*parsers.Producto
+	movimientosByNIT   map[string][]parsers.Movimiento
 )
 
 func (a *App) RefreshCache(which string) {
@@ -243,12 +245,13 @@ func (a *App) RefreshCache(which string) {
 			return
 		}
 		cachedClientes = c
-		// Build NIT index for fast lookups
-		idx, idxErr := isam.ReadIsamFileIndexed(a.cfg.Siigo.DataPath+"Z17", func(rec []byte) string {
-			return strings.TrimLeft(strings.TrimRight(isam.ExtractField(rec, 24, 10), " \x00"), "0")
-		})
-		if idxErr == nil {
-			clienteIndex = idx
+		// Build NIT index for O(1) lookups
+		clientesByNIT = make(map[string]*parsers.Tercero, len(c))
+		for i := range c {
+			nit := strings.TrimLeft(c[i].NumeroDoc, "0")
+			if nit != "" {
+				clientesByNIT[nit] = &cachedClientes[i]
+			}
 		}
 		a.db.AddLog("info", "Z17", fmt.Sprintf("Cache actualizado: %d clientes", len(c)))
 	case "products":
@@ -258,6 +261,12 @@ func (a *App) RefreshCache(which string) {
 			return
 		}
 		cachedProductos = p
+		productosByCodigo = make(map[string]*parsers.Producto, len(p))
+		for i := range p {
+			if p[i].Codigo != "" {
+				productosByCodigo[p[i].Codigo] = &cachedProductos[i]
+			}
+		}
 		a.db.AddLog("info", "Z06", fmt.Sprintf("Cache actualizado: %d productos", len(p)))
 	case "movements":
 		m, err := parsers.ParseMovimientos(a.cfg.Siigo.DataPath)
@@ -266,6 +275,13 @@ func (a *App) RefreshCache(which string) {
 			return
 		}
 		cachedMovimientos = m
+		movimientosByNIT = make(map[string][]parsers.Movimiento)
+		for _, mov := range m {
+			nit := strings.TrimLeft(mov.NitTercero, "0")
+			if nit != "" {
+				movimientosByNIT[nit] = append(movimientosByNIT[nit], mov)
+			}
+		}
 		a.db.AddLog("info", "Z49", fmt.Sprintf("Cache actualizado: %d movimientos", len(m)))
 	}
 }
@@ -352,48 +368,31 @@ func paginate(total, page, perPage int) (int, int) {
 
 // ==================== LOOKUPS ====================
 
-// LookupByNIT searches for a client by NIT using the in-memory index.
-// Returns the parsed Tercero or nil if not found.
+// LookupByNIT searches for a client by NIT using the in-memory index (O(1)).
 func (a *App) LookupByNIT(nit string) *parsers.Tercero {
-	if cachedClientes == nil {
+	if clientesByNIT == nil {
 		a.RefreshCache("clients")
 	}
 	nit = strings.TrimLeft(strings.TrimSpace(nit), "0")
-	for _, c := range cachedClientes {
-		if strings.TrimLeft(c.NumeroDoc, "0") == nit {
-			return &c
-		}
-	}
-	return nil
+	return clientesByNIT[nit]
 }
 
-// LookupProducto searches for a product by code.
+// LookupProducto searches for a product by code using the in-memory index (O(1)).
 func (a *App) LookupProducto(codigo string) *parsers.Producto {
-	if cachedProductos == nil {
+	if productosByCodigo == nil {
 		a.RefreshCache("products")
 	}
 	codigo = strings.TrimSpace(codigo)
-	for _, p := range cachedProductos {
-		if p.Codigo == codigo {
-			return &p
-		}
-	}
-	return nil
+	return productosByCodigo[codigo]
 }
 
-// LookupMovimientos returns all movements for a given NIT.
+// LookupMovimientosPorNIT returns all movements for a given NIT using the index (O(1)).
 func (a *App) LookupMovimientosPorNIT(nit string) []parsers.Movimiento {
-	if cachedMovimientos == nil {
+	if movimientosByNIT == nil {
 		a.RefreshCache("movements")
 	}
 	nit = strings.TrimLeft(strings.TrimSpace(nit), "0")
-	var result []parsers.Movimiento
-	for _, m := range cachedMovimientos {
-		if strings.TrimLeft(m.NitTercero, "0") == nit {
-			result = append(result, m)
-		}
-	}
-	return result
+	return movimientosByNIT[nit]
 }
 
 // GetExtfhStatus returns info about EXTFH availability
