@@ -192,6 +192,10 @@ type ISAMPreview struct {
 	File       string `json:"file"`
 	RecordSize int    `json:"record_size"`
 	Records    int    `json:"records"`
+	NumKeys    int    `json:"num_keys"`
+	HasIndex   bool   `json:"has_index"`
+	UsedEXTFH  bool   `json:"used_extfh"`
+	Format     int    `json:"format"`
 	ModTime    string `json:"mod_time"`
 }
 
@@ -200,7 +204,7 @@ func (a *App) GetISAMInfo() []ISAMPreview {
 	var result []ISAMPreview
 	for _, f := range files {
 		path := a.cfg.Siigo.DataPath + f
-		records, recSize, err := isam.ReadIsamFile(path)
+		records, meta, err := isam.ReadIsamFileWithMeta(path)
 		if err != nil {
 			result = append(result, ISAMPreview{File: f, Records: -1})
 			continue
@@ -209,8 +213,12 @@ func (a *App) GetISAMInfo() []ISAMPreview {
 		t := time.Unix(0, modTime)
 		result = append(result, ISAMPreview{
 			File:       f,
-			RecordSize: recSize,
+			RecordSize: meta.RecSize,
 			Records:    len(records),
+			NumKeys:    meta.NumKeys,
+			HasIndex:   meta.HasIndex,
+			UsedEXTFH:  meta.UsedEXTFH,
+			Format:     meta.Format,
 			ModTime:    t.Format("2006-01-02 15:04:05"),
 		})
 	}
@@ -222,6 +230,8 @@ var (
 	cachedClientes    []parsers.Tercero
 	cachedProductos   []parsers.Producto
 	cachedMovimientos []parsers.Movimiento
+	clienteIndex      *isam.IsamIndex // indexed by NIT
+	productoIndex     *isam.IsamIndex // indexed by codigo
 )
 
 func (a *App) RefreshCache(which string) {
@@ -233,6 +243,13 @@ func (a *App) RefreshCache(which string) {
 			return
 		}
 		cachedClientes = c
+		// Build NIT index for fast lookups
+		idx, idxErr := isam.ReadIsamFileIndexed(a.cfg.Siigo.DataPath+"Z17", func(rec []byte) string {
+			return strings.TrimLeft(strings.TrimRight(isam.ExtractField(rec, 24, 10), " \x00"), "0")
+		})
+		if idxErr == nil {
+			clienteIndex = idx
+		}
 		a.db.AddLog("info", "Z17", fmt.Sprintf("Cache actualizado: %d clientes", len(c)))
 	case "products":
 		p, err := parsers.ParseProductos(a.cfg.Siigo.DataPath)
@@ -333,6 +350,60 @@ func paginate(total, page, perPage int) (int, int) {
 	return start, end
 }
 
+// ==================== LOOKUPS ====================
+
+// LookupByNIT searches for a client by NIT using the in-memory index.
+// Returns the parsed Tercero or nil if not found.
+func (a *App) LookupByNIT(nit string) *parsers.Tercero {
+	if cachedClientes == nil {
+		a.RefreshCache("clients")
+	}
+	nit = strings.TrimLeft(strings.TrimSpace(nit), "0")
+	for _, c := range cachedClientes {
+		if strings.TrimLeft(c.NumeroDoc, "0") == nit {
+			return &c
+		}
+	}
+	return nil
+}
+
+// LookupProducto searches for a product by code.
+func (a *App) LookupProducto(codigo string) *parsers.Producto {
+	if cachedProductos == nil {
+		a.RefreshCache("products")
+	}
+	codigo = strings.TrimSpace(codigo)
+	for _, p := range cachedProductos {
+		if p.Codigo == codigo {
+			return &p
+		}
+	}
+	return nil
+}
+
+// LookupMovimientos returns all movements for a given NIT.
+func (a *App) LookupMovimientosPorNIT(nit string) []parsers.Movimiento {
+	if cachedMovimientos == nil {
+		a.RefreshCache("movements")
+	}
+	nit = strings.TrimLeft(strings.TrimSpace(nit), "0")
+	var result []parsers.Movimiento
+	for _, m := range cachedMovimientos {
+		if strings.TrimLeft(m.NitTercero, "0") == nit {
+			result = append(result, m)
+		}
+	}
+	return result
+}
+
+// GetExtfhStatus returns info about EXTFH availability
+func (a *App) GetExtfhStatus() map[string]interface{} {
+	return map[string]interface{}{
+		"available": isam.ExtfhAvailable(),
+		"dll_path":  isam.ExtfhDLLPath(),
+	}
+}
+
 // ==================== SYNC WORKERS ====================
 
 func (a *App) TestConnection() string {
@@ -352,8 +423,15 @@ func (a *App) syncClientes() {
 		return
 	}
 
-	sent, errors := 0, 0
+	sent, skipped, errors := 0, 0, 0
 	for _, t := range clientes {
+		// Skip if already sent with same hash (no changes)
+		lastHash := a.db.GetLastSentHash("clients", t.NumeroDoc)
+		if lastHash == t.Hash {
+			skipped++
+			continue
+		}
+
 		data := t.ToFinearomClient()
 		jsonData, _ := json.Marshal(data)
 
@@ -365,7 +443,7 @@ func (a *App) syncClientes() {
 		a.db.SaveSentRecord("clients", "Z17", t.NumeroDoc, string(jsonData), "sent", "", t.Hash)
 		sent++
 	}
-	a.db.AddLog("info", "Z17", fmt.Sprintf("Clientes: %d enviados, %d errores", sent, errors))
+	a.db.AddLog("info", "Z17", fmt.Sprintf("Clientes: %d enviados, %d sin cambios, %d errores", sent, skipped, errors))
 }
 
 func (a *App) syncProductos() {
@@ -375,8 +453,14 @@ func (a *App) syncProductos() {
 		return
 	}
 
-	sent, errors := 0, 0
+	sent, skipped, errors := 0, 0, 0
 	for _, p := range productos {
+		lastHash := a.db.GetLastSentHash("products", p.Codigo)
+		if lastHash == p.Hash {
+			skipped++
+			continue
+		}
+
 		data := p.ToFinearomProduct()
 		jsonData, _ := json.Marshal(data)
 
@@ -388,7 +472,7 @@ func (a *App) syncProductos() {
 		a.db.SaveSentRecord("products", "Z06", p.Codigo, string(jsonData), "sent", "", p.Hash)
 		sent++
 	}
-	a.db.AddLog("info", "Z06", fmt.Sprintf("Productos: %d enviados, %d errores", sent, errors))
+	a.db.AddLog("info", "Z06", fmt.Sprintf("Productos: %d enviados, %d sin cambios, %d errores", sent, skipped, errors))
 }
 
 func (a *App) syncMovimientos() {
@@ -398,8 +482,16 @@ func (a *App) syncMovimientos() {
 		return
 	}
 
-	sent, errors := 0, 0
+	sent, skipped, errors := 0, 0, 0
 	for _, m := range movimientos {
+		key := m.TipoComprobante + "-" + m.NumeroDoc
+
+		lastHash := a.db.GetLastSentHash("movements", key)
+		if lastHash == m.Hash {
+			skipped++
+			continue
+		}
+
 		fecha := m.Fecha
 		if len(fecha) == 8 {
 			fecha = fecha[:4] + "-" + fecha[4:6] + "-" + fecha[6:8]
@@ -416,7 +508,6 @@ func (a *App) syncMovimientos() {
 			"siigo_sync_hash": m.Hash,
 		}
 		jsonData, _ := json.Marshal(data)
-		key := m.TipoComprobante + "-" + m.NumeroDoc
 
 		if err := a.client.SyncMovement(data); err != nil {
 			a.db.SaveSentRecord("movements", "Z49", key, string(jsonData), "error", err.Error(), m.Hash)
@@ -426,7 +517,7 @@ func (a *App) syncMovimientos() {
 		a.db.SaveSentRecord("movements", "Z49", key, string(jsonData), "sent", "", m.Hash)
 		sent++
 	}
-	a.db.AddLog("info", "Z49", fmt.Sprintf("Movimientos: %d enviados, %d errores", sent, errors))
+	a.db.AddLog("info", "Z49", fmt.Sprintf("Movimientos: %d enviados, %d sin cambios, %d errores", sent, skipped, errors))
 }
 
 // ==================== RECORD DETAIL ====================
