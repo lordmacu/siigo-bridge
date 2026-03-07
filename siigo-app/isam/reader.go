@@ -1,7 +1,9 @@
 package isam
 
 import (
+	"encoding/binary"
 	"fmt"
+	"log"
 	"os"
 
 	"golang.org/x/text/encoding/charmap"
@@ -13,33 +15,109 @@ type Record struct {
 	Offset int
 }
 
+// IsamHeader contains metadata parsed from the ISAM file header (first 1024 bytes)
+type IsamHeader struct {
+	Magic           uint16 // 0x33FE (standard) or 0x30xx (variant)
+	RecordSize      int    // Record size from offset 0x38 (big-endian 16-bit)
+	ExpectedRecords int    // Expected record count from offset 0x40 (big-endian 32-bit)
+	HasIndex        bool   // True if .idx file exists alongside data file
+	IsValid         bool   // True if magic signature is recognized
+}
+
 // FileInfo contains metadata about an ISAM file
 type FileInfo struct {
 	Path       string
 	RecordSize int
 	Records    []Record
+	Header     IsamHeader // Parsed header metadata
 }
 
-// ReadFile reads an ISAM file and extracts all records
+// Known valid record status flag nibbles (upper nibble of first marker byte)
+// These indicate whether a record is active, deleted, etc.
+// Observed values: 0x40 (active), 0x80, 0xC0, 0xE0
+var validStatusNibbles = map[byte]bool{
+	0x00: true, // no flags
+	0x10: true,
+	0x20: true,
+	0x40: true, // active record (most common)
+	0x60: true,
+	0x80: true, // marked/modified
+	0xA0: true,
+	0xC0: true, // alternate status
+	0xE0: true, // alternate status
+}
+
+// parseIsamHeader reads and validates the ISAM file header
+func parseIsamHeader(data []byte, path string) (IsamHeader, error) {
+	if len(data) < 0x44 {
+		return IsamHeader{}, fmt.Errorf("file too small: %s (%d bytes)", path, len(data))
+	}
+
+	hdr := IsamHeader{}
+
+	// Magic signature at offset 0x00 (big-endian 16-bit)
+	hdr.Magic = binary.BigEndian.Uint16(data[0x00:0x02])
+
+	// Validate magic: 0x33FE (standard indexed) or 0x30xx (variant, e.g., Z06)
+	switch {
+	case hdr.Magic == 0x33FE:
+		hdr.IsValid = true
+	case (hdr.Magic & 0xFF00) == 0x3000:
+		hdr.IsValid = true // variant format (Z06 uses 0x3000)
+	default:
+		return hdr, fmt.Errorf("unrecognized ISAM magic 0x%04X in %s (expected 0x33FE or 0x30xx)", hdr.Magic, path)
+	}
+
+	// Record size at offset 0x38 (big-endian 16-bit)
+	hdr.RecordSize = int(binary.BigEndian.Uint16(data[0x38:0x3A]))
+	if hdr.RecordSize <= 0 || hdr.RecordSize > 60000 {
+		return hdr, fmt.Errorf("invalid record size %d in %s", hdr.RecordSize, path)
+	}
+
+	// Expected record count at offset 0x40 (big-endian 32-bit)
+	hdr.ExpectedRecords = int(binary.BigEndian.Uint32(data[0x40:0x44]))
+
+	// Check for .idx file
+	if _, err := os.Stat(path + ".idx"); err == nil {
+		hdr.HasIndex = true
+	}
+
+	return hdr, nil
+}
+
+// ReadFile reads an ISAM file and extracts all records.
+// Uses header validation, stricter record marker detection, and record count verification.
 func ReadFile(path string) (*FileInfo, error) {
-	data, err := os.ReadFile(path)
+	// Open with FileShare semantics (read even if Siigo has it locked)
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("cannot open %s: %w", path, err)
+	}
+	defer f.Close()
+
+	stat, err := f.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("cannot stat %s: %w", path, err)
+	}
+
+	data := make([]byte, stat.Size())
+	_, err = f.Read(data)
 	if err != nil {
 		return nil, fmt.Errorf("cannot read %s: %w", path, err)
 	}
 
-	if len(data) < 0x40 {
-		return nil, fmt.Errorf("file too small: %s (%d bytes)", path, len(data))
+	// Parse and validate header
+	hdr, err := parseIsamHeader(data, path)
+	if err != nil {
+		return nil, err
 	}
 
-	// Record size is at offset 0x38, big-endian 16-bit
-	recSize := int(data[0x38])<<8 | int(data[0x39])
-	if recSize <= 0 || recSize > 60000 {
-		return nil, fmt.Errorf("invalid record size %d in %s", recSize, path)
-	}
+	recSize := hdr.RecordSize
 
 	info := &FileInfo{
 		Path:       path,
 		RecordSize: recSize,
+		Header:     hdr,
 	}
 
 	// Marker bytes for finding records
@@ -48,12 +126,18 @@ func ReadFile(path string) (*FileInfo, error) {
 
 	// Scan for records starting at offset 0x800 (after header + first index page)
 	for pos := 0x800; pos < len(data)-recSize-2; pos++ {
-		// Record marker: [flags|recHi][recLo]
+		// Record marker: [statusNibble|recHi][recLo]
 		if data[pos+1] != recLo || (data[pos]&0x0F) != recHi {
 			continue
 		}
 
-		// Verify it contains readable text (not index/empty pages)
+		// Validate status nibble (upper 4 bits of first marker byte)
+		statusNibble := data[pos] & 0xF0
+		if !validStatusNibbles[statusNibble] {
+			continue
+		}
+
+		// Verify it contains readable data (not index/empty pages)
 		textStart := pos + 2
 		readableCount := 0
 		checkLen := 30
@@ -80,6 +164,13 @@ func ReadFile(path string) (*FileInfo, error) {
 			})
 			pos += recSize // skip past this record
 		}
+	}
+
+	// Validate record count against header expectation
+	if hdr.ExpectedRecords > 0 && len(info.Records) != hdr.ExpectedRecords {
+		log.Printf("[ISAM] WARNING: %s header says %d records, found %d (delta=%d)",
+			path, hdr.ExpectedRecords, len(info.Records),
+			len(info.Records)-hdr.ExpectedRecords)
 	}
 
 	return info, nil

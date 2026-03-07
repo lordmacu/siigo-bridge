@@ -8,10 +8,17 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"golang.org/x/text/encoding/charmap"
 )
+
+// MaxLockRetries is the number of times to retry when a file/record is locked
+var MaxLockRetries = 3
+
+// LockRetryDelay is the delay between lock retries
+var LockRetryDelay = 200 * time.Millisecond
 
 // ---------------------------------------------------------------------------
 // EXTFH opcodes (Micro Focus Callable File Handler)
@@ -394,6 +401,40 @@ var (
 // ExtfhDebug enables verbose EXTFH logging when true
 var ExtfhDebug = false
 
+// extfhCfgPaths are known locations for EXTFH.CFG
+var extfhCfgPaths = []string{
+	`C:\Siigo\EXTFH.CFG`,
+	`C:\EXTFH.CFG`,
+}
+
+// setupEnvironment ensures Micro Focus environment variables are set for EXTFH.
+// Sets COBCONFIG to point to EXTFH.CFG and adds DLL directory to PATH.
+func setupEnvironment(dllDir string) {
+	// Set COBCONFIG if not already set and EXTFH.CFG exists
+	if os.Getenv("COBCONFIG") == "" {
+		for _, cfgPath := range extfhCfgPaths {
+			if _, err := os.Stat(cfgPath); err == nil {
+				os.Setenv("COBCONFIG", cfgPath)
+				break
+			}
+		}
+	}
+
+	// Ensure DLL directory is in PATH so dependent DLLs can be found
+	path := os.Getenv("PATH")
+	if !strings.Contains(strings.ToLower(path), strings.ToLower(dllDir)) {
+		os.Setenv("PATH", dllDir+";"+path)
+	}
+
+	// Set memory strategy if not already set (matches Siigo's COBOPT.CFG)
+	if os.Getenv("COBOPT") == "" {
+		coboptPath := `C:\Siigo\COBOPT.CFG`
+		if _, err := os.Stat(coboptPath); err == nil {
+			os.Setenv("COBOPT", coboptPath)
+		}
+	}
+}
+
 func initDLL() {
 	paths := []string{
 		`C:\Microfocus\bin64\cblrtsm.dll`,
@@ -412,6 +453,11 @@ func initDLL() {
 		if _, err := os.Stat(p); err != nil {
 			continue
 		}
+
+		// Setup environment before loading the DLL
+		dllDir := p[:strings.LastIndex(p, `\`)]
+		setupEnvironment(dllDir)
+
 		extfhDLL = syscall.NewLazyDLL(p)
 		extfhProc = extfhDLL.NewProc("EXTFH")
 		if err := extfhProc.Find(); err != nil {
@@ -467,6 +513,22 @@ func callEXTFH(opcode uint16, fcd *FCD3) FileStatus {
 		log.Printf("[EXTFH] %s -> %s", opcodeName(opcode), st.Error())
 	}
 	return st
+}
+
+// callEXTFHRetry calls EXTFH with automatic retry on lock status (9/065, 9/068).
+func callEXTFHRetry(opcode uint16, fcd *FCD3) FileStatus {
+	for attempt := 0; attempt <= MaxLockRetries; attempt++ {
+		st := callEXTFH(opcode, fcd)
+		if !st.IsLocked() || attempt == MaxLockRetries {
+			return st
+		}
+		if ExtfhDebug {
+			log.Printf("[EXTFH] Lock detected on %s, retry %d/%d after %v",
+				opcodeName(opcode), attempt+1, MaxLockRetries, LockRetryDelay)
+		}
+		time.Sleep(LockRetryDelay)
+	}
+	return FileStatus{fcd.FileStatus[0], fcd.FileStatus[1]}
 }
 
 func setPointer(field *[8]byte, ptr unsafe.Pointer) {
@@ -527,8 +589,8 @@ func OpenIsamFile(path string) (*IsamFile, error) {
 		f.fcd.FileStatus[1] = '0'
 	}
 
-	// OPEN INPUT (read-only)
-	st = callEXTFH(OpOpenInput, &f.fcd)
+	// OPEN INPUT (read-only) with retry on lock
+	st = callEXTFHRetry(OpOpenInput, &f.fcd)
 	if !st.IsOK() {
 		return nil, fmt.Errorf("open %s: %s", path, st.Error())
 	}
@@ -862,6 +924,18 @@ func (f *IsamFile) IsOpen() bool {
 // Unified API: works with EXTFH or falls back to binary reader
 // ---------------------------------------------------------------------------
 
+// IsamFileMeta contains metadata about a read operation
+type IsamFileMeta struct {
+	RecSize         int    // Record size
+	RecordCount     int    // Number of records read
+	ExpectedRecords int    // Expected record count from header (binary reader only)
+	NumKeys         int    // Number of keys (EXTFH only)
+	Format          int    // IDXFORMAT (EXTFH only)
+	HasIndex        bool   // True if .idx file exists
+	UsedEXTFH       bool   // True if EXTFH was used (vs binary fallback)
+	DLLPath         string // Path to DLL used (if EXTFH)
+}
+
 // ReadIsamFile reads all records from an ISAM file.
 // Uses EXTFH if available, falls back to binary reader.
 func ReadIsamFile(path string) ([][]byte, int, error) {
@@ -886,6 +960,48 @@ func ReadIsamFile(path string) ([][]byte, int, error) {
 		records[i] = r.Data
 	}
 	return records, info.RecordSize, nil
+}
+
+// ReadIsamFileWithMeta reads all records and returns detailed metadata.
+func ReadIsamFileWithMeta(path string) ([][]byte, *IsamFileMeta, error) {
+	meta := &IsamFileMeta{}
+
+	if ExtfhAvailable() {
+		f, err := OpenIsamFile(path)
+		if err != nil {
+			return nil, nil, err
+		}
+		defer f.Close()
+
+		records, err := f.ReadAll()
+		meta.RecSize = f.RecSize
+		meta.RecordCount = len(records)
+		meta.NumKeys = f.NumKeys
+		meta.Format = f.Format
+		meta.UsedEXTFH = true
+		meta.DLLPath = dllPath
+		// Check for .idx file
+		if _, idxErr := os.Stat(path + ".idx"); idxErr == nil {
+			meta.HasIndex = true
+		}
+		return records, meta, err
+	}
+
+	// Fallback: binary reader
+	info, err := ReadFile(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	records := make([][]byte, len(info.Records))
+	for i, r := range info.Records {
+		records[i] = r.Data
+	}
+	meta.RecSize = info.RecordSize
+	meta.RecordCount = len(records)
+	meta.ExpectedRecords = info.Header.ExpectedRecords
+	meta.HasIndex = info.Header.HasIndex
+	meta.UsedEXTFH = false
+	return records, meta, nil
 }
 
 // ---------------------------------------------------------------------------
