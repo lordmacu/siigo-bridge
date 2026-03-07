@@ -94,6 +94,15 @@ func (c *Client) SyncMovement(data map[string]interface{}) error {
 	return nil
 }
 
+// SyncCartera sends a cartera/portfolio entry to Finearom
+func (c *Client) SyncCartera(data map[string]interface{}) error {
+	_, err := c.doRequest("POST", "/siigo/cartera", data, true)
+	if err != nil {
+		return fmt.Errorf("sync cartera failed: %w", err)
+	}
+	return nil
+}
+
 func (c *Client) doRequest(method, endpoint string, body interface{}, auth bool) ([]byte, error) {
 	var reqBody io.Reader
 	if body != nil {

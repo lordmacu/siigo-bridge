@@ -3,8 +3,8 @@ package sync
 import (
 	"fmt"
 	"log"
-	"siigo-app/isam"
-	"siigo-app/parsers"
+	"siigo-common/isam"
+	"siigo-common/parsers"
 )
 
 // ChangeType indicates what kind of change was detected
@@ -60,7 +60,7 @@ func DetectChanges(dataPath string, filename string, state *SyncState) (*DetectR
 	switch filename {
 	case "Z17":
 		return detectTercerosChanges(dataPath, fileState, modTime)
-	case "Z06":
+	case "Z06CP":
 		return detectProductosChanges(dataPath, fileState, modTime)
 	case "Z49":
 		return detectMovimientosChanges(dataPath, fileState, modTime)
@@ -103,16 +103,16 @@ func detectProductosChanges(dataPath string, fileState *FileState, modTime int64
 	}
 
 	result := &DetectResult{
-		FileName:    "Z06",
+		FileName:    "Z06CP",
 		NewHashes:   make(map[string]string),
 		RecordCount: len(productos),
 	}
 
 	currentHashes := make(map[string]string)
 	for _, p := range productos {
-		key := p.Codigo
-		if key == "" {
-			key = p.Hash // use hash as key if no code found
+		key := p.Comprobante + "-" + p.Secuencia
+		if key == "-" {
+			key = p.Hash
 		}
 		currentHashes[key] = p.Hash
 	}

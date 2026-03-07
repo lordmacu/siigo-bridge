@@ -3,7 +3,7 @@ package parsers
 import (
 	"crypto/sha256"
 	"fmt"
-	"siigo-sync/isam"
+	"siigo-common/isam"
 	"strings"
 )
 
@@ -15,7 +15,6 @@ type Tercero struct {
 	TipoDoc      string `json:"tipo_doc"`      // 13=NIT, 11=CC, etc.
 	NumeroDoc    string `json:"numero_doc"`     // NIT or CC number
 	FechaCreacion string `json:"fecha_creacion"` // YYYYMMDD
-	TipoTercero  string `json:"tipo_tercero"`  // A=active?
 	Nombre       string `json:"nombre"`        // name/business name
 	TipoCtaPref  string `json:"tipo_cta_pref"` // D=debit, C=credit
 	Hash         string `json:"hash"`          // SHA256 of raw record
@@ -29,13 +28,13 @@ func ParseTerceros(dataPath string) ([]Tercero, error) {
 		return nil, err
 	}
 
+	extfh := isam.ExtfhAvailable()
 	var terceros []Tercero
 	for _, rec := range records {
-		t := parseTerceroRecord(rec)
+		t := parseTerceroRecord(rec, extfh)
 		if t.Nombre == "" || t.TipoClave == "" {
 			continue
 		}
-		// Only include main records (G type = general/master)
 		terceros = append(terceros, t)
 	}
 
@@ -58,36 +57,50 @@ func ParseTercerosClientes(dataPath string) ([]Tercero, error) {
 	return clientes, nil
 }
 
-func parseTerceroRecord(rec []byte) Tercero {
-	if len(rec) < 84 {
+func parseTerceroRecord(rec []byte, extfh bool) Tercero {
+	if len(rec) < 80 {
 		return Tercero{}
 	}
 
-	// Z17 record structure (after 2-byte marker):
-	// 0:  TipoClave (1)   - G, L, N
-	// 1:  Empresa (3)     - 001
-	// 4:  Codigo (14)     - 00000000000020
-	// 18: Secuencial (4)  - 01
-	// 22: TipoDoc (2)     - 13=NIT, 11=CC
-	// 24: NumeroDoc (10)  - 3005000020
-	// 34: FechaCreacion (8) - 20121030
-	// 42: TipoTercero (1) - A
-	// 43: Nombre (40)     - PROVEEDORES
-	// 83: TipoCtaPref (1) - D, C
-
 	hash := sha256.Sum256(rec)
 
-	t := Tercero{
-		TipoClave:     isam.ExtractField(rec, 0, 1),
-		Empresa:       isam.ExtractField(rec, 1, 3),
-		Codigo:        isam.ExtractField(rec, 4, 14),
-		TipoDoc:       isam.ExtractField(rec, 22, 2),
-		NumeroDoc:     isam.ExtractField(rec, 24, 10),
-		FechaCreacion: isam.ExtractField(rec, 34, 8),
-		TipoTercero:   isam.ExtractField(rec, 42, 1),
-		Nombre:        isam.ExtractField(rec, 43, 40),
-		TipoCtaPref:   isam.ExtractField(rec, 83, 1),
-		Hash:          fmt.Sprintf("%x", hash[:8]),
+	var t Tercero
+	if extfh {
+		// EXTFH delivers clean data without 2-byte record markers.
+		// Verified offsets from hex analysis of EXTFH output:
+		// [0:1]   TipoClave   G/L/N/R
+		// [1:4]   Empresa     001
+		// [4:18]  Codigo      00000000002001
+		// [18:20] TipoDoc     13=NIT, 11=CC, 00=none
+		// [20:22] SubTipo     account subcode
+		// [22:28] NumeroDoc   050000 (6 chars)
+		// [28:36] Fecha       20121030
+		// [36:76] Nombre      SUPERMERCADOS LA GRAN ESTRELLA (40 chars)
+		// [86:87] CtaPref     D or C
+		t = Tercero{
+			TipoClave:     isam.ExtractField(rec, 0, 1),
+			Empresa:       isam.ExtractField(rec, 1, 3),
+			Codigo:        isam.ExtractField(rec, 4, 14),
+			TipoDoc:       isam.ExtractField(rec, 18, 2),
+			NumeroDoc:     isam.ExtractField(rec, 22, 6),
+			FechaCreacion: isam.ExtractField(rec, 28, 8),
+			Nombre:        isam.ExtractField(rec, 36, 40),
+			TipoCtaPref:   isam.ExtractField(rec, 86, 1),
+			Hash:          fmt.Sprintf("%x", hash[:8]),
+		}
+	} else {
+		// Binary reader includes 2-byte record markers, different offsets
+		t = Tercero{
+			TipoClave:     isam.ExtractField(rec, 0, 1),
+			Empresa:       isam.ExtractField(rec, 1, 3),
+			Codigo:        isam.ExtractField(rec, 4, 14),
+			TipoDoc:       isam.ExtractField(rec, 22, 2),
+			NumeroDoc:     isam.ExtractField(rec, 24, 10),
+			FechaCreacion: isam.ExtractField(rec, 34, 8),
+			Nombre:        isam.ExtractField(rec, 43, 40),
+			TipoCtaPref:   isam.ExtractField(rec, 83, 1),
+			Hash:          fmt.Sprintf("%x", hash[:8]),
+		}
 	}
 
 	return t

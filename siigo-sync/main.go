@@ -7,7 +7,7 @@ import (
 	"os/signal"
 	"siigo-sync/api"
 	"siigo-sync/config"
-	"siigo-sync/parsers"
+	"siigo-common/parsers"
 	gosync "siigo-sync/sync"
 	"syscall"
 	"time"
@@ -143,13 +143,19 @@ func runSync(cfg *config.Config, state *gosync.SyncState, client *api.Client) {
 }
 
 func sendChanges(cfg *config.Config, file string, result *gosync.DetectResult, client *api.Client) error {
-	switch file {
-	case "Z17":
+	switch {
+	case file == "Z17":
 		return sendTercerosChanges(cfg, result, client)
-	case "Z06":
+	case file == "Z06CP":
 		return sendProductosChanges(cfg, result, client)
-	case "Z49":
+	case file == "Z49":
 		return sendMovimientosChanges(cfg, result, client)
+	case len(file) >= 3 && file[:3] == "Z09":
+		anio := ""
+		if len(file) > 3 {
+			anio = file[3:]
+		}
+		return sendCarteraChanges(cfg, anio, result, client)
 	}
 	return nil
 }
@@ -200,8 +206,8 @@ func sendProductosChanges(cfg *config.Config, result *gosync.DetectResult, clien
 
 	sent := 0
 	for _, p := range productos {
-		key := p.Codigo
-		if key == "" {
+		key := p.Comprobante + "-" + p.Secuencia
+		if key == "-" {
 			key = p.Hash
 		}
 		if !changedKeys[key] {
@@ -209,12 +215,12 @@ func sendProductosChanges(cfg *config.Config, result *gosync.DetectResult, clien
 		}
 		data := p.ToFinearomProduct()
 		if err := client.SyncProduct(data); err != nil {
-			log.Printf("[Z06] Error syncing product %s (%s): %v", p.Nombre, p.Codigo, err)
+			log.Printf("[Z06CP] Error syncing product %s: %v", p.Nombre, err)
 			continue
 		}
 		sent++
 	}
-	log.Printf("[Z06] Sent %d products to Finearom", sent)
+	log.Printf("[Z06CP] Sent %d products to Finearom", sent)
 	return nil
 }
 
@@ -260,6 +266,36 @@ func sendMovimientosChanges(cfg *config.Config, result *gosync.DetectResult, cli
 	}
 	log.Printf("[Z49] Sent %d movements to Finearom", sent)
 
+	return nil
+}
+
+func sendCarteraChanges(cfg *config.Config, anio string, result *gosync.DetectResult, client *api.Client) error {
+	cartera, err := parsers.ParseCartera(cfg.Siigo.DataPath, anio)
+	if err != nil {
+		return err
+	}
+
+	changedKeys := make(map[string]bool)
+	for _, c := range result.Changes {
+		if c.Type != gosync.ChangeDeleted {
+			changedKeys[c.Key] = true
+		}
+	}
+
+	sent := 0
+	for _, c := range cartera {
+		key := c.TipoRegistro + "-" + c.Empresa + "-" + c.Secuencia
+		if !changedKeys[key] {
+			continue
+		}
+		data := c.ToFinearomCartera()
+		if err := client.SyncCartera(data); err != nil {
+			log.Printf("[Z09%s] Error syncing cartera %s (%s): %v", anio, c.Secuencia, c.NitTercero, err)
+			continue
+		}
+		sent++
+	}
+	log.Printf("[Z09%s] Sent %d cartera entries to Finearom", anio, sent)
 	return nil
 }
 

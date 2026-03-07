@@ -3,6 +3,7 @@
 import {main} from '../models';
 import {config} from '../models';
 import {storage} from '../models';
+import {parsers} from '../models';
 
 export function ClearDatabase():Promise<string>;
 
@@ -11,6 +12,8 @@ export function ClearLogs():Promise<string>;
 export function GetClientes(arg1:number,arg2:string):Promise<main.PaginatedISAM>;
 
 export function GetConfig():Promise<config.Config>;
+
+export function GetExtfhStatus():Promise<Record<string, any>>;
 
 export function GetISAMInfo():Promise<Array<main.ISAMPreview>>;
 
@@ -29,6 +32,12 @@ export function GetStats():Promise<Record<string, any>>;
 export function IsPaused():Promise<boolean>;
 
 export function IsSyncing():Promise<boolean>;
+
+export function LookupByNIT(arg1:string):Promise<parsers.Tercero>;
+
+export function LookupMovimientosPorNIT(arg1:string):Promise<Array<parsers.Movimiento>>;
+
+export function LookupProducto(arg1:string):Promise<parsers.Producto>;
 
 export function PauseSync():Promise<string>;
 

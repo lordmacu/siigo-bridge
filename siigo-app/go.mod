@@ -4,7 +4,7 @@ go 1.24.0
 
 require (
 	github.com/wailsapp/wails/v2 v2.11.0
-	golang.org/x/text v0.22.0
+	golang.org/x/text v0.34.0 // indirect
 	modernc.org/sqlite v1.46.1
 )
 
@@ -43,5 +43,9 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
+
+require siigo-common v0.0.0
+
+replace siigo-common => ../siigo-common
 
 // replace github.com/wailsapp/wails/v2 v2.11.0 => C:\Users\lordmacu\go\pkg\mod

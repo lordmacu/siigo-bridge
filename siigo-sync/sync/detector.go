@@ -3,8 +3,8 @@ package sync
 import (
 	"fmt"
 	"log"
-	"siigo-sync/isam"
-	"siigo-sync/parsers"
+	"siigo-common/isam"
+	"siigo-common/parsers"
 )
 
 // ChangeType indicates what kind of change was detected
@@ -57,13 +57,19 @@ func DetectChanges(dataPath string, filename string, state *SyncState) (*DetectR
 	log.Printf("[detector] File %s changed (mod=%d, prev=%d)", filename, modTime, fileState.LastModified)
 
 	// Read and parse based on file type
-	switch filename {
-	case "Z17":
+	switch {
+	case filename == "Z17":
 		return detectTercerosChanges(dataPath, fileState, modTime)
-	case "Z06":
+	case filename == "Z06CP":
 		return detectProductosChanges(dataPath, fileState, modTime)
-	case "Z49":
+	case filename == "Z49":
 		return detectMovimientosChanges(dataPath, fileState, modTime)
+	case len(filename) >= 3 && filename[:3] == "Z09":
+		anio := ""
+		if len(filename) > 3 {
+			anio = filename[3:]
+		}
+		return detectCarteraChanges(dataPath, anio, fileState, modTime)
 	default:
 		return nil, fmt.Errorf("unknown file type: %s", filename)
 	}
@@ -103,16 +109,16 @@ func detectProductosChanges(dataPath string, fileState *FileState, modTime int64
 	}
 
 	result := &DetectResult{
-		FileName:    "Z06",
+		FileName:    "Z06CP",
 		NewHashes:   make(map[string]string),
 		RecordCount: len(productos),
 	}
 
 	currentHashes := make(map[string]string)
 	for _, p := range productos {
-		key := p.Codigo
-		if key == "" {
-			key = p.Hash // use hash as key if no code found
+		key := p.Comprobante + "-" + p.Secuencia
+		if key == "-" {
+			key = p.Hash
 		}
 		currentHashes[key] = p.Hash
 	}
@@ -143,6 +149,32 @@ func detectMovimientosChanges(dataPath string, fileState *FileState, modTime int
 			key = m.Hash
 		}
 		currentHashes[key] = m.Hash
+	}
+
+	result.Changes = compareHashes(fileState.RecordHashes, currentHashes)
+	result.HasChanges = len(result.Changes) > 0
+	result.NewHashes = currentHashes
+
+	return result, nil
+}
+
+func detectCarteraChanges(dataPath string, anio string, fileState *FileState, modTime int64) (*DetectResult, error) {
+	cartera, err := parsers.ParseCartera(dataPath, anio)
+	if err != nil {
+		return nil, err
+	}
+
+	filename := "Z09" + anio
+	result := &DetectResult{
+		FileName:    filename,
+		NewHashes:   make(map[string]string),
+		RecordCount: len(cartera),
+	}
+
+	currentHashes := make(map[string]string)
+	for _, c := range cartera {
+		key := c.TipoRegistro + "-" + c.Empresa + "-" + c.Secuencia
+		currentHashes[key] = c.Hash
 	}
 
 	result.Changes = compareHashes(fileState.RecordHashes, currentHashes)

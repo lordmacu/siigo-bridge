@@ -3,7 +3,7 @@ package parsers
 import (
 	"crypto/sha256"
 	"fmt"
-	"siigo-sync/isam"
+	"siigo-common/isam"
 	"strings"
 )
 
@@ -30,10 +30,11 @@ func ParseMovimientos(dataPath string) ([]Movimiento, error) {
 		return nil, err
 	}
 
+	extfh := isam.ExtfhAvailable()
 	var movimientos []Movimiento
 	for _, rec := range records {
-		m := parseMovimientoRecord(rec)
-		if m.Descripcion == "" && m.NitTercero == "" {
+		m := parseMovimientoRecord(rec, extfh)
+		if m.Descripcion == "" && m.NitTercero == "" && m.NumeroDoc == "" {
 			continue
 		}
 		movimientos = append(movimientos, m)
@@ -50,10 +51,11 @@ func ParseMovimientosAnio(dataPath string, anio string) ([]Movimiento, error) {
 		return nil, err
 	}
 
+	extfh := isam.ExtfhAvailable()
 	var movimientos []Movimiento
 	for _, rec := range records {
-		m := parseMovimientoRecord(rec)
-		if m.Descripcion == "" && m.NitTercero == "" {
+		m := parseMovimientoRecord(rec, extfh)
+		if m.Descripcion == "" && m.NitTercero == "" && m.NumeroDoc == "" {
 			continue
 		}
 		movimientos = append(movimientos, m)
@@ -62,29 +64,103 @@ func ParseMovimientosAnio(dataPath string, anio string) ([]Movimiento, error) {
 	return movimientos, nil
 }
 
-func parseMovimientoRecord(rec []byte) Movimiento {
-	if len(rec) < 100 {
+func parseMovimientoRecord(rec []byte, extfh bool) Movimiento {
+	if len(rec) < 50 {
 		return Movimiento{}
 	}
 
 	hash := sha256.Sum256(rec)
 	rawPreview := isam.ExtractField(rec, 0, 120)
 
-	// Z49 record structure (2,295 bytes)
-	// Siigo transaction records follow a pattern similar to Z17:
-	// The first bytes contain type codes and keys
-	//
-	// Observed structure from hex analysis:
-	// 0:   TipoComprobante (2-4) - RC, FV, NC, ND, CC, etc.
-	// 4:   Empresa (3)           - 001
-	// 7:   NumeroDoc (8-10)      - document number
-	// 17:  Fecha (8)             - YYYYMMDD
-	// 25:  NitTercero (13)       - NIT with leading zeros
-	// 38:  CuentaContable (13)   - PUC account code
-	// 51:  CentroCosto (6)       - cost center
-	// 57:  TipoMov (1)           - D/C
-	// 58:  Valor (15)            - amount as text with decimals
-	// 73+: Descripcion (80)      - description text
+	if extfh {
+		return parseMovimientoEXTFH(rec, hash, rawPreview)
+	}
+	return parseMovimientoBinary(rec, hash, rawPreview)
+}
+
+// parseMovimientoEXTFH extracts data from EXTFH-delivered Z49 records.
+// Z49 EXTFH structure (2295 bytes) - verified via hex dump:
+//
+//	[0]      tipo letter: R=recibo, T=traslado, F=factura, E=egreso,
+//	         N=nota, P=pago, L=libro, H=hoja, J=journal, C=comprobante
+//	         Space(0x20) = NIT-keyed record (no comprobante type)
+//	[1:4]    codigo_comprobante - 3 digit code (001, 010, 100, etc.)
+//	[4:15]   numero_doc - 11 chars zero-padded document number (also NIT for space-type)
+//	[15:50]  nombre_tercero - 35 chars (only present in some types: T, E)
+//	[72+]    descripcion - text description (variable position within ~72-200)
+//	[129+]   additional description / user initials
+//
+// Z49 does NOT store dates, cuenta_contable, valores, or tipo_mov as text.
+// Financial details must come from Z03 (movimientos contables) or Z09 (cartera).
+func parseMovimientoEXTFH(rec []byte, hash [32]byte, rawPreview string) Movimiento {
+	tipo := rec[0]
+
+	// Space-prefixed records: keyed by NIT, no comprobante type
+	if tipo == ' ' || tipo == '0' {
+		numDoc := strings.TrimLeft(isam.ExtractField(rec, 4, 11), "0")
+		desc := findDescripcion(rec, 50)
+		if numDoc != "" || desc != "" {
+			return Movimiento{
+				NitTercero:  numDoc, // for space-type records, the doc number IS the NIT
+				Descripcion: desc,
+				RawPreview:  rawPreview,
+				Hash:        fmt.Sprintf("%x", hash[:8]),
+			}
+		}
+		return Movimiento{}
+	}
+
+	// Skip records without a letter type at position 0
+	if tipo < 'A' || tipo > 'Z' {
+		return Movimiento{}
+	}
+
+	// Map single-letter tipo to Siigo comprobante code
+	tipoMap := map[byte]string{
+		'R': "RC", // Recibo de Caja
+		'T': "TR", // Traslado
+		'F': "FV", // Factura de Venta
+		'E': "CE", // Comprobante de Egreso
+		'N': "ND", // Nota Debito
+		'C': "CC", // Comprobante de Contabilidad
+		'P': "PG", // Pago
+		'L': "LB", // Libro
+		'H': "HJ", // Hoja de trabajo
+		'J': "JR", // Journal
+	}
+
+	tipoComp := tipoMap[tipo]
+	if tipoComp == "" {
+		tipoComp = string(tipo)
+	}
+
+	codigo := strings.TrimSpace(isam.ExtractField(rec, 1, 3))
+	if codigo != "" {
+		tipoComp = tipoComp + codigo
+	}
+
+	numeroDoc := strings.TrimLeft(isam.ExtractField(rec, 4, 11), "0")
+	nombreTercero := strings.TrimSpace(isam.ExtractField(rec, 15, 35))
+
+	// Description at offset 72+
+	descripcion := findDescripcion(rec, 72)
+
+	return Movimiento{
+		TipoComprobante: tipoComp,
+		NumeroDoc:       numeroDoc,
+		NitTercero:      nombreTercero,
+		Descripcion:     descripcion,
+		RawPreview:      rawPreview,
+		Hash:            fmt.Sprintf("%x", hash[:8]),
+	}
+}
+
+// parseMovimientoBinary extracts data from binary-reader Z49 records.
+// Binary reader includes 2-byte record markers, so offsets differ from EXTFH.
+func parseMovimientoBinary(rec []byte, hash [32]byte, rawPreview string) Movimiento {
+	if len(rec) < 100 {
+		return Movimiento{}
+	}
 
 	tipoComp := isam.ExtractField(rec, 0, 4)
 	empresa := isam.ExtractField(rec, 4, 3)
@@ -94,14 +170,9 @@ func parseMovimientoRecord(rec []byte) Movimiento {
 	cuentaContable := isam.ExtractField(rec, 38, 13)
 	tipoMov := isam.ExtractField(rec, 57, 1)
 	valor := isam.ExtractField(rec, 58, 15)
-
-	// Find description - look for the longest readable text block
-	// Description is typically after the numeric fields
 	descripcion := findDescripcion(rec, 73)
 
-	// If structured extraction didn't work, try heuristic approach
 	if !looksLikeDate(fecha) {
-		// Try alternative offsets - Siigo versions may vary
 		return parseMovimientoHeuristic(rec, hash, rawPreview)
 	}
 
@@ -133,9 +204,6 @@ func parseMovimientoHeuristic(rec []byte, hash [32]byte, rawPreview string) Movi
 			candidate := isam.ExtractField(rec, i, 8)
 			if looksLikeDate(candidate) {
 				m.Fecha = candidate
-
-				// NIT is usually before or near the date
-				// Look backwards for a numeric block (NIT)
 				for j := i - 1; j >= 0 && j > i-20; j-- {
 					if rec[j] >= '0' && rec[j] <= '9' {
 						start := j
@@ -153,36 +221,12 @@ func parseMovimientoHeuristic(rec []byte, hash [32]byte, rawPreview string) Movi
 		}
 	}
 
-	// Scan for account code pattern (4-digit starts with 1-9, like 1105, 2408)
-	for i := 0; i < len(rec)-4 && i < 200; i++ {
-		if rec[i] >= '1' && rec[i] <= '9' && isDigitRange(rec, i, 4) {
-			code := isam.ExtractField(rec, i, 4)
-			if looksLikeAccount(code) {
-				m.CuentaContable = strings.TrimSpace(isam.ExtractField(rec, i, 13))
-				break
-			}
-		}
-	}
-
-	// Find description text
 	m.Descripcion = findDescripcion(rec, 0)
 
-	// Extract tipo comprobante from first few bytes
 	if len(rec) > 4 {
 		tc := isam.ExtractField(rec, 0, 4)
 		if len(tc) >= 2 {
 			m.TipoComprobante = strings.TrimSpace(tc)
-		}
-	}
-
-	// Look for D or C for debit/credit
-	for i := 50; i < len(rec) && i < 100; i++ {
-		if rec[i] == 'D' || rec[i] == 'C' {
-			if (i == 0 || rec[i-1] == ' ' || rec[i-1] == 0) &&
-				(i+1 >= len(rec) || rec[i+1] == ' ' || rec[i+1] == 0 || (rec[i+1] >= '0' && rec[i+1] <= '9')) {
-				m.TipoMov = string(rec[i])
-				break
-			}
 		}
 	}
 

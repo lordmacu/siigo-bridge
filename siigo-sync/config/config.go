@@ -51,7 +51,7 @@ func Default() *Config {
 		},
 		Sync: SyncConfig{
 			IntervalSeconds: 60,
-			Files:           []string{"Z17", "Z06", "Z49"},
+			Files:           []string{"Z17", "Z06CP", "Z49", "Z092013", "Z092014"},
 			StatePath:       "sync_state.json",
 		},
 	}

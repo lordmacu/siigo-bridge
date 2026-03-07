@@ -89,6 +89,10 @@ export namespace main {
 	    file: string;
 	    record_size: number;
 	    records: number;
+	    num_keys: number;
+	    has_index: boolean;
+	    used_extfh: boolean;
+	    format: number;
 	    mod_time: string;
 	
 	    static createFrom(source: any = {}) {
@@ -100,6 +104,10 @@ export namespace main {
 	        this.file = source["file"];
 	        this.record_size = source["record_size"];
 	        this.records = source["records"];
+	        this.num_keys = source["num_keys"];
+	        this.has_index = source["has_index"];
+	        this.used_extfh = source["used_extfh"];
+	        this.format = source["format"];
 	        this.mod_time = source["mod_time"];
 	    }
 	}
@@ -180,6 +188,101 @@ export namespace main {
 		    }
 		    return a;
 		}
+	}
+
+}
+
+export namespace parsers {
+	
+	export class Movimiento {
+	    tipo_comprobante: string;
+	    empresa: string;
+	    numero_doc: string;
+	    fecha: string;
+	    nit_tercero: string;
+	    cuenta_contable: string;
+	    descripcion: string;
+	    valor: string;
+	    tipo_mov: string;
+	    raw_preview: string;
+	    hash: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Movimiento(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.tipo_comprobante = source["tipo_comprobante"];
+	        this.empresa = source["empresa"];
+	        this.numero_doc = source["numero_doc"];
+	        this.fecha = source["fecha"];
+	        this.nit_tercero = source["nit_tercero"];
+	        this.cuenta_contable = source["cuenta_contable"];
+	        this.descripcion = source["descripcion"];
+	        this.valor = source["valor"];
+	        this.tipo_mov = source["tipo_mov"];
+	        this.raw_preview = source["raw_preview"];
+	        this.hash = source["hash"];
+	    }
+	}
+	export class Producto {
+	    comprobante: string;
+	    secuencia: string;
+	    tipo_tercero: string;
+	    grupo: string;
+	    cuenta_contable?: string;
+	    fecha?: string;
+	    nombre: string;
+	    tipo_mov?: string;
+	    hash: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Producto(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.comprobante = source["comprobante"];
+	        this.secuencia = source["secuencia"];
+	        this.tipo_tercero = source["tipo_tercero"];
+	        this.grupo = source["grupo"];
+	        this.cuenta_contable = source["cuenta_contable"];
+	        this.fecha = source["fecha"];
+	        this.nombre = source["nombre"];
+	        this.tipo_mov = source["tipo_mov"];
+	        this.hash = source["hash"];
+	    }
+	}
+	export class Tercero {
+	    tipo_clave: string;
+	    empresa: string;
+	    codigo: string;
+	    tipo_doc: string;
+	    numero_doc: string;
+	    fecha_creacion: string;
+	    tipo_tercero: string;
+	    nombre: string;
+	    tipo_cta_pref: string;
+	    hash: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Tercero(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.tipo_clave = source["tipo_clave"];
+	        this.empresa = source["empresa"];
+	        this.codigo = source["codigo"];
+	        this.tipo_doc = source["tipo_doc"];
+	        this.numero_doc = source["numero_doc"];
+	        this.fecha_creacion = source["fecha_creacion"];
+	        this.tipo_tercero = source["tipo_tercero"];
+	        this.nombre = source["nombre"];
+	        this.tipo_cta_pref = source["tipo_cta_pref"];
+	        this.hash = source["hash"];
+	    }
 	}
 
 }

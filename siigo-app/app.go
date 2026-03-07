@@ -7,8 +7,8 @@ import (
 	"log"
 	"siigo-app/api"
 	"siigo-app/config"
-	"siigo-app/isam"
-	"siigo-app/parsers"
+	"siigo-common/isam"
+	"siigo-common/parsers"
 	"siigo-app/storage"
 	gosync "siigo-app/sync"
 	"strings"
@@ -257,17 +257,18 @@ func (a *App) RefreshCache(which string) {
 	case "products":
 		p, err := parsers.ParseProductos(a.cfg.Siigo.DataPath)
 		if err != nil {
-			a.db.AddLog("error", "Z06", "Error leyendo productos: "+err.Error())
+			a.db.AddLog("error", "Z06CP", "Error leyendo productos: "+err.Error())
 			return
 		}
 		cachedProductos = p
 		productosByCodigo = make(map[string]*parsers.Producto, len(p))
 		for i := range p {
-			if p[i].Codigo != "" {
-				productosByCodigo[p[i].Codigo] = &cachedProductos[i]
+			key := p[i].Comprobante + "-" + p[i].Secuencia
+			if key != "-" {
+				productosByCodigo[key] = &cachedProductos[i]
 			}
 		}
-		a.db.AddLog("info", "Z06", fmt.Sprintf("Cache actualizado: %d productos", len(p)))
+		a.db.AddLog("info", "Z06CP", fmt.Sprintf("Cache actualizado: %d productos", len(p)))
 	case "movements":
 		m, err := parsers.ParseMovimientos(a.cfg.Siigo.DataPath)
 		if err != nil {
@@ -318,8 +319,9 @@ func (a *App) GetProductos(page int, search string) PaginatedISAM {
 		var filtered []parsers.Producto
 		q := strings.ToLower(search)
 		for _, p := range data {
-			if strings.Contains(strings.ToLower(p.Codigo), q) ||
-				strings.Contains(strings.ToLower(p.Nombre), q) {
+			if strings.Contains(strings.ToLower(p.Nombre), q) ||
+				strings.Contains(strings.ToLower(p.Comprobante), q) ||
+				strings.Contains(strings.ToLower(p.Grupo), q) {
 				filtered = append(filtered, p)
 			}
 		}
@@ -448,13 +450,14 @@ func (a *App) syncClientes() {
 func (a *App) syncProductos() {
 	productos, err := parsers.ParseProductos(a.cfg.Siigo.DataPath)
 	if err != nil {
-		a.db.AddLog("error", "Z06", "Error: "+err.Error())
+		a.db.AddLog("error", "Z06CP", "Error: "+err.Error())
 		return
 	}
 
 	sent, skipped, errors := 0, 0, 0
 	for _, p := range productos {
-		lastHash := a.db.GetLastSentHash("products", p.Codigo)
+		key := p.Comprobante + "-" + p.Secuencia
+		lastHash := a.db.GetLastSentHash("products", key)
 		if lastHash == p.Hash {
 			skipped++
 			continue
@@ -464,14 +467,14 @@ func (a *App) syncProductos() {
 		jsonData, _ := json.Marshal(data)
 
 		if err := a.client.SyncProduct(data); err != nil {
-			a.db.SaveSentRecord("products", "Z06", p.Codigo, string(jsonData), "error", err.Error(), p.Hash)
+			a.db.SaveSentRecord("products", "Z06CP", key, string(jsonData), "error", err.Error(), p.Hash)
 			errors++
 			continue
 		}
-		a.db.SaveSentRecord("products", "Z06", p.Codigo, string(jsonData), "sent", "", p.Hash)
+		a.db.SaveSentRecord("products", "Z06CP", key, string(jsonData), "sent", "", p.Hash)
 		sent++
 	}
-	a.db.AddLog("info", "Z06", fmt.Sprintf("Productos: %d enviados, %d sin cambios, %d errores", sent, skipped, errors))
+	a.db.AddLog("info", "Z06CP", fmt.Sprintf("Productos: %d enviados, %d sin cambios, %d errores", sent, skipped, errors))
 }
 
 func (a *App) syncMovimientos() {

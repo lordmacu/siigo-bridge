@@ -64,6 +64,7 @@ func (db *DB) migrate() error {
 		`CREATE INDEX IF NOT EXISTS idx_sent_table ON sent_records(table_name)`,
 		`CREATE INDEX IF NOT EXISTS idx_sent_status ON sent_records(status)`,
 		`CREATE INDEX IF NOT EXISTS idx_sent_key ON sent_records(record_key)`,
+		`CREATE INDEX IF NOT EXISTS idx_sent_table_key_status ON sent_records(table_name, record_key, status)`,
 		`CREATE TABLE IF NOT EXISTS logs (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			level TEXT DEFAULT 'info',
@@ -175,6 +176,17 @@ func (db *DB) GetRecordByID(id int64) (*SentRecord, error) {
 	r.Error = errField.String
 	r.SentAt = sentAt.String
 	return &r, nil
+}
+
+// GetLastSentHash returns the hash of the last successfully sent record for a given table+key.
+// Returns empty string if not found.
+func (db *DB) GetLastSentHash(tableName, key string) string {
+	var hash sql.NullString
+	db.conn.QueryRow(
+		`SELECT hash FROM sent_records WHERE table_name=? AND record_key=? AND status='sent' ORDER BY id DESC LIMIT 1`,
+		tableName, key,
+	).Scan(&hash)
+	return hash.String
 }
 
 func (db *DB) AddLog(level, source, message string) {

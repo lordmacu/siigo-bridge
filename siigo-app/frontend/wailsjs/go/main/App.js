@@ -18,6 +18,10 @@ export function GetConfig() {
   return window['go']['main']['App']['GetConfig']();
 }
 
+export function GetExtfhStatus() {
+  return window['go']['main']['App']['GetExtfhStatus']();
+}
+
 export function GetISAMInfo() {
   return window['go']['main']['App']['GetISAMInfo']();
 }
@@ -52,6 +56,18 @@ export function IsPaused() {
 
 export function IsSyncing() {
   return window['go']['main']['App']['IsSyncing']();
+}
+
+export function LookupByNIT(arg1) {
+  return window['go']['main']['App']['LookupByNIT'](arg1);
+}
+
+export function LookupMovimientosPorNIT(arg1) {
+  return window['go']['main']['App']['LookupMovimientosPorNIT'](arg1);
+}
+
+export function LookupProducto(arg1) {
+  return window['go']['main']['App']['LookupProducto'](arg1);
 }
 
 export function PauseSync() {
