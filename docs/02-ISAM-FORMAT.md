@@ -41,33 +41,45 @@ Offset      Tamaño    Contenido
 Los primeros 1024 bytes contienen metadatos del archivo:
 
 ```
-Offset  Bytes  Descripción
-──────────────────────────────────────────────
-0x00    2      Marcador de archivo: 0x33FE o 0x30xx
+Offset  Bytes  Descripcion
+----------------------------------------------
+0x00    2      Magic signature (big-endian 16-bit):
+               - 0x33FE = archivo indexado estandar (la mayoria de archivos Z)
+               - 0x30xx = variante (ej: Z06 usa 0x3000)
 0x02    6      Reservado
-0x08    16     Timestamp de creación (texto ASCII: "YYYYMMDDHHMMSSCC")
-0x18    16     Timestamp de modificación (texto ASCII)
-0x28    2      Marcador de versión
+0x08    16     Timestamp de creacion (texto ASCII: "YYYYMMDDHHMMSSCC")
+0x18    16     Timestamp de modificacion (texto ASCII)
+0x28    2      Marcador de version
 0x2A    2      Flags
-0x38    2      **TAMAÑO DEL REGISTRO** (big-endian 16-bit) ← CRÍTICO
-0x3A    2      Tamaño del registro (repetido)
+0x38    2      **TAMANO DEL REGISTRO** (big-endian 16-bit) -- CRITICO
+0x3A    2      Tamano del registro (repetido)
 0x3C    4      Reservado
-0x40    4      Número de registros (estimado)
-0x48    2      Flags de índice
+0x40    4      **NUMERO DE REGISTROS** (big-endian 32-bit) -- conteo esperado
+0x48    2      Flags de indice
 ```
 
-**Lo más importante**: El tamaño del registro está en **offset 0x38**, codificado como **big-endian 16-bit**.
+**Campos criticos**:
+- **Offset 0x00**: Magic signature. Si no es `0x33FE` ni `0x30xx`, no es un archivo ISAM valido.
+- **Offset 0x38**: Tamano del registro, codificado como **big-endian 16-bit**.
+- **Offset 0x40**: Conteo de registros esperado, codificado como **big-endian 32-bit**. Util para validar que el scanner encontro todos los registros.
 
-### Lectura del Tamaño de Registro (C#)
+### Archivos de Indice (.idx)
 
-```csharp
-byte[] header = new byte[128];
-using (var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
-{
-    fs.Read(header, 0, 128);
-}
-int recordSize = (header[0x38] << 8) | header[0x39];
-// Ejemplo: header[0x38]=0x05, header[0x39]=0x9E → recordSize = 1438
+Cada archivo ISAM tiene un archivo de indice companero (ej: `Z17` + `Z17.idx`). El archivo .idx contiene los B-tree indexes para busqueda por clave. Si el archivo .idx no existe, el archivo puede ser secuencial (sin indices).
+
+### Lectura del Header (Go)
+
+```go
+// Leer magic signature
+magic := binary.BigEndian.Uint16(data[0x00:0x02])
+// 0x33FE = indexado estandar, 0x30xx = variante
+
+// Leer tamano de registro
+recSize := int(binary.BigEndian.Uint16(data[0x38:0x3A]))
+// Ejemplo: 0x05, 0x9E -> recSize = 1438
+
+// Leer conteo de registros esperado
+expectedRecords := int(binary.BigEndian.Uint32(data[0x40:0x44]))
 ```
 
 ### Páginas de Índice (0x400+)
@@ -87,82 +99,83 @@ Las claves son texto ASCII/EBCDIC de longitud fija.
 
 ### Registros de Datos
 
-Cada registro en las páginas de datos tiene esta estructura:
+Cada registro en las paginas de datos tiene esta estructura:
 ```
-Offset  Bytes  Descripción
-──────────────────────────────────────────────
+Offset  Bytes  Descripcion
+----------------------------------------------
 0x00    1      Byte de flags/status:
-               - Nibble alto (bits 4-7): flags (4=activo, 8=eliminado?)
-               - Nibble bajo (bits 0-3): byte alto del tamaño del registro
-0x01    1      Byte bajo del tamaño del registro
-0x02    N      Datos del registro (N = tamaño del registro)
+               - Nibble alto (bits 4-7): status del registro
+               - Nibble bajo (bits 0-3): byte alto del tamano del registro
+0x01    1      Byte bajo del tamano del registro
+0x02    N      Datos del registro (N = tamano del registro)
 ```
 
-**Ejemplo**: Para un registro de tamaño 0x059E (1438 bytes):
+**Status nibbles validos** (nibble alto del primer byte):
+```
+0x00 = sin flags
+0x10 = flag 1
+0x20 = flag 2
+0x40 = registro activo (el mas comun)
+0x60 = activo + flag
+0x80 = marcado/modificado
+0xA0 = modificado + flag
+0xC0 = estado alterno
+0xE0 = estado alterno + flag
+```
+
+**Ejemplo**: Para un registro de tamano 0x059E (1438 bytes):
 - `recHi = 0x05`, `recLo = 0x9E`
-- El marcador del registro es: `0x45` `0x9E` (donde 0x45 = 0x40 flags + 0x05 recHi)
-- O puede ser: `0xE5` `0x9E` (con flags diferentes)
+- Marcador activo: `0x45` `0x9E` (0x40 status + 0x05 recHi)
+- Marcador modificado: `0x85` `0x9E` (0x80 status + 0x05 recHi)
+- Marcador alterno: `0xE5` `0x9E` (0xE0 status + 0x05 recHi)
 
-### Cómo Encontrar Registros (Algoritmo)
+### Como Encontrar Registros (Algoritmo - Go)
 
-```csharp
-static List<byte[]> ReadIsamRecords(string filePath)
-{
-    var records = new List<byte[]>();
+El lector binario esta implementado en `siigo-sync/isam/reader.go` y `siigo-app/isam/reader.go`.
 
-    byte[] data;
-    using (var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
-    {
-        data = new byte[fs.Length];
-        fs.Read(data, 0, data.Length);
-    }
+**Pasos principales:**
 
-    // 1. Leer tamaño de registro del header
-    int recSize = (data[0x38] << 8) | data[0x39];
-    if (recSize <= 0 || recSize > 60000) return records;
+1. Validar header (magic signature 0x33FE o 0x30xx)
+2. Leer recSize de offset 0x38 y expectedRecords de offset 0x40
+3. Escanear desde offset 0x800 buscando marcadores de registro
+4. Validar que el status nibble es valido (0x00-0xE0 en incrementos de 0x20)
+5. Verificar texto legible en los primeros 30 bytes del registro
+6. Comparar registros encontrados vs expectedRecords (log warning si difieren)
 
-    // 2. Calcular bytes del marcador
-    byte recHi = (byte)((recSize >> 8) & 0xFF);  // Byte alto del tamaño
-    byte recLo = (byte)(recSize & 0xFF);          // Byte bajo del tamaño
+```go
+// Marcador de registro: [statusNibble|recHi] [recLo]
+recHi := byte((recSize >> 8) & 0xFF)
+recLo := byte(recSize & 0xFF)
 
-    // 3. Escanear desde offset 0x800 (después del header + primera página de índice)
-    for (int pos = 0x800; pos < data.Length - recSize; pos++)
-    {
-        // Buscar marcador: segundo byte = recLo, nibble bajo del primero = recHi
-        if (data[pos + 1] == recLo && (data[pos] & 0x0F) == recHi)
-        {
-            // Verificar que contiene texto legible (no es basura)
-            int textStart = pos + 2;
-            int readableCount = 0;
-            for (int i = textStart; i < textStart + 30 && i < data.Length; i++)
-            {
-                if (data[i] >= 0x20 && data[i] < 0xFF) readableCount++;
-            }
-
-            if (readableCount > 15) // Al menos la mitad legible
-            {
-                byte[] record = new byte[recSize];
-                Array.Copy(data, textStart, record, 0, Math.Min(recSize, data.Length - textStart));
-                records.Add(record);
-                pos += recSize; // Saltar al siguiente registro potencial
-            }
+for pos := 0x800; pos < len(data)-recSize; pos++ {
+    if data[pos+1] == recLo && (data[pos]&0x0F) == recHi {
+        statusNibble := data[pos] & 0xF0
+        if !validStatusNibbles[statusNibble] {
+            continue
         }
+        // Verificar texto legible, extraer registro...
     }
-
-    return records;
 }
 ```
 
+### API Unificada: ReadIsamFile
+
+Ambos proyectos exponen `ReadIsamFile(path)` que:
+1. Intenta abrir via EXTFH (cblrtsm.dll) si esta disponible
+2. Si falla, usa el lector binario como fallback
+3. Retorna `([][]byte, int, error)` — registros, recSize, error
+
+Tambien existe `ReadIsamFileWithMeta(path)` que retorna un `IsamFileMeta` con diagnosticos adicionales (numKeys, format, hasIndex, usedEXTFH, etc).
+
 ## Encoding de los Datos
 
-Los datos dentro de los registros usan **Windows-1252** (Windows Latin-1), que incluye caracteres españoles:
-- á, é, í, ó, ú
-- ñ, Ñ
-- ¿, ¡
+Los datos dentro de los registros usan **Windows-1252** (Windows Latin-1), que incluye caracteres espanoles (a, e, i, o, u con tilde, n con tilde).
 
-```csharp
-var encoding = Encoding.GetEncoding(1252);
-string text = encoding.GetString(recordBytes);
+```go
+import "golang.org/x/text/encoding/charmap"
+
+decoder := charmap.Windows1252.NewDecoder()
+text, _ := decoder.String(string(recordBytes))
 ```
 
 ## Formato de los Campos dentro de un Registro
@@ -207,8 +220,10 @@ Los campos numéricos COBOL típicamente usan formato PIC 9(n) o PIC 9(n)V9(m) d
 
 ## Notas Importantes
 
-1. **Siempre abrir con `FileShare.ReadWrite`** — Siigo puede tener los archivos abiertos y bloqueados.
-2. **No escribir en los archivos ISAM** — La estructura es compleja (índices, nodos B-tree, etc.). Escribir mal corrompería los datos.
+1. **Usar EXTFH cuando sea posible** — El wrapper EXTFH (via cblrtsm.dll) lee los archivos correctamente usando el runtime de Micro Focus. El lector binario es un fallback.
+2. **No escribir en los archivos ISAM** — La estructura es compleja (indices, nodos B-tree, etc.). Escribir mal corromperia los datos.
 3. **Los archivos sin `.idx`** correspondiente pueden ser archivos secuenciales simples, no indexados.
-4. **Archivos con sufijo de año** (Z032016, Z492014) contienen datos de ese año fiscal.
-5. **El archivo Z06 tiene recSize=4096** que coincide con el tamaño de página, lo que sugiere un formato especial. El backup Z0620171114 tiene recSize=2286 que es el tamaño real del registro de productos.
+4. **Archivos con sufijo de ano** (Z032016, Z492014) contienen datos de ese ano fiscal.
+5. **El archivo Z06 tiene recSize=4096** que coincide con el tamano de pagina, lo que sugiere un formato especial. El backup Z0620171114 tiene recSize=2286 que es el tamano real del registro de productos.
+6. **Lock retry** — EXTFH reintenta automaticamente 3 veces con 200ms de delay cuando el archivo esta bloqueado (status 9/065 o 9/068).
+7. **Environment auto-setup** — El wrapper configura automaticamente COBCONFIG, COBOPT, y PATH para el runtime de Micro Focus.
