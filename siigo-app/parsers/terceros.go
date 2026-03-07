@@ -24,14 +24,14 @@ type Tercero struct {
 // ParseTerceros reads the Z17 file and returns all terceros
 func ParseTerceros(dataPath string) ([]Tercero, error) {
 	path := dataPath + "Z17"
-	info, err := isam.ReadFile(path)
+	records, _, err := isam.ReadIsamFile(path)
 	if err != nil {
 		return nil, err
 	}
 
 	var terceros []Tercero
-	for _, rec := range info.Records {
-		t := parseTerceroRecord(rec.Data)
+	for _, rec := range records {
+		t := parseTerceroRecord(rec)
 		if t.Nombre == "" || t.TipoClave == "" {
 			continue
 		}

@@ -25,14 +25,14 @@ type Movimiento struct {
 // ParseMovimientos reads the Z49 file and returns all movements
 func ParseMovimientos(dataPath string) ([]Movimiento, error) {
 	path := dataPath + "Z49"
-	info, err := isam.ReadFile(path)
+	records, _, err := isam.ReadIsamFile(path)
 	if err != nil {
 		return nil, err
 	}
 
 	var movimientos []Movimiento
-	for _, rec := range info.Records {
-		m := parseMovimientoRecord(rec.Data)
+	for _, rec := range records {
+		m := parseMovimientoRecord(rec)
 		if m.Descripcion == "" && m.NitTercero == "" {
 			continue
 		}
@@ -45,14 +45,14 @@ func ParseMovimientos(dataPath string) ([]Movimiento, error) {
 // ParseMovimientosAnio reads movements for a specific year (Z49YYYY)
 func ParseMovimientosAnio(dataPath string, anio string) ([]Movimiento, error) {
 	path := dataPath + "Z49" + anio
-	info, err := isam.ReadFile(path)
+	records, _, err := isam.ReadIsamFile(path)
 	if err != nil {
 		return nil, err
 	}
 
 	var movimientos []Movimiento
-	for _, rec := range info.Records {
-		m := parseMovimientoRecord(rec.Data)
+	for _, rec := range records {
+		m := parseMovimientoRecord(rec)
 		if m.Descripcion == "" && m.NitTercero == "" {
 			continue
 		}

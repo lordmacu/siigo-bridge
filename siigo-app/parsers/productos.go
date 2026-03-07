@@ -25,19 +25,19 @@ type Producto struct {
 func ParseProductos(dataPath string) ([]Producto, error) {
 	// Try backup first (cleaner format)
 	path := dataPath + "Z0620171114"
-	info, err := isam.ReadFile(path)
-	if err != nil || len(info.Records) == 0 {
+	records, recSize, err := isam.ReadIsamFile(path)
+	if err != nil || len(records) == 0 {
 		// Fall back to main Z06
 		path = dataPath + "Z06"
-		info, err = isam.ReadFile(path)
+		records, recSize, err = isam.ReadIsamFile(path)
 		if err != nil {
 			return nil, err
 		}
 	}
 
 	var productos []Producto
-	for _, rec := range info.Records {
-		p := parseProductoRecord(rec.Data, info.RecordSize)
+	for _, rec := range records {
+		p := parseProductoRecord(rec, recSize)
 		if p.Nombre == "" {
 			continue
 		}

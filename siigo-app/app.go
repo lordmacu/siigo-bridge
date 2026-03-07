@@ -200,7 +200,7 @@ func (a *App) GetISAMInfo() []ISAMPreview {
 	var result []ISAMPreview
 	for _, f := range files {
 		path := a.cfg.Siigo.DataPath + f
-		info, err := isam.ReadFile(path)
+		records, recSize, err := isam.ReadIsamFile(path)
 		if err != nil {
 			result = append(result, ISAMPreview{File: f, Records: -1})
 			continue
@@ -209,8 +209,8 @@ func (a *App) GetISAMInfo() []ISAMPreview {
 		t := time.Unix(0, modTime)
 		result = append(result, ISAMPreview{
 			File:       f,
-			RecordSize: info.RecordSize,
-			Records:    len(info.Records),
+			RecordSize: recSize,
+			Records:    len(records),
 			ModTime:    t.Format("2006-01-02 15:04:05"),
 		})
 	}
