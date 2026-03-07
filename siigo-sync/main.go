@@ -5,8 +5,8 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"siigo-sync/api"
-	"siigo-sync/config"
+	"siigo-common/api"
+	"siigo-common/config"
 	"siigo-common/parsers"
 	gosync "siigo-sync/sync"
 	"syscall"
@@ -181,7 +181,8 @@ func sendTercerosChanges(cfg *config.Config, result *gosync.DetectResult, client
 			continue
 		}
 		data := t.ToFinearomClient()
-		if err := client.SyncClient(data); err != nil {
+		nit := t.NumeroDoc
+		if err := client.Sync("clients", "add", nit, data); err != nil {
 			log.Printf("[Z17] Error syncing client %s (%s): %v", t.Nombre, t.NumeroDoc, err)
 			continue
 		}
@@ -214,7 +215,7 @@ func sendProductosChanges(cfg *config.Config, result *gosync.DetectResult, clien
 			continue
 		}
 		data := p.ToFinearomProduct()
-		if err := client.SyncProduct(data); err != nil {
+		if err := client.Sync("products", "add", key, data); err != nil {
 			log.Printf("[Z06CP] Error syncing product %s: %v", p.Nombre, err)
 			continue
 		}
@@ -258,7 +259,8 @@ func sendMovimientosChanges(cfg *config.Config, result *gosync.DetectResult, cli
 			"tipo_mov":        m.TipoMov,
 			"siigo_sync_hash": m.Hash,
 		}
-		if err := client.SyncMovement(data); err != nil {
+		movKey := m.TipoComprobante + "-" + m.NumeroDoc
+		if err := client.Sync("movements", "add", movKey, data); err != nil {
 			log.Printf("[Z49] Error syncing movement %s: %v", m.NumeroDoc, err)
 			continue
 		}
@@ -289,7 +291,8 @@ func sendCarteraChanges(cfg *config.Config, anio string, result *gosync.DetectRe
 			continue
 		}
 		data := c.ToFinearomCartera()
-		if err := client.SyncCartera(data); err != nil {
+		carteraKey := c.TipoRegistro + "-" + c.Empresa + "-" + c.Secuencia
+		if err := client.Sync("cartera", "add", carteraKey, data); err != nil {
 			log.Printf("[Z09%s] Error syncing cartera %s (%s): %v", anio, c.Secuencia, c.NitTercero, err)
 			continue
 		}

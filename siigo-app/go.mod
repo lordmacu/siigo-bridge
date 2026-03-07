@@ -5,7 +5,7 @@ go 1.24.0
 require (
 	github.com/wailsapp/wails/v2 v2.11.0
 	golang.org/x/text v0.34.0 // indirect
-	modernc.org/sqlite v1.46.1
+	modernc.org/sqlite v1.46.1 // indirect
 )
 
 require (

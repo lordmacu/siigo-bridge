@@ -8,9 +8,9 @@ import (
 	"os"
 	"siigo-common/isam"
 	"siigo-common/parsers"
-	"siigo-web/api"
-	"siigo-web/config"
-	"siigo-web/storage"
+	"siigo-common/api"
+	"siigo-common/config"
+	"siigo-common/storage"
 	"strings"
 	"time"
 )
