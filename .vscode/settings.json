@@ -1,0 +1,5 @@
+{
+    "debug.allowBreakpointsEverywhere": true,
+    "debug.internalConsoleOptions": "openOnSessionStart",
+    "debug.stopOnEntry": false
+}

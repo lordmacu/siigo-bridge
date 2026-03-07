@@ -1,0 +1,23 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "kill-siigo-app",
+            "type": "shell",
+            "command": "taskkill /F /IM siigo-app.exe 2>$null; exit 0",
+            "presentation": {
+                "reveal": "silent"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "kill-siigo-sync",
+            "type": "shell",
+            "command": "taskkill /F /IM siigo-sync.exe 2>$null; exit 0",
+            "presentation": {
+                "reveal": "silent"
+            },
+            "problemMatcher": []
+        }
+    ]
+}

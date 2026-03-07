@@ -1,0 +1,28 @@
+# Binaries
+*.exe
+*.dll
+*.pdb
+*.db
+*.db-shm
+*.db-wal
+
+# Build artifacts
+SiigoExplorer/bin/
+SiigoExplorer/obj/
+siigo-app/frontend/node_modules/
+
+# Config with credentials
+siigo-sync/config.json
+siigo-app/config.json
+
+# Logs and temp
+*.log
+sync_state.json
+sync_output.log
+z17_dump.seq
+
+# IDE
+.claude/
+
+# MF header (downloaded reference)
+common.h
