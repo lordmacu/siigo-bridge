@@ -3,11 +3,14 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -28,6 +31,74 @@ import (
 
 // Auth credentials loaded from config.json (auth.username / auth.password)
 
+type TokenInfo struct {
+	Expiry      time.Time
+	Username    string
+	Role        string   // "root", "admin", "editor", "viewer"
+	Permissions []string // allowed module paths
+}
+
+// rateLimiter tracks request counts per IP with sliding window
+type rateLimiter struct {
+	mu       gosync.Mutex
+	requests map[string][]time.Time
+	limit    int           // max requests per window
+	window   time.Duration // time window
+}
+
+func newRateLimiter(limit int, window time.Duration) *rateLimiter {
+	return &rateLimiter{
+		requests: make(map[string][]time.Time),
+		limit:    limit,
+		window:   window,
+	}
+}
+
+func (rl *rateLimiter) Allow(ip string) bool {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	now := time.Now()
+	cutoff := now.Add(-rl.window)
+
+	// Remove expired entries
+	times := rl.requests[ip]
+	valid := times[:0]
+	for _, t := range times {
+		if t.After(cutoff) {
+			valid = append(valid, t)
+		}
+	}
+
+	if len(valid) >= rl.limit {
+		rl.requests[ip] = valid
+		return false
+	}
+
+	rl.requests[ip] = append(valid, now)
+	return true
+}
+
+// cleanup removes expired entries periodically
+func (rl *rateLimiter) cleanup() {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	cutoff := time.Now().Add(-rl.window)
+	for ip, times := range rl.requests {
+		valid := times[:0]
+		for _, t := range times {
+			if t.After(cutoff) {
+				valid = append(valid, t)
+			}
+		}
+		if len(valid) == 0 {
+			delete(rl.requests, ip)
+		} else {
+			rl.requests[ip] = valid
+		}
+	}
+}
+
 type Server struct {
 	db             *storage.DB
 	cfg            *config.Config
@@ -37,11 +108,14 @@ type Server struct {
 	sending        bool
 	paused         bool
 	sendPaused     bool // auto-paused by circuit breaker
-	sendFailCount  int  // consecutive send cycle failures
-	stopCh         chan bool
-	tokens         map[string]time.Time
+	sendFailCount   int    // consecutive send cycle failures
+	setupPopulating string            // table currently being populated during setup ("" = idle)
+	setupPopulated  map[string]bool   // tables that have been populated during this setup session (even if 0 records)
+	stopCh          chan bool
+	tokens         map[string]TokenInfo
 	tokenMu        gosync.RWMutex
 	startTime      time.Time
+	apiLimiter     *rateLimiter
 }
 
 func main() {
@@ -61,20 +135,40 @@ func main() {
 	bot := telegram.New(&cfg.Telegram)
 
 	srv := &Server{
-		db:        db,
-		cfg:       cfg,
-		bot:       bot,
-		stopCh:    make(chan bool, 1),
-		tokens:    make(map[string]time.Time),
-		startTime: time.Now(),
+		db:         db,
+		cfg:        cfg,
+		bot:        bot,
+		stopCh:     make(chan bool, 1),
+		tokens:         make(map[string]TokenInfo),
+		setupPopulated: make(map[string]bool),
+		startTime:  time.Now(),
+		apiLimiter: newRateLimiter(120, time.Minute), // 120 req/min per IP
 	}
+
+	// Periodic cleanup
+	go func() {
+		for {
+			time.Sleep(5 * time.Minute)
+			srv.apiLimiter.cleanup()
+		}
+	}()
+	go func() {
+		for {
+			time.Sleep(1 * time.Hour)
+			srv.db.CleanOldSyncStats(72) // Keep 3 days of stats
+		}
+	}()
 
 	db.AddLog("info", "APP", "Servidor web iniciado")
 
 	srv.registerBotCommands()
 	bot.StartPolling()
 
-	go srv.startSyncLoop()
+	if srv.cfg.SetupComplete {
+		go srv.startSyncLoop()
+	} else {
+		db.AddLog("info", "APP", "Setup pendiente — sync loops deshabilitados hasta completar wizard")
+	}
 
 	mux := http.NewServeMux()
 	srv.registerRoutes(mux)
@@ -200,15 +294,40 @@ func (s *Server) generateToken() string {
 func (s *Server) isValidToken(token string) bool {
 	s.tokenMu.RLock()
 	defer s.tokenMu.RUnlock()
-	exp, ok := s.tokens[token]
+	info, ok := s.tokens[token]
 	if !ok {
 		return false
 	}
-	if time.Now().After(exp) {
+	if time.Now().After(info.Expiry) {
 		delete(s.tokens, token)
 		return false
 	}
 	return true
+}
+
+func (s *Server) getTokenInfo(token string) *TokenInfo {
+	s.tokenMu.RLock()
+	defer s.tokenMu.RUnlock()
+	info, ok := s.tokens[token]
+	if !ok {
+		return nil
+	}
+	return &info
+}
+
+func (s *Server) getUsernameFromRequest(r *http.Request) string {
+	token := extractToken(r)
+	info := s.getTokenInfo(token)
+	if info != nil {
+		return info.Username
+	}
+	return "unknown"
+}
+
+// AllModules lists all permission-controlled module keys
+var AllModules = []string{
+	"dashboard", "clients", "products", "movements", "cartera",
+	"field-mappings", "errors", "logs", "explorer", "config", "users",
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -224,25 +343,68 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "Invalid request", 400)
 		return
 	}
-	if body.Username != s.cfg.Auth.Username || body.Password != s.cfg.Auth.Password {
-		jsonError(w, "Credenciales incorrectas", 401)
-		return
+
+	var tokenInfo TokenInfo
+
+	// Check root user first (from config.json)
+	if body.Username == s.cfg.Auth.Username && body.Password == s.cfg.Auth.Password {
+		tokenInfo = TokenInfo{
+			Expiry:      time.Now().Add(24 * time.Hour),
+			Username:    body.Username,
+			Role:        "root",
+			Permissions: AllModules,
+		}
+	} else {
+		// Check app_users table
+		user, err := s.db.GetAppUser(body.Username)
+		if err != nil || !s.db.CheckAppUserPassword(user, body.Password) || !user.Active {
+			jsonError(w, "Credenciales incorrectas", 401)
+			return
+		}
+		perms := user.Permissions
+		if user.Role == "admin" {
+			perms = AllModules
+		}
+		tokenInfo = TokenInfo{
+			Expiry:      time.Now().Add(24 * time.Hour),
+			Username:    user.Username,
+			Role:        user.Role,
+			Permissions: perms,
+		}
 	}
+
 	token := s.generateToken()
 	s.tokenMu.Lock()
-	s.tokens[token] = time.Now().Add(24 * time.Hour)
+	s.tokens[token] = tokenInfo
 	s.tokenMu.Unlock()
 
-	jsonResponse(w, map[string]string{"token": token})
+	jsonResponse(w, map[string]interface{}{
+		"token":          token,
+		"username":       tokenInfo.Username,
+		"role":           tokenInfo.Role,
+		"permissions":    tokenInfo.Permissions,
+		"setup_complete": s.cfg.SetupComplete,
+	})
 }
 
 func (s *Server) handleCheckAuth(w http.ResponseWriter, r *http.Request) {
 	token := extractToken(r)
-	if s.isValidToken(token) {
-		jsonResponse(w, map[string]string{"status": "ok"})
-	} else {
+	if !s.isValidToken(token) {
 		jsonError(w, "No autorizado", 401)
+		return
 	}
+	info := s.getTokenInfo(token)
+	if info == nil {
+		jsonResponse(w, map[string]string{"status": "ok"})
+		return
+	}
+	jsonResponse(w, map[string]interface{}{
+		"status":         "ok",
+		"username":       info.Username,
+		"role":           info.Role,
+		"permissions":    info.Permissions,
+		"setup_complete": s.cfg.SetupComplete,
+	})
 }
 
 func extractToken(r *http.Request) string {
@@ -282,6 +444,12 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/products", s.authMiddleware(s.handleProducts))
 	mux.HandleFunc("/api/movements", s.authMiddleware(s.handleMovements))
 	mux.HandleFunc("/api/cartera", s.authMiddleware(s.handleCartera))
+	mux.HandleFunc("/api/plan-cuentas", s.authMiddleware(s.handlePlanCuentas))
+	mux.HandleFunc("/api/activos-fijos", s.authMiddleware(s.handleActivosFijos))
+	mux.HandleFunc("/api/saldos-terceros", s.authMiddleware(s.handleSaldosTerceros))
+	mux.HandleFunc("/api/saldos-consolidados", s.authMiddleware(s.handleSaldosConsolidados))
+	mux.HandleFunc("/api/documentos", s.authMiddleware(s.handleDocumentos))
+	mux.HandleFunc("/api/terceros-ampliados", s.authMiddleware(s.handleTercerosAmpliados))
 	mux.HandleFunc("/api/sync-history", s.authMiddleware(s.handleSyncHistory))
 	mux.HandleFunc("/api/logs", s.authMiddleware(s.handleLogs))
 	mux.HandleFunc("/api/sync-now", s.authMiddleware(s.handleSyncNow))
@@ -302,6 +470,26 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/public-api-config", s.authMiddleware(s.handlePublicAPIConfig))
 	mux.HandleFunc("/api/telegram-config", s.authMiddleware(s.handleTelegramConfig))
 	mux.HandleFunc("/api/telegram-test", s.authMiddleware(s.handleTelegramTest))
+	mux.HandleFunc("/api/query", s.authMiddleware(s.handleQuery))
+	mux.HandleFunc("/api/allow-edit-delete", s.authMiddleware(s.handleAllowEditDelete))
+	mux.HandleFunc("/api/record", s.authMiddleware(s.handleRecord))
+	mux.HandleFunc("/api/users", s.authMiddleware(s.handleUsers))
+	mux.HandleFunc("/api/users/", s.authMiddleware(s.handleUserByID))
+	mux.HandleFunc("/api/audit-trail", s.authMiddleware(s.handleAuditTrail))
+	mux.HandleFunc("/api/change-history", s.authMiddleware(s.handleChangeHistory))
+	mux.HandleFunc("/api/sync-stats-history", s.authMiddleware(s.handleSyncStatsHistory))
+	mux.HandleFunc("/api/backup", s.authMiddleware(s.handleBackup))
+	mux.HandleFunc("/api/restore", s.authMiddleware(s.handleRestore))
+	mux.HandleFunc("/api/events", s.authMiddleware(s.handleSSE))
+	mux.HandleFunc("/api/bulk-action", s.authMiddleware(s.handleBulkAction))
+	mux.HandleFunc("/api/webhook-config", s.authMiddleware(s.handleWebhookConfig))
+	mux.HandleFunc("/api/webhook-test", s.authMiddleware(s.handleWebhookTest))
+	mux.HandleFunc("/api/server-info", s.authMiddleware(s.handleServerInfo))
+
+	// Setup wizard
+	mux.HandleFunc("/api/setup-status", s.authMiddleware(s.handleSetupStatus))
+	mux.HandleFunc("/api/setup-populate", s.authMiddleware(s.handleSetupPopulate))
+	mux.HandleFunc("/api/setup-complete", s.authMiddleware(s.handleSetupComplete))
 
 	// Swagger docs
 	mux.HandleFunc("/api/v1/docs", handleSwaggerUI)
@@ -310,14 +498,41 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// Public API v1 (JWT auth)
 	mux.HandleFunc("/api/v1/auth", s.handleV1Auth)
 	mux.HandleFunc("/api/v1/stats", s.jwtMiddleware(s.handleV1Stats))
-	mux.HandleFunc("/api/v1/clients", s.jwtMiddleware(s.handleV1List("clients")))
-	mux.HandleFunc("/api/v1/clients/", s.jwtMiddleware(s.handleV1Detail("clients")))
-	mux.HandleFunc("/api/v1/products", s.jwtMiddleware(s.handleV1List("products")))
-	mux.HandleFunc("/api/v1/products/", s.jwtMiddleware(s.handleV1Detail("products")))
-	mux.HandleFunc("/api/v1/movements", s.jwtMiddleware(s.handleV1List("movements")))
-	mux.HandleFunc("/api/v1/movements/", s.jwtMiddleware(s.handleV1Detail("movements")))
-	mux.HandleFunc("/api/v1/cartera", s.jwtMiddleware(s.handleV1List("cartera")))
-	mux.HandleFunc("/api/v1/cartera/", s.jwtMiddleware(s.handleV1Detail("cartera")))
+	// Register all data tables for v1 API
+	for _, table := range odataTableOrder {
+		mux.HandleFunc("/api/v1/"+table, s.jwtMiddleware(s.handleV1List(table)))
+		mux.HandleFunc("/api/v1/"+table+"/", s.jwtMiddleware(s.handleV1Detail(table)))
+	}
+
+	// OData endpoints (JWT protected)
+	mux.HandleFunc("/odata", s.jwtMiddleware(s.handleODataServiceDoc))
+	mux.HandleFunc("/odata/", s.jwtMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		path := strings.TrimPrefix(r.URL.Path, "/odata/")
+
+		// $metadata
+		if path == "$metadata" {
+			s.handleODataMetadata(w, r)
+			return
+		}
+
+		// Route to collection or entity
+		for _, table := range odataTableOrder {
+			if path == table || path == table+"/" {
+				s.handleODataCollection(table)(w, r)
+				return
+			}
+			if path == table+"/$count" {
+				s.handleODataCollection(table)(w, r)
+				return
+			}
+			if strings.HasPrefix(path, table+"/") || strings.HasPrefix(path, table+"(") {
+				s.handleODataEntity(table)(w, r)
+				return
+			}
+		}
+
+		jsonError(w, "OData resource not found", 404)
+	}))
 }
 
 func jsonResponse(w http.ResponseWriter, data interface{}) {
@@ -403,8 +618,41 @@ func (s *Server) doDetectCycle() {
 	s.diffProductos()
 	s.diffMovimientos()
 	s.diffCartera()
+	s.diffPlanCuentas()
+	s.diffActivosFijos()
+	s.diffSaldosTerceros()
+	s.diffSaldosConsolidados()
+	s.diffDocumentos()
+	s.diffTercerosAmpliados()
+	s.diffTransaccionesDetalle()
+	s.diffPeriodosContables()
+	s.diffCondicionesPago()
+	s.diffLibrosAuxiliares()
+	s.diffCodigosDane()
+	s.diffActividadesICA()
+	s.diffConceptosPILA()
+	s.diffActivosFijosDetalle()
+	s.diffAuditTrailTerceros()
+	s.diffClasificacionCuentas()
 
 	s.db.AddLog("info", "DETECT", "--- Ciclo deteccion completado ---")
+
+	// Record sync stats for dashboard charts
+	stats := s.db.GetStats()
+	for _, table := range []string{"clients", "products", "movements", "cartera", "plan_cuentas", "activos_fijos", "saldos_terceros", "saldos_consolidados", "documentos", "terceros_ampliados", "transacciones_detalle", "periodos_contables", "condiciones_pago", "libros_auxiliares", "codigos_dane", "actividades_ica", "conceptos_pila", "activos_fijos_detalle", "audit_trail_terceros", "clasificacion_cuentas"} {
+		total, _ := stats[table+"_total"].(int)
+		pending, _ := stats[table+"_pending"].(int)
+		synced, _ := stats[table+"_synced"].(int)
+		errors, _ := stats[table+"_errors"].(int)
+		s.db.RecordSyncStats(table, total, pending, synced, errors)
+	}
+
+	// SSE notification
+	statsJSON, _ := json.Marshal(stats)
+	sseNotify("sync_complete", string(statsJSON))
+
+	// Webhook notification
+	s.webhookDispatch("sync_complete", stats)
 }
 
 const maxSendFailures = 4
@@ -412,6 +660,19 @@ const maxSendFailures = 4
 func (s *Server) doSendCycle() {
 	s.sending = true
 	defer func() { s.sending = false }()
+
+	// Skip entire cycle if no table has sending enabled
+	anyEnabled := false
+	tables := []string{"clients", "products", "movements", "cartera"}
+	for _, t := range tables {
+		if s.cfg.IsSendEnabled(t) {
+			anyEnabled = true
+			break
+		}
+	}
+	if !anyEnabled {
+		return
+	}
 
 	if !s.ensureLogin() {
 		s.sendFailCount++
@@ -422,7 +683,6 @@ func (s *Server) doSendCycle() {
 	s.db.AddLog("info", "SEND", "--- Ciclo envio iniciado ---")
 
 	totalSent, totalErrors := 0, 0
-	tables := []string{"clients", "products", "movements", "cartera"}
 	for _, t := range tables {
 		sent, errs := s.sendPending(t)
 		totalSent += sent
@@ -445,6 +705,12 @@ func (s *Server) doSendCycle() {
 	}
 
 	s.db.AddLog("info", "SEND", "--- Ciclo envio completado ---")
+
+	// SSE notification
+	sseNotify("send_complete", fmt.Sprintf(`{"sent":%d,"errors":%d}`, totalSent, totalErrors))
+
+	// Webhook notification
+	s.webhookDispatch("send_complete", map[string]int{"sent": totalSent, "errors": totalErrors})
 }
 
 func (s *Server) checkSendCircuitBreaker(reason string) {
@@ -454,6 +720,7 @@ func (s *Server) checkSendCircuitBreaker(reason string) {
 			s.sendFailCount, reason)
 		s.bot.Send(msg)
 		s.db.AddLog("error", "SEND", fmt.Sprintf("Circuit breaker activado: %d fallos consecutivos (%s). Envio pausado automaticamente.", s.sendFailCount, reason))
+		s.webhookDispatch("send_paused", map[string]interface{}{"reason": reason, "fail_count": s.sendFailCount})
 	} else if s.sendFailCount > 0 && !s.sendPaused {
 		s.db.AddLog("warn", "SEND", fmt.Sprintf("Fallo de envio %d/%d (%s)", s.sendFailCount, maxSendFailures, reason))
 	}
@@ -471,6 +738,191 @@ func (s *Server) ensureLogin() bool {
 	}
 	s.client = client
 	return true
+}
+
+// ==================== SETUP WIZARD ====================
+
+type setupTableDef struct {
+	Name  string
+	Label string
+}
+
+var setupTablesList = []setupTableDef{
+	{"clients", "Clientes (Z17)"},
+	{"products", "Productos (Z04)"},
+	{"movements", "Movimientos (Z49)"},
+	{"cartera", "Cartera (Z09)"},
+	{"plan_cuentas", "Plan de Cuentas (Z03)"},
+	{"activos_fijos", "Activos Fijos (Z27)"},
+	{"saldos_terceros", "Saldos por Tercero (Z25)"},
+	{"saldos_consolidados", "Saldos Consolidados (Z28)"},
+	{"documentos", "Documentos (Z11)"},
+	{"terceros_ampliados", "Terceros Ampliados (Z08A)"},
+	{"transacciones_detalle", "Transacciones Detalle (Z07T)"},
+	{"periodos_contables", "Periodos Contables (Z26)"},
+	{"condiciones_pago", "Condiciones de Pago (Z05)"},
+	{"libros_auxiliares", "Libros Auxiliares (Z07)"},
+	{"codigos_dane", "Codigos DANE"},
+	{"actividades_ica", "Actividades ICA"},
+	{"conceptos_pila", "Conceptos PILA"},
+	{"activos_fijos_detalle", "Activos Fijos Detalle (Z27)"},
+	{"audit_trail_terceros", "Audit Trail Terceros (Z11N)"},
+	{"clasificacion_cuentas", "Clasificacion Cuentas (Z279CP)"},
+}
+
+func (s *Server) getDiffFunc(table string) func() {
+	switch table {
+	case "clients":
+		return s.diffClientes
+	case "products":
+		return s.diffProductos
+	case "movements":
+		return s.diffMovimientos
+	case "cartera":
+		return s.diffCartera
+	case "plan_cuentas":
+		return s.diffPlanCuentas
+	case "activos_fijos":
+		return s.diffActivosFijos
+	case "saldos_terceros":
+		return s.diffSaldosTerceros
+	case "saldos_consolidados":
+		return s.diffSaldosConsolidados
+	case "documentos":
+		return s.diffDocumentos
+	case "terceros_ampliados":
+		return s.diffTercerosAmpliados
+	case "transacciones_detalle":
+		return s.diffTransaccionesDetalle
+	case "periodos_contables":
+		return s.diffPeriodosContables
+	case "condiciones_pago":
+		return s.diffCondicionesPago
+	case "libros_auxiliares":
+		return s.diffLibrosAuxiliares
+	case "codigos_dane":
+		return s.diffCodigosDane
+	case "actividades_ica":
+		return s.diffActividadesICA
+	case "conceptos_pila":
+		return s.diffConceptosPILA
+	case "activos_fijos_detalle":
+		return s.diffActivosFijosDetalle
+	case "audit_trail_terceros":
+		return s.diffAuditTrailTerceros
+	case "clasificacion_cuentas":
+		return s.diffClasificacionCuentas
+	}
+	return nil
+}
+
+func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		jsonError(w, "GET only", 405)
+		return
+	}
+
+	type tableStatus struct {
+		Name   string `json:"name"`
+		Label  string `json:"label"`
+		Total  int    `json:"total"`
+		Status string `json:"status"`
+	}
+
+	tables := make([]tableStatus, 0, len(setupTablesList))
+	for _, t := range setupTablesList {
+		var count int
+		s.db.QueryCount(t.Name, &count)
+		status := "pending"
+		if s.setupPopulating == t.Name {
+			status = "populating"
+		} else if count > 0 || s.setupPopulated[t.Name] {
+			status = "done"
+		}
+		tables = append(tables, tableStatus{
+			Name:   t.Name,
+			Label:  t.Label,
+			Total:  count,
+			Status: status,
+		})
+	}
+
+	jsonResponse(w, map[string]interface{}{
+		"setup_complete": s.cfg.SetupComplete,
+		"tables":         tables,
+		"populating":     s.setupPopulating,
+	})
+}
+
+func (s *Server) handleSetupPopulate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		jsonError(w, "POST only", 405)
+		return
+	}
+
+	if s.cfg.SetupComplete {
+		jsonError(w, "Setup ya completado", 400)
+		return
+	}
+
+	if s.setupPopulating != "" {
+		jsonError(w, "Ya hay una tabla en proceso: "+s.setupPopulating, 409)
+		return
+	}
+
+	var req struct {
+		Table string `json:"table"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, "JSON invalido", 400)
+		return
+	}
+
+	diffFn := s.getDiffFunc(req.Table)
+	if diffFn == nil {
+		jsonError(w, "Tabla desconocida: "+req.Table, 400)
+		return
+	}
+
+	s.setupPopulating = req.Table
+	s.db.AddLog("info", "SETUP", "Poblando tabla: "+req.Table)
+
+	go func() {
+		diffFn()
+		var count int
+		s.db.QueryCount(req.Table, &count)
+		s.setupPopulated[req.Table] = true
+		s.setupPopulating = ""
+		data, _ := json.Marshal(map[string]interface{}{"table": req.Table, "count": count})
+		sseNotify("setup_table_done", string(data))
+		s.db.AddLog("info", "SETUP", fmt.Sprintf("Tabla %s poblada: %d registros", req.Table, count))
+	}()
+
+	jsonResponse(w, map[string]interface{}{"status": "started", "table": req.Table})
+}
+
+func (s *Server) handleSetupComplete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		jsonError(w, "POST only", 405)
+		return
+	}
+
+	if s.setupPopulating != "" {
+		jsonError(w, "Hay una tabla en proceso: "+s.setupPopulating, 409)
+		return
+	}
+
+	s.cfg.SetupComplete = true
+	if err := s.cfg.Save("config.json"); err != nil {
+		jsonError(w, "Error guardando config: "+err.Error(), 500)
+		return
+	}
+
+	s.db.AddLog("info", "SETUP", "Setup wizard completado — sync loops iniciados")
+	go s.startSyncLoop()
+	sseNotify("setup_complete", "{}")
+
+	jsonResponse(w, map[string]string{"status": "ok"})
 }
 
 // ==================== DIFF ====================
@@ -506,9 +958,9 @@ func (s *Server) diffClientes() {
 }
 
 func (s *Server) diffProductos() {
-	productos, err := parsers.ParseProductos(s.cfg.Siigo.DataPath)
+	productos, year, err := parsers.ParseInventario(s.cfg.Siigo.DataPath)
 	if err != nil {
-		s.db.AddLog("error", "Z06CP", "Error parseando: "+err.Error())
+		s.db.AddLog("error", "Z04", "Error parseando inventario: "+err.Error())
 		return
 	}
 
@@ -516,12 +968,12 @@ func (s *Server) diffProductos() {
 	currentKeys := make(map[string]bool, len(productos))
 
 	for _, p := range productos {
-		key := p.Comprobante + "-" + p.Secuencia
-		if key == "-" {
+		key := p.Codigo
+		if key == "" {
 			key = p.Hash
 		}
 		currentKeys[key] = true
-		action := s.db.UpsertProduct(key, p.Nombre, p.Comprobante, p.Secuencia, p.TipoTercero, p.Grupo, p.CuentaContable, p.Fecha, p.TipoMov, p.Hash)
+		action := s.db.UpsertProduct(key, p.Nombre, p.NombreCorto, p.Grupo, p.Referencia, p.Empresa, p.Hash)
 		switch action {
 		case "add":
 			adds++
@@ -531,7 +983,8 @@ func (s *Server) diffProductos() {
 	}
 
 	deletes := s.db.MarkDeletedProducts(currentKeys)
-	s.db.AddLog("info", "Z06CP", fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(productos)))
+	source := "Z04" + year
+	s.db.AddLog("info", source, fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(productos)))
 	s.bot.NotifyChangesDetected("Productos", adds, edits, deletes)
 }
 
@@ -552,11 +1005,16 @@ func (s *Server) diffMovimientos() {
 		}
 		currentKeys[key] = true
 
-		fecha := m.Fecha
-		if len(fecha) == 8 {
-			fecha = fecha[:4] + "-" + fecha[4:6] + "-" + fecha[6:8]
+		desc := m.Descripcion
+		if m.Descripcion2 != "" {
+			if desc != "" {
+				desc += " | " + m.Descripcion2
+			} else {
+				desc = m.Descripcion2
+			}
 		}
-		action := s.db.UpsertMovement(key, m.TipoComprobante, m.Empresa, m.NumeroDoc, fecha, m.NitTercero, m.CuentaContable, m.Descripcion, m.Valor, m.TipoMov, m.Hash)
+		// Z49 only has tipo, numero, nombre, descripcion. No fecha/cuenta/valor/tipoMov.
+		action := s.db.UpsertMovement(key, m.TipoComprobante, m.Empresa, m.NumeroDoc, "", m.NombreTercero, "", desc, "", "", m.Hash)
 		switch action {
 		case "add":
 			adds++
@@ -571,45 +1029,512 @@ func (s *Server) diffMovimientos() {
 }
 
 func (s *Server) diffCartera() {
-	for _, file := range s.cfg.Sync.Files {
-		if len(file) < 3 || file[:3] != "Z09" {
-			continue
-		}
-		anio := ""
-		if len(file) > 3 {
-			anio = file[3:]
-		}
-
-		cartera, err := parsers.ParseCartera(s.cfg.Siigo.DataPath, anio)
-		if err != nil {
-			s.db.AddLog("error", file, "Error parseando: "+err.Error())
-			continue
-		}
-
-		adds, edits := 0, 0
-		currentKeys := make(map[string]bool, len(cartera))
-
-		for _, c := range cartera {
-			key := file + "-" + c.TipoRegistro + "-" + c.Empresa + "-" + c.Secuencia
-			currentKeys[key] = true
-
-			fecha := c.Fecha
-			if len(fecha) == 8 {
-				fecha = fecha[:4] + "-" + fecha[4:6] + "-" + fecha[6:8]
-			}
-			action := s.db.UpsertCartera(key, c.TipoRegistro, c.Empresa, c.Secuencia, c.TipoDoc, c.NitTercero, c.CuentaContable, fecha, c.Descripcion, c.TipoMov, c.Hash)
-			switch action {
-			case "add":
-				adds++
-			case "edit":
-				edits++
-			}
-		}
-
-		deletes := s.db.MarkDeletedCartera(currentKeys)
-		s.db.AddLog("info", file, fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(cartera)))
-		s.bot.NotifyChangesDetected("Cartera ("+file+")", adds, edits, deletes)
+	cartera, year, err := parsers.ParseCarteraLatest(s.cfg.Siigo.DataPath)
+	if err != nil {
+		s.db.AddLog("error", "Z09", "Error parseando cartera: "+err.Error())
+		return
 	}
+
+	adds, edits := 0, 0
+	currentKeys := make(map[string]bool, len(cartera))
+	file := "Z09" + year
+
+	for _, c := range cartera {
+		key := file + "-" + c.TipoRegistro + "-" + c.Empresa + "-" + c.Secuencia
+		currentKeys[key] = true
+
+		fecha := c.Fecha
+		if len(fecha) == 8 {
+			fecha = fecha[:4] + "-" + fecha[4:6] + "-" + fecha[6:8]
+		}
+		action := s.db.UpsertCartera(key, c.TipoRegistro, c.Empresa, c.Secuencia, c.TipoDoc, c.NitTercero, c.CuentaContable, fecha, c.Descripcion, c.TipoMov, c.Hash)
+		switch action {
+		case "add":
+			adds++
+		case "edit":
+			edits++
+		}
+	}
+
+	deletes := s.db.MarkDeletedCartera(currentKeys)
+	s.db.AddLog("info", file, fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(cartera)))
+	s.bot.NotifyChangesDetected("Cartera ("+file+")", adds, edits, deletes)
+}
+
+func (s *Server) diffPlanCuentas() {
+	cuentas, year, err := parsers.ParsePlanCuentas(s.cfg.Siigo.DataPath)
+	if err != nil {
+		s.db.AddLog("error", "Z03", "Error parseando plan de cuentas: "+err.Error())
+		return
+	}
+
+	adds, edits := 0, 0
+	currentKeys := make(map[string]bool, len(cuentas))
+
+	for _, c := range cuentas {
+		if c.CodigoCuenta == "" {
+			continue
+		}
+		currentKeys[c.CodigoCuenta] = true
+		action := s.db.UpsertPlanCuenta(c.CodigoCuenta, c.Nombre, c.Empresa, c.Naturaleza, c.Hash, c.Activa, c.Auxiliar)
+		switch action {
+		case "add":
+			adds++
+		case "edit":
+			edits++
+		}
+	}
+
+	deletes := s.db.MarkDeletedPlanCuentas(currentKeys)
+	source := "Z03" + year
+	s.db.AddLog("info", source, fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(cuentas)))
+	s.bot.NotifyChangesDetected("Plan Cuentas", adds, edits, deletes)
+}
+
+func (s *Server) diffActivosFijos() {
+	activos, year, err := parsers.ParseActivosFijos(s.cfg.Siigo.DataPath)
+	if err != nil {
+		s.db.AddLog("error", "Z27", "Error parseando activos fijos: "+err.Error())
+		return
+	}
+
+	adds, edits := 0, 0
+	currentKeys := make(map[string]bool, len(activos))
+
+	for _, a := range activos {
+		if a.Codigo == "" {
+			continue
+		}
+		currentKeys[a.Codigo] = true
+		action := s.db.UpsertActivoFijo(a.Codigo, a.Nombre, a.Empresa, a.NitResponsable, a.FechaAdquisicion, a.Hash)
+		switch action {
+		case "add":
+			adds++
+		case "edit":
+			edits++
+		}
+	}
+
+	deletes := s.db.MarkDeletedActivosFijos(currentKeys)
+	source := "Z27" + year
+	s.db.AddLog("info", source, fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(activos)))
+	s.bot.NotifyChangesDetected("Activos Fijos", adds, edits, deletes)
+}
+
+func (s *Server) diffSaldosTerceros() {
+	saldos, year, err := parsers.ParseSaldosTerceros(s.cfg.Siigo.DataPath)
+	if err != nil {
+		s.db.AddLog("error", "Z25", "Error parseando saldos terceros: "+err.Error())
+		return
+	}
+
+	adds, edits := 0, 0
+	currentKeys := make(map[string]bool, len(saldos))
+
+	for _, st := range saldos {
+		key := st.CuentaContable + "-" + st.NitTercero
+		if key == "-" {
+			continue
+		}
+		currentKeys[key] = true
+		action := s.db.UpsertSaldoTercero(key, st.CuentaContable, st.NitTercero, st.Empresa, st.Hash, st.SaldoAnterior, st.Debito, st.Credito, st.SaldoFinal)
+		switch action {
+		case "add":
+			adds++
+		case "edit":
+			edits++
+		}
+	}
+
+	deletes := s.db.MarkDeletedSaldosTerceros(currentKeys)
+	source := "Z25" + year
+	s.db.AddLog("info", source, fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(saldos)))
+	s.bot.NotifyChangesDetected("Saldos Terceros", adds, edits, deletes)
+}
+
+func (s *Server) diffSaldosConsolidados() {
+	saldos, year, err := parsers.ParseSaldosConsolidados(s.cfg.Siigo.DataPath)
+	if err != nil {
+		s.db.AddLog("error", "Z28", "Error parseando saldos consolidados: "+err.Error())
+		return
+	}
+
+	adds, edits := 0, 0
+	currentKeys := make(map[string]bool, len(saldos))
+
+	for _, sc := range saldos {
+		if sc.CuentaContable == "" {
+			continue
+		}
+		currentKeys[sc.CuentaContable] = true
+		action := s.db.UpsertSaldoConsolidado(sc.CuentaContable, sc.Empresa, sc.Hash, sc.SaldoAnterior, sc.Debito, sc.Credito, sc.SaldoFinal)
+		switch action {
+		case "add":
+			adds++
+		case "edit":
+			edits++
+		}
+	}
+
+	deletes := s.db.MarkDeletedSaldosConsolidados(currentKeys)
+	source := "Z28" + year
+	s.db.AddLog("info", source, fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(saldos)))
+	s.bot.NotifyChangesDetected("Saldos Consolidados", adds, edits, deletes)
+}
+
+func (s *Server) diffDocumentos() {
+	docs, year, err := parsers.ParseDocumentos(s.cfg.Siigo.DataPath)
+	if err != nil {
+		s.db.AddLog("error", "Z11", "Error parseando documentos: "+err.Error())
+		return
+	}
+
+	adds, edits := 0, 0
+	currentKeys := make(map[string]bool, len(docs))
+
+	for _, d := range docs {
+		key := d.TipoComprobante + "-" + d.CodigoComp + "-" + d.Secuencia + "-" + d.Hash[:8]
+		currentKeys[key] = true
+		fecha := d.Fecha
+		if len(fecha) == 8 {
+			fecha = fecha[:4] + "-" + fecha[4:6] + "-" + fecha[6:8]
+		}
+		action := s.db.UpsertDocumento(key, d.TipoComprobante, d.CodigoComp, d.Secuencia, d.NitTercero, d.CuentaContable, d.ProductoRef, d.Bodega, d.CentroCosto, fecha, d.Descripcion, d.TipoMov, d.Referencia, d.Hash)
+		switch action {
+		case "add":
+			adds++
+		case "edit":
+			edits++
+		}
+	}
+
+	deletes := s.db.MarkDeletedDocumentos(currentKeys)
+	source := "Z11" + year
+	s.db.AddLog("info", source, fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(docs)))
+	s.bot.NotifyChangesDetected("Documentos", adds, edits, deletes)
+}
+
+func (s *Server) diffTercerosAmpliados() {
+	terceros, year, err := parsers.ParseTercerosAmpliados(s.cfg.Siigo.DataPath)
+	if err != nil {
+		s.db.AddLog("error", "Z08A", "Error parseando terceros ampliados: "+err.Error())
+		return
+	}
+
+	adds, edits := 0, 0
+	currentKeys := make(map[string]bool, len(terceros))
+
+	for _, t := range terceros {
+		if t.Nit == "" {
+			continue
+		}
+		currentKeys[t.Nit] = true
+		action := s.db.UpsertTerceroAmpliado(t.Nit, t.Nombre, t.Empresa, t.TipoPersona, t.RepresentanteLegal, t.Direccion, t.Email, t.Hash)
+		switch action {
+		case "add":
+			adds++
+		case "edit":
+			edits++
+		}
+	}
+
+	deletes := s.db.MarkDeletedTercerosAmpliados(currentKeys)
+	source := "Z08A" + year
+	s.db.AddLog("info", source, fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(terceros)))
+	s.bot.NotifyChangesDetected("Terceros Ampliados", adds, edits, deletes)
+}
+
+func (s *Server) diffTransaccionesDetalle() {
+	items, err := parsers.ParseTransaccionesDetalle(s.cfg.Siigo.DataPath)
+	if err != nil {
+		s.db.AddLog("error", "Z07T", "Error parseando transacciones detalle: "+err.Error())
+		return
+	}
+
+	adds, edits := 0, 0
+	currentKeys := make(map[string]bool, len(items))
+
+	for _, t := range items {
+		key := t.TipoComprobante + "-" + t.Empresa + "-" + t.Secuencia + "-" + t.CuentaContable
+		if key == "---" {
+			key = t.Hash
+		}
+		currentKeys[key] = true
+		action := s.db.UpsertTransaccionDetalle(key, t.TipoComprobante, t.Empresa, t.Secuencia, t.NitTercero, t.CuentaContable, t.FechaDocumento, t.FechaVencimiento, t.TipoMovimiento, t.Referencia, t.Hash, t.Valor)
+		switch action {
+		case "add":
+			adds++
+		case "edit":
+			edits++
+		}
+	}
+
+	deletes := s.db.MarkDeletedTransaccionesDetalle(currentKeys)
+	s.db.AddLog("info", "Z07T", fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(items)))
+}
+
+func (s *Server) diffPeriodosContables() {
+	items, year, err := parsers.ParsePeriodos(s.cfg.Siigo.DataPath)
+	if err != nil {
+		s.db.AddLog("error", "Z26", "Error parseando periodos contables: "+err.Error())
+		return
+	}
+
+	adds, edits := 0, 0
+	currentKeys := make(map[string]bool, len(items))
+
+	for _, p := range items {
+		key := p.Empresa + "-" + p.NumeroPeriodo
+		if key == "-" {
+			key = p.Hash
+		}
+		currentKeys[key] = true
+		action := s.db.UpsertPeriodoContable(key, p.Empresa, p.NumeroPeriodo, p.FechaInicio, p.FechaFin, p.Estado, p.Hash, p.Saldo1, p.Saldo2, p.Saldo3)
+		switch action {
+		case "add":
+			adds++
+		case "edit":
+			edits++
+		}
+	}
+
+	deletes := s.db.MarkDeletedPeriodosContables(currentKeys)
+	source := "Z26" + year
+	s.db.AddLog("info", source, fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(items)))
+}
+
+func (s *Server) diffCondicionesPago() {
+	items, year, err := parsers.ParseCondicionesPago(s.cfg.Siigo.DataPath)
+	if err != nil {
+		s.db.AddLog("error", "Z05", "Error parseando condiciones pago: "+err.Error())
+		return
+	}
+
+	adds, edits := 0, 0
+	currentKeys := make(map[string]bool, len(items))
+
+	for _, c := range items {
+		key := c.Tipo + "-" + c.Empresa + "-" + c.Secuencia + "-" + c.NIT
+		if key == "---" {
+			key = c.Hash
+		}
+		currentKeys[key] = true
+		action := s.db.UpsertCondicionPago(key, c.Tipo, c.Empresa, c.Secuencia, c.TipoDoc, c.Fecha, c.NIT, c.TipoSecundario, c.FechaRegistro, c.Hash, c.Valor)
+		switch action {
+		case "add":
+			adds++
+		case "edit":
+			edits++
+		}
+	}
+
+	deletes := s.db.MarkDeletedCondicionesPago(currentKeys)
+	source := "Z05" + year
+	s.db.AddLog("info", source, fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(items)))
+}
+
+func (s *Server) diffLibrosAuxiliares() {
+	items, year, err := parsers.ParseLibrosAuxiliares(s.cfg.Siigo.DataPath)
+	if err != nil {
+		s.db.AddLog("error", "Z07", "Error parseando libros auxiliares: "+err.Error())
+		return
+	}
+
+	adds, edits := 0, 0
+	currentKeys := make(map[string]bool, len(items))
+
+	for _, la := range items {
+		key := la.TipoComprobante + "-" + la.Empresa + "-" + la.CuentaContable + "-" + la.NitTercero + "-" + la.FechaDocumento
+		if key == "----" {
+			key = la.Hash
+		}
+		currentKeys[key] = true
+		action := s.db.UpsertLibroAuxiliar(key, la.Empresa, la.CuentaContable, la.TipoComprobante, la.CodigoComprobante, la.FechaDocumento, la.NitTercero, la.Hash, la.Saldo, la.Debito, la.Credito)
+		switch action {
+		case "add":
+			adds++
+		case "edit":
+			edits++
+		}
+	}
+
+	deletes := s.db.MarkDeletedLibrosAuxiliares(currentKeys)
+	source := "Z07" + year
+	s.db.AddLog("info", source, fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(items)))
+}
+
+func (s *Server) diffCodigosDane() {
+	items, err := parsers.ParseDane(s.cfg.Siigo.DataPath)
+	if err != nil {
+		s.db.AddLog("error", "ZDANE", "Error parseando codigos DANE: "+err.Error())
+		return
+	}
+
+	adds, edits := 0, 0
+	currentKeys := make(map[string]bool, len(items))
+
+	for _, d := range items {
+		if d.Codigo == "" {
+			continue
+		}
+		currentKeys[d.Codigo] = true
+		action := s.db.UpsertCodigoDane(d.Codigo, d.Nombre, d.Hash)
+		switch action {
+		case "add":
+			adds++
+		case "edit":
+			edits++
+		}
+	}
+
+	deletes := s.db.MarkDeletedCodigosDane(currentKeys)
+	s.db.AddLog("info", "ZDANE", fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(items)))
+}
+
+func (s *Server) diffActividadesICA() {
+	items, err := parsers.ParseICA(s.cfg.Siigo.DataPath)
+	if err != nil {
+		s.db.AddLog("error", "ZICA", "Error parseando actividades ICA: "+err.Error())
+		return
+	}
+
+	adds, edits := 0, 0
+	currentKeys := make(map[string]bool, len(items))
+
+	for _, a := range items {
+		if a.Codigo == "" {
+			continue
+		}
+		currentKeys[a.Codigo] = true
+		action := s.db.UpsertActividadICA(a.Codigo, a.Nombre, a.Tarifa, a.Hash)
+		switch action {
+		case "add":
+			adds++
+		case "edit":
+			edits++
+		}
+	}
+
+	deletes := s.db.MarkDeletedActividadesICA(currentKeys)
+	s.db.AddLog("info", "ZICA", fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(items)))
+}
+
+func (s *Server) diffConceptosPILA() {
+	items, err := parsers.ParsePILA(s.cfg.Siigo.DataPath)
+	if err != nil {
+		s.db.AddLog("error", "ZPILA", "Error parseando conceptos PILA: "+err.Error())
+		return
+	}
+
+	adds, edits := 0, 0
+	currentKeys := make(map[string]bool, len(items))
+
+	for _, p := range items {
+		key := p.Tipo + "-" + p.Fondo + "-" + p.Concepto
+		if key == "--" {
+			key = p.Hash
+		}
+		currentKeys[key] = true
+		action := s.db.UpsertConceptoPILA(key, p.Tipo, p.Fondo, p.Concepto, p.Flags, p.TipoBase, p.BaseCalculo, p.Hash)
+		switch action {
+		case "add":
+			adds++
+		case "edit":
+			edits++
+		}
+	}
+
+	deletes := s.db.MarkDeletedConceptosPILA(currentKeys)
+	s.db.AddLog("info", "ZPILA", fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(items)))
+}
+
+func (s *Server) diffActivosFijosDetalle() {
+	items, year, err := parsers.ParseActivosFijosDetalle(s.cfg.Siigo.DataPath)
+	if err != nil {
+		s.db.AddLog("error", "Z27D", "Error parseando activos fijos detalle: "+err.Error())
+		return
+	}
+
+	adds, edits := 0, 0
+	currentKeys := make(map[string]bool, len(items))
+
+	for _, a := range items {
+		key := a.Grupo + "-" + a.Secuencia
+		if key == "-" {
+			key = a.Hash
+		}
+		currentKeys[key] = true
+		action := s.db.UpsertActivoFijoDetalle(key, a.Grupo, a.Secuencia, a.Nombre, a.NitResponsable, a.Codigo, a.Fecha, a.Hash, a.ValorCompra)
+		switch action {
+		case "add":
+			adds++
+		case "edit":
+			edits++
+		}
+	}
+
+	deletes := s.db.MarkDeletedActivosFijosDetalle(currentKeys)
+	source := "Z27D" + year
+	s.db.AddLog("info", source, fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(items)))
+}
+
+func (s *Server) diffAuditTrailTerceros() {
+	items, year, err := parsers.ParseAuditTrailTerceros(s.cfg.Siigo.DataPath)
+	if err != nil {
+		s.db.AddLog("error", "Z11N", "Error parseando audit trail terceros: "+err.Error())
+		return
+	}
+
+	adds, edits := 0, 0
+	currentKeys := make(map[string]bool, len(items))
+
+	for _, at := range items {
+		key := at.NitTercero + "-" + at.Timestamp
+		if key == "-" {
+			key = at.Hash
+		}
+		currentKeys[key] = true
+		action := s.db.UpsertAuditTrailTercero(key, at.FechaCambio, at.NitTercero, at.Timestamp, at.Usuario, at.FechaPeriodo, at.TipoDoc, at.Nombre, at.NitRepresentante, at.NombreRepresentante, at.Hash)
+		switch action {
+		case "add":
+			adds++
+		case "edit":
+			edits++
+		}
+	}
+
+	deletes := s.db.MarkDeletedAuditTrailTerceros(currentKeys)
+	source := "Z11N" + year
+	s.db.AddLog("info", source, fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(items)))
+}
+
+func (s *Server) diffClasificacionCuentas() {
+	items, year, err := parsers.ParseClasificacionCuentas(s.cfg.Siigo.DataPath)
+	if err != nil {
+		s.db.AddLog("error", "Z279CP", "Error parseando clasificacion cuentas: "+err.Error())
+		return
+	}
+
+	adds, edits := 0, 0
+	currentKeys := make(map[string]bool, len(items))
+
+	for _, c := range items {
+		if c.CodigoCuenta == "" {
+			continue
+		}
+		currentKeys[c.CodigoCuenta] = true
+		action := s.db.UpsertClasificacionCuenta(c.CodigoCuenta, c.CodigoGrupo, c.CodigoDetalle, c.Descripcion, c.Hash)
+		switch action {
+		case "add":
+			adds++
+		case "edit":
+			edits++
+		}
+	}
+
+	deletes := s.db.MarkDeletedClasificacionCuentas(currentKeys)
+	source := "Z279CP" + year
+	s.db.AddLog("info", source, fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(items)))
 }
 
 // ==================== SEND PENDING ====================
@@ -729,7 +1654,7 @@ func (s *Server) retryFailedRecords() {
 
 var (
 	cachedClientes    []parsers.Tercero
-	cachedProductos   []parsers.Producto
+	cachedProductos   []parsers.Inventario
 	cachedMovimientos []parsers.Movimiento
 	cachedCartera     []parsers.Cartera
 )
@@ -742,7 +1667,7 @@ func (s *Server) refreshCache(which string) {
 			cachedClientes = c
 		}
 	case "products":
-		p, err := parsers.ParseProductos(s.cfg.Siigo.DataPath)
+		p, _, err := parsers.ParseInventario(s.cfg.Siigo.DataPath)
 		if err == nil {
 			cachedProductos = p
 		}
@@ -834,6 +1759,89 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) handleAllowEditDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "POST" {
+		var body struct {
+			Enabled bool `json:"enabled"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			jsonError(w, err.Error(), 400)
+			return
+		}
+		s.cfg.AllowEditDelete = body.Enabled
+		if err := s.cfg.Save("config.json"); err != nil {
+			jsonError(w, err.Error(), 500)
+			return
+		}
+		s.db.AddLog("info", "CONFIG", fmt.Sprintf("Edicion/eliminacion de registros: %v", body.Enabled))
+		jsonResponse(w, map[string]interface{}{"status": "ok", "enabled": body.Enabled})
+		return
+	}
+	jsonResponse(w, map[string]interface{}{"enabled": s.cfg.AllowEditDelete})
+}
+
+func (s *Server) handleRecord(w http.ResponseWriter, r *http.Request) {
+	if !s.cfg.AllowEditDelete {
+		jsonError(w, "Edicion/eliminacion de registros no esta habilitada", 403)
+		return
+	}
+
+	table := r.URL.Query().Get("table")
+	idStr := r.URL.Query().Get("id")
+	if table == "" || idStr == "" {
+		jsonError(w, "table e id son requeridos", 400)
+		return
+	}
+	id := int64(0)
+	fmt.Sscanf(idStr, "%d", &id)
+	if id == 0 {
+		jsonError(w, "id invalido", 400)
+		return
+	}
+
+	switch r.Method {
+	case "GET":
+		record, err := s.db.GetRecordByID(table, id)
+		if err != nil {
+			jsonError(w, err.Error(), 404)
+			return
+		}
+		jsonResponse(w, record)
+
+	case "PUT":
+		var body struct {
+			Fields map[string]interface{} `json:"fields"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			jsonError(w, err.Error(), 400)
+			return
+		}
+		// Prevent updating internal fields
+		for _, blocked := range []string{"id", "hash", "sync_status", "sync_action", "sync_error", "updated_at", "synced_at"} {
+			delete(body.Fields, blocked)
+		}
+		if err := s.db.UpdateRecord(table, id, body.Fields); err != nil {
+			jsonError(w, err.Error(), 500)
+			return
+		}
+		s.db.AddLog("info", "EDIT", fmt.Sprintf("Registro %d editado en %s", id, table))
+		s.db.AddAudit(s.getUsernameFromRequest(r), "edit_record", table, fmt.Sprintf("%d", id), "")
+		jsonResponse(w, map[string]string{"status": "ok"})
+
+	case "DELETE":
+		if err := s.db.DeleteRecord(table, id); err != nil {
+			jsonError(w, err.Error(), 500)
+			return
+		}
+		s.db.AddLog("info", "DELETE", fmt.Sprintf("Registro %d eliminado de %s", id, table))
+		s.db.AddAudit(s.getUsernameFromRequest(r), "delete_record", table, fmt.Sprintf("%d", id), "")
+		jsonResponse(w, map[string]string{"status": "ok"})
+
+	default:
+		jsonError(w, "Metodo no soportado", 405)
+	}
+}
+
 func maskSecret(s string) string {
 	if len(s) <= 3 {
 		return "***"
@@ -853,7 +1861,7 @@ type ISAMPreview struct {
 }
 
 func (s *Server) handleISAMInfo(w http.ResponseWriter, r *http.Request) {
-	files := []string{"Z17", "Z06", "Z06CP", "Z49"}
+	files := []string{"Z17", "Z06", "Z49"}
 	var result []ISAMPreview
 	for _, f := range files {
 		path := s.cfg.Siigo.DataPath + f
@@ -931,6 +1939,60 @@ func (s *Server) handleCartera(w http.ResponseWriter, r *http.Request) {
 	limit := 50
 	offset := (page - 1) * limit
 	records, total := s.db.GetCarteraRecords(limit, offset, search)
+	jsonResponse(w, map[string]interface{}{"data": records, "total": total})
+}
+
+func (s *Server) handlePlanCuentas(w http.ResponseWriter, r *http.Request) {
+	page := getQueryInt(r, "page", 1)
+	search := r.URL.Query().Get("search")
+	limit := 50
+	offset := (page - 1) * limit
+	records, total := s.db.GetPlanCuentas(limit, offset, search)
+	jsonResponse(w, map[string]interface{}{"data": records, "total": total})
+}
+
+func (s *Server) handleActivosFijos(w http.ResponseWriter, r *http.Request) {
+	page := getQueryInt(r, "page", 1)
+	search := r.URL.Query().Get("search")
+	limit := 50
+	offset := (page - 1) * limit
+	records, total := s.db.GetActivosFijos(limit, offset, search)
+	jsonResponse(w, map[string]interface{}{"data": records, "total": total})
+}
+
+func (s *Server) handleSaldosTerceros(w http.ResponseWriter, r *http.Request) {
+	page := getQueryInt(r, "page", 1)
+	search := r.URL.Query().Get("search")
+	limit := 50
+	offset := (page - 1) * limit
+	records, total := s.db.GetSaldosTerceros(limit, offset, search)
+	jsonResponse(w, map[string]interface{}{"data": records, "total": total})
+}
+
+func (s *Server) handleSaldosConsolidados(w http.ResponseWriter, r *http.Request) {
+	page := getQueryInt(r, "page", 1)
+	search := r.URL.Query().Get("search")
+	limit := 50
+	offset := (page - 1) * limit
+	records, total := s.db.GetSaldosConsolidados(limit, offset, search)
+	jsonResponse(w, map[string]interface{}{"data": records, "total": total})
+}
+
+func (s *Server) handleDocumentos(w http.ResponseWriter, r *http.Request) {
+	page := getQueryInt(r, "page", 1)
+	search := r.URL.Query().Get("search")
+	limit := 50
+	offset := (page - 1) * limit
+	records, total := s.db.GetDocumentos(limit, offset, search)
+	jsonResponse(w, map[string]interface{}{"data": records, "total": total})
+}
+
+func (s *Server) handleTercerosAmpliados(w http.ResponseWriter, r *http.Request) {
+	page := getQueryInt(r, "page", 1)
+	search := r.URL.Query().Get("search")
+	limit := 50
+	offset := (page - 1) * limit
+	records, total := s.db.GetTercerosAmpliados(limit, offset, search)
 	jsonResponse(w, map[string]interface{}{"data": records, "total": total})
 }
 
@@ -1071,11 +2133,19 @@ func (s *Server) handleClearDatabase(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "POST only", 405)
 		return
 	}
+	// Reset setup_complete so the wizard reappears
+	s.cfg.SetupComplete = false
+	s.setupPopulated = make(map[string]bool)
+	if err := s.cfg.Save("config.json"); err != nil {
+		s.db.AddLog("warn", "CONFIG", "Error resetting setup_complete: "+err.Error())
+	}
+
 	if err := s.db.ClearAll(); err != nil {
 		jsonError(w, err.Error(), 500)
 		return
 	}
 	s.db.AddLog("warning", "APP", "Base de datos vaciada por el usuario")
+	s.db.AddAudit(s.getUsernameFromRequest(r), "clear_database", "", "", "All data tables cleared")
 	s.bot.NotifyDBCleared()
 	jsonResponse(w, map[string]string{"status": "ok"})
 }
@@ -1218,10 +2288,17 @@ func (s *Server) handlePublicAPIConfig(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleTelegramConfig(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "POST" {
 		var body struct {
-			Enabled  *bool  `json:"enabled"`
-			BotToken string `json:"bot_token"`
-			ChatID   int64  `json:"chat_id"`
-			ExecPin  string `json:"exec_pin"`
+			Enabled            *bool  `json:"enabled"`
+			BotToken           string `json:"bot_token"`
+			ChatID             int64  `json:"chat_id"`
+			ExecPin            string `json:"exec_pin"`
+			NotifyServerStart  *bool  `json:"notify_server_start"`
+			NotifySyncComplete *bool  `json:"notify_sync_complete"`
+			NotifySyncErrors   *bool  `json:"notify_sync_errors"`
+			NotifyLoginFailed  *bool  `json:"notify_login_failed"`
+			NotifyChanges      *bool  `json:"notify_changes"`
+			NotifyDBCleared    *bool  `json:"notify_db_cleared"`
+			NotifyMaxRetries   *bool  `json:"notify_max_retries"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			jsonError(w, "JSON invalido", 400)
@@ -1238,6 +2315,27 @@ func (s *Server) handleTelegramConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		if body.ExecPin != "" {
 			s.cfg.Telegram.ExecPin = body.ExecPin
+		}
+		if body.NotifyServerStart != nil {
+			s.cfg.Telegram.NotifyServerStart = body.NotifyServerStart
+		}
+		if body.NotifySyncComplete != nil {
+			s.cfg.Telegram.NotifySyncComplete = body.NotifySyncComplete
+		}
+		if body.NotifySyncErrors != nil {
+			s.cfg.Telegram.NotifySyncErrors = body.NotifySyncErrors
+		}
+		if body.NotifyLoginFailed != nil {
+			s.cfg.Telegram.NotifyLoginFailed = body.NotifyLoginFailed
+		}
+		if body.NotifyChanges != nil {
+			s.cfg.Telegram.NotifyChanges = body.NotifyChanges
+		}
+		if body.NotifyDBCleared != nil {
+			s.cfg.Telegram.NotifyDBCleared = body.NotifyDBCleared
+		}
+		if body.NotifyMaxRetries != nil {
+			s.cfg.Telegram.NotifyMaxRetries = body.NotifyMaxRetries
 		}
 		if err := s.cfg.Save("config.json"); err != nil {
 			jsonError(w, err.Error(), 500)
@@ -1257,10 +2355,17 @@ func (s *Server) handleTelegramConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jsonResponse(w, map[string]interface{}{
-		"enabled":       s.cfg.Telegram.Enabled,
-		"bot_token":     maskSecret(s.cfg.Telegram.BotToken),
-		"chat_id":       s.cfg.Telegram.ChatID,
-		"has_exec_pin":  s.cfg.Telegram.ExecPin != "",
+		"enabled":               s.cfg.Telegram.Enabled,
+		"bot_token":             maskSecret(s.cfg.Telegram.BotToken),
+		"chat_id":               s.cfg.Telegram.ChatID,
+		"has_exec_pin":          s.cfg.Telegram.ExecPin != "",
+		"notify_server_start":   s.cfg.Telegram.IsNotifyEnabled("server_start"),
+		"notify_sync_complete":  s.cfg.Telegram.IsNotifyEnabled("sync_complete"),
+		"notify_sync_errors":    s.cfg.Telegram.IsNotifyEnabled("sync_errors"),
+		"notify_login_failed":   s.cfg.Telegram.IsNotifyEnabled("login_failed"),
+		"notify_changes":        s.cfg.Telegram.IsNotifyEnabled("changes"),
+		"notify_db_cleared":     s.cfg.Telegram.IsNotifyEnabled("db_cleared"),
+		"notify_max_retries":    s.cfg.Telegram.IsNotifyEnabled("max_retries"),
 	})
 }
 
@@ -1277,12 +2382,87 @@ func (s *Server) handleTelegramTest(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, map[string]string{"status": "ok"})
 }
 
+// ==================== SQL EXPLORER (read-only) ====================
+
+var allowedSQLPrefixes = []string{"SELECT ", "PRAGMA ", "EXPLAIN "}
+
+func isReadOnlySQL(query string) bool {
+	upper := strings.ToUpper(strings.TrimSpace(query))
+	for _, prefix := range allowedSQLPrefixes {
+		if strings.HasPrefix(upper, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		jsonError(w, "POST only", 405)
+		return
+	}
+
+	var req struct {
+		Query  string `json:"query"`
+		Limit  int    `json:"limit"`
+		Offset int    `json:"offset"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, "Invalid JSON", 400)
+		return
+	}
+
+	query := strings.TrimSpace(req.Query)
+	if query == "" {
+		jsonError(w, "Query vacia", 400)
+		return
+	}
+
+	if !isReadOnlySQL(query) {
+		jsonError(w, "Solo se permiten consultas SELECT, PRAGMA o EXPLAIN", 403)
+		return
+	}
+
+	// Enforce limits
+	if req.Limit <= 0 || req.Limit > 500 {
+		req.Limit = 20
+	}
+	if req.Offset < 0 {
+		req.Offset = 0
+	}
+
+	cols, data, total, err := s.db.QueryReadOnly(query, req.Limit, req.Offset)
+	if err != nil {
+		jsonError(w, "Error en query: "+err.Error(), 400)
+		return
+	}
+
+	jsonResponse(w, map[string]interface{}{
+		"columns": cols,
+		"data":    data,
+		"total":   total,
+		"limit":   req.Limit,
+		"offset":  req.Offset,
+	})
+}
+
 // ==================== PUBLIC API v1 (JWT) ====================
 
 func (s *Server) jwtMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !s.cfg.PublicAPI.Enabled {
 			jsonError(w, "API deshabilitada", 403)
+			return
+		}
+
+		// Rate limiting by IP
+		ip := r.RemoteAddr
+		if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
+			ip = strings.Split(fwd, ",")[0]
+		}
+		if !s.apiLimiter.Allow(strings.TrimSpace(ip)) {
+			w.Header().Set("Retry-After", "60")
+			jsonError(w, "Rate limit exceeded", 429)
 			return
 		}
 
@@ -1325,23 +2505,59 @@ func (s *Server) handleV1Auth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var body struct {
-		ApiKey string `json:"api_key"`
+		ApiKey   string `json:"api_key"`
+		Username string `json:"username"`
+		Password string `json:"password"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonError(w, "JSON invalido", 400)
 		return
 	}
 
-	if body.ApiKey != s.cfg.PublicAPI.ApiKey {
-		jsonError(w, "API key invalida", 401)
+	var authMethod string
+	var authUser string
+
+	if body.ApiKey != "" {
+		// Method 1: API key
+		if body.ApiKey != s.cfg.PublicAPI.ApiKey {
+			jsonError(w, "API key invalida", 401)
+			return
+		}
+		authMethod = "api_key"
+		authUser = "api_key"
+	} else if body.Username != "" && body.Password != "" {
+		// Method 2: Username/password (root + app_users)
+		authenticated := false
+		role := ""
+		if body.Username == s.cfg.Auth.Username && body.Password == s.cfg.Auth.Password {
+			authenticated = true
+			role = "root"
+		} else {
+			user, err := s.db.GetAppUser(body.Username)
+			if err == nil && s.db.CheckAppUserPassword(user, body.Password) && user.Active {
+				authenticated = true
+				role = user.Role
+			}
+		}
+		if !authenticated {
+			jsonError(w, "Credenciales incorrectas", 401)
+			return
+		}
+		authMethod = "credentials"
+		authUser = body.Username
+		_ = role // available for claims if needed
+	} else {
+		jsonError(w, "Enviar api_key o username+password", 400)
 		return
 	}
 
 	// Generate JWT valid for 24 hours
 	claims := jwt.MapClaims{
-		"iss": "siigo-sync",
-		"iat": time.Now().Unix(),
-		"exp": time.Now().Add(24 * time.Hour).Unix(),
+		"iss":    "siigo-sync",
+		"iat":    time.Now().Unix(),
+		"exp":    time.Now().Add(24 * time.Hour).Unix(),
+		"method": authMethod,
+		"user":   authUser,
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	tokenStr, err := token.SignedString([]byte(s.cfg.PublicAPI.JwtSecret))
@@ -1353,6 +2569,8 @@ func (s *Server) handleV1Auth(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, map[string]interface{}{
 		"token":      tokenStr,
 		"expires_in": 86400,
+		"method":     authMethod,
+		"user":       authUser,
 	})
 }
 
@@ -1398,6 +2616,787 @@ func (s *Server) handleV1Detail(table string) http.HandlerFunc {
 			return
 		}
 		jsonResponse(w, record)
+	}
+}
+
+// ==================== OData ENDPOINTS ====================
+
+// OData table metadata definitions
+var odataTables = map[string]struct {
+	EntityType string
+	KeyProp    string
+}{
+	"clients":               {EntityType: "Client", KeyProp: "nit"},
+	"products":              {EntityType: "Product", KeyProp: "code"},
+	"movements":             {EntityType: "Movement", KeyProp: "record_key"},
+	"cartera":               {EntityType: "Cartera", KeyProp: "record_key"},
+	"plan_cuentas":          {EntityType: "PlanCuenta", KeyProp: "codigo_cuenta"},
+	"activos_fijos":         {EntityType: "ActivoFijo", KeyProp: "record_key"},
+	"saldos_terceros":       {EntityType: "SaldoTercero", KeyProp: "record_key"},
+	"saldos_consolidados":   {EntityType: "SaldoConsolidado", KeyProp: "record_key"},
+	"documentos":            {EntityType: "Documento", KeyProp: "record_key"},
+	"terceros_ampliados":    {EntityType: "TerceroAmpliado", KeyProp: "record_key"},
+	"transacciones_detalle": {EntityType: "TransaccionDetalle", KeyProp: "record_key"},
+	"periodos_contables":    {EntityType: "PeriodoContable", KeyProp: "record_key"},
+	"condiciones_pago":      {EntityType: "CondicionPago", KeyProp: "record_key"},
+	"libros_auxiliares":     {EntityType: "LibroAuxiliar", KeyProp: "record_key"},
+	"codigos_dane":          {EntityType: "CodigoDane", KeyProp: "codigo"},
+	"actividades_ica":       {EntityType: "ActividadICA", KeyProp: "codigo"},
+	"conceptos_pila":        {EntityType: "ConceptoPILA", KeyProp: "record_key"},
+	"activos_fijos_detalle": {EntityType: "ActivoFijoDetalle", KeyProp: "record_key"},
+	"audit_trail_terceros":  {EntityType: "AuditTrailTercero", KeyProp: "record_key"},
+	"clasificacion_cuentas": {EntityType: "ClasificacionCuenta", KeyProp: "codigo_cuenta"},
+}
+
+// OData ordered table list (for consistent output, v1 API, and OData routing)
+var odataTableOrder = []string{
+	"clients", "products", "movements", "cartera",
+	"plan_cuentas", "activos_fijos", "saldos_terceros", "saldos_consolidados",
+	"documentos", "terceros_ampliados", "transacciones_detalle",
+	"periodos_contables", "condiciones_pago", "libros_auxiliares",
+	"codigos_dane", "actividades_ica", "conceptos_pila",
+	"activos_fijos_detalle", "audit_trail_terceros", "clasificacion_cuentas",
+}
+
+// OData relationships for Power BI auto-detection
+type odataRelation struct {
+	FromTable string // e.g. "movements"
+	FromProp  string // e.g. "nit_tercero"
+	ToTable   string // e.g. "clients"
+	ToProp    string // e.g. "nit"
+	NavName   string // navigation property name
+}
+
+var odataRelations = []odataRelation{
+	// Core tables
+	{"movements", "nit_tercero", "clients", "nit", "Client"},
+	{"cartera", "nit_tercero", "clients", "nit", "Client"},
+	{"cartera", "cuenta_contable", "plan_cuentas", "codigo_cuenta", "CuentaContable"},
+	{"saldos_terceros", "nit_tercero", "clients", "nit", "Client"},
+	{"saldos_terceros", "cuenta_contable", "plan_cuentas", "codigo_cuenta", "CuentaContable"},
+	{"saldos_consolidados", "cuenta_contable", "plan_cuentas", "codigo_cuenta", "CuentaContable"},
+	{"documentos", "nit_tercero", "clients", "nit", "Client"},
+	{"documentos", "cuenta_contable", "plan_cuentas", "codigo_cuenta", "CuentaContable"},
+	{"terceros_ampliados", "nit", "clients", "nit", "Client"},
+	{"activos_fijos", "nit_responsable", "clients", "nit", "Responsable"},
+	// New tables
+	{"transacciones_detalle", "nit_tercero", "clients", "nit", "Client"},
+	{"transacciones_detalle", "cuenta_contable", "plan_cuentas", "codigo_cuenta", "CuentaContable"},
+	{"condiciones_pago", "nit", "clients", "nit", "Client"},
+	{"libros_auxiliares", "nit_tercero", "clients", "nit", "Client"},
+	{"libros_auxiliares", "cuenta_contable", "plan_cuentas", "codigo_cuenta", "CuentaContable"},
+	{"activos_fijos_detalle", "nit_responsable", "clients", "nit", "Responsable"},
+	{"audit_trail_terceros", "nit_tercero", "clients", "nit", "Client"},
+	{"clasificacion_cuentas", "codigo_cuenta", "plan_cuentas", "codigo_cuenta", "CuentaContable"},
+}
+
+func (s *Server) handleODataServiceDoc(w http.ResponseWriter, r *http.Request) {
+	var sets []map[string]string
+	for _, table := range odataTableOrder {
+		sets = append(sets, map[string]string{"name": table, "url": table, "kind": "EntitySet"})
+	}
+	doc := map[string]interface{}{
+		"@odata.context": s.odataBaseURL(r) + "/$metadata",
+		"value":          sets,
+	}
+	w.Header().Set("Content-Type", "application/json;odata.metadata=minimal")
+	json.NewEncoder(w).Encode(doc)
+}
+
+func (s *Server) handleODataMetadata(w http.ResponseWriter, r *http.Request) {
+	// Return CSDL XML metadata
+	w.Header().Set("Content-Type", "application/xml")
+	xml := `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="SiigoSync" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+`
+	// Generate entity types from actual table columns
+	for _, table := range odataTableOrder {
+		meta := odataTables[table]
+		cols := s.db.GetTableColumns(table)
+		xml += fmt.Sprintf("      <EntityType Name=\"%s\">\n", meta.EntityType)
+		xml += fmt.Sprintf("        <Key><PropertyRef Name=\"%s\"/></Key>\n", meta.KeyProp)
+		for _, col := range cols {
+			edm := "Edm.String"
+			if col == "id" || col == "retry_count" {
+				edm = "Edm.Int64"
+			} else if col == "updated_at" || col == "synced_at" {
+				edm = "Edm.DateTimeOffset"
+			} else if strings.HasPrefix(col, "saldo") || col == "debito" || col == "credito" || col == "valor_compra" {
+				edm = "Edm.Decimal"
+			}
+			xml += fmt.Sprintf("        <Property Name=\"%s\" Type=\"%s\"/>\n", col, edm)
+		}
+		// Add navigation properties for this table
+		for _, rel := range odataRelations {
+			if rel.FromTable == table {
+				targetMeta := odataTables[rel.ToTable]
+				xml += fmt.Sprintf("        <NavigationProperty Name=\"%s\" Type=\"SiigoSync.%s\" Nullable=\"true\">\n", rel.NavName, targetMeta.EntityType)
+				xml += fmt.Sprintf("          <ReferentialConstraint Property=\"%s\" ReferencedProperty=\"%s\"/>\n", rel.FromProp, rel.ToProp)
+				xml += "        </NavigationProperty>\n"
+			}
+		}
+		xml += "      </EntityType>\n"
+	}
+
+	xml += "      <EntityContainer Name=\"SiigoSyncContainer\">\n"
+	for _, table := range odataTableOrder {
+		meta := odataTables[table]
+		xml += fmt.Sprintf("        <EntitySet Name=\"%s\" EntityType=\"SiigoSync.%s\">\n", table, meta.EntityType)
+		// Add NavigationPropertyBinding for relationships
+		for _, rel := range odataRelations {
+			if rel.FromTable == table {
+				xml += fmt.Sprintf("          <NavigationPropertyBinding Path=\"%s\" Target=\"%s\"/>\n", rel.NavName, rel.ToTable)
+			}
+		}
+		xml += "        </EntitySet>\n"
+	}
+	xml += "      </EntityContainer>\n"
+	xml += "    </Schema>\n  </edmx:DataServices>\n</edmx:Edmx>"
+
+	w.Write([]byte(xml))
+}
+
+func (s *Server) handleODataCollection(table string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+
+		// Check for /$count suffix
+		if strings.HasSuffix(r.URL.Path, "/$count") {
+			count := s.db.ODataGetCount(table, q.Get("$filter"))
+			w.Header().Set("Content-Type", "text/plain")
+			fmt.Fprintf(w, "%d", count)
+			return
+		}
+
+		top, _ := strconv.Atoi(q.Get("$top"))
+		skip, _ := strconv.Atoi(q.Get("$skip"))
+		countParam := strings.ToLower(q.Get("$count"))
+
+		params := storage.ODataParams{
+			Top:     top,
+			Skip:    skip,
+			Filter:  q.Get("$filter"),
+			OrderBy: q.Get("$orderby"),
+			Select:  q.Get("$select"),
+			Count:   countParam == "true",
+		}
+
+		result := s.db.ODataGetRecords(table, params)
+
+		// Build response
+		resp := map[string]interface{}{
+			"@odata.context": s.odataBaseURL(r) + "/$metadata#" + table,
+			"value":          result.Value,
+		}
+		if result.Count != nil {
+			resp["@odata.count"] = *result.Count
+		}
+
+		// NextLink if there are more records
+		effectiveTop := top
+		if effectiveTop <= 0 {
+			effectiveTop = 100
+		}
+		if result.Count != nil && skip+effectiveTop < *result.Count {
+			nextSkip := skip + effectiveTop
+			nextURL := fmt.Sprintf("%s/odata/%s?$top=%d&$skip=%d", s.odataBaseURL(r), table, effectiveTop, nextSkip)
+			if params.Filter != "" {
+				nextURL += "&$filter=" + params.Filter
+			}
+			if params.OrderBy != "" {
+				nextURL += "&$orderby=" + params.OrderBy
+			}
+			if params.Select != "" {
+				nextURL += "&$select=" + params.Select
+			}
+			if params.Count {
+				nextURL += "&$count=true"
+			}
+			resp["@odata.nextLink"] = nextURL
+		}
+
+		w.Header().Set("Content-Type", "application/json;odata.metadata=minimal")
+		json.NewEncoder(w).Encode(resp)
+	}
+}
+
+func (s *Server) handleODataEntity(table string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		path := strings.TrimPrefix(r.URL.Path, "/odata/"+table)
+		// Support both /odata/clients/900123 and /odata/clients('900123')
+		key := strings.TrimLeft(path, "/")
+		key = strings.Trim(key, "'\"()")
+		if key == "" {
+			jsonError(w, "Key required", 400)
+			return
+		}
+		record := s.db.APIGetRecord(table, key)
+		if record == nil {
+			jsonError(w, "Not found", 404)
+			return
+		}
+		resp := map[string]interface{}{
+			"@odata.context": s.odataBaseURL(r) + "/$metadata#" + table + "/$entity",
+		}
+		for k, v := range record {
+			resp[k] = v
+		}
+		w.Header().Set("Content-Type", "application/json;odata.metadata=minimal")
+		json.NewEncoder(w).Encode(resp)
+	}
+}
+
+func (s *Server) odataBaseURL(r *http.Request) string {
+	scheme := "http"
+	if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
+		scheme = "https"
+	}
+	return scheme + "://" + r.Host + "/odata"
+}
+
+// ==================== AUDIT TRAIL & HISTORY ====================
+
+func (s *Server) handleAuditTrail(w http.ResponseWriter, r *http.Request) {
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	if page < 1 {
+		page = 1
+	}
+	entries, total := s.db.GetAuditTrail(page, 50)
+	jsonResponse(w, map[string]interface{}{"entries": entries, "total": total, "page": page})
+}
+
+func (s *Server) handleChangeHistory(w http.ResponseWriter, r *http.Request) {
+	table := r.URL.Query().Get("table")
+	key := r.URL.Query().Get("key")
+	if table == "" || key == "" {
+		jsonError(w, "table and key required", 400)
+		return
+	}
+	entries := s.db.GetChangeHistory(table, key, 50)
+	jsonResponse(w, map[string]interface{}{"entries": entries})
+}
+
+func (s *Server) handleSyncStatsHistory(w http.ResponseWriter, r *http.Request) {
+	hours, _ := strconv.Atoi(r.URL.Query().Get("hours"))
+	if hours <= 0 {
+		hours = 24
+	}
+	entries := s.db.GetSyncStats(hours)
+	jsonResponse(w, map[string]interface{}{"entries": entries})
+}
+
+// ==================== BACKUP / RESTORE ====================
+
+func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
+	if !s.requireRole(r, "root", "admin") {
+		jsonError(w, "Solo admin/root", 403)
+		return
+	}
+	username := s.getUsernameFromRequest(r)
+	s.db.AddAudit(username, "backup", "", "", "Database backup downloaded")
+
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", "attachment; filename=siigo_web_backup.db")
+
+	// Use SQLite backup via VACUUM INTO
+	tmpPath := "siigo_web_backup_tmp.db"
+	os.Remove(tmpPath)
+	if err := s.db.VacuumInto(tmpPath); err != nil {
+		jsonError(w, "Backup failed: "+err.Error(), 500)
+		return
+	}
+	defer os.Remove(tmpPath)
+
+	data, err := os.ReadFile(tmpPath)
+	if err != nil {
+		jsonError(w, "Cannot read backup", 500)
+		return
+	}
+	w.Write(data)
+}
+
+func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		jsonError(w, "POST only", 405)
+		return
+	}
+	if !s.requireRole(r, "root", "admin") {
+		jsonError(w, "Solo admin/root", 403)
+		return
+	}
+
+	file, _, err := r.FormFile("file")
+	if err != nil {
+		jsonError(w, "File required", 400)
+		return
+	}
+	defer file.Close()
+
+	// Read uploaded file
+	var buf bytes.Buffer
+	if _, err := buf.ReadFrom(file); err != nil {
+		jsonError(w, "Cannot read file", 400)
+		return
+	}
+	fileData := buf.Bytes()
+
+	// Validate SQLite magic bytes
+	if len(fileData) < 16 || string(fileData[:15]) != "SQLite format 3" {
+		jsonError(w, "Invalid SQLite file", 400)
+		return
+	}
+
+	username := s.getUsernameFromRequest(r)
+	s.db.AddAudit(username, "restore", "", "", "Database restored from upload")
+
+	// Write to temp, then replace
+	tmpPath := "siigo_web_restore_tmp.db"
+	if err := os.WriteFile(tmpPath, fileData, 0644); err != nil {
+		jsonError(w, "Cannot write file", 500)
+		return
+	}
+
+	// Close current DB, replace, reopen
+	s.db.Close()
+	os.Rename(tmpPath, "siigo_web.db")
+	newDB, err := storage.NewDB("siigo_web.db")
+	if err != nil {
+		jsonError(w, "Cannot reopen DB: "+err.Error(), 500)
+		return
+	}
+	s.db = newDB
+	jsonResponse(w, map[string]string{"status": "ok"})
+}
+
+// ==================== SSE (Server-Sent Events) ====================
+
+type sseClient struct {
+	ch chan string
+}
+
+var (
+	sseClients   = make(map[*sseClient]bool)
+	sseClientsMu gosync.Mutex
+)
+
+func sseNotify(event, data string) {
+	msg := fmt.Sprintf("event: %s\ndata: %s\n\n", event, data)
+	sseClientsMu.Lock()
+	defer sseClientsMu.Unlock()
+	for c := range sseClients {
+		select {
+		case c.ch <- msg:
+		default:
+			// Drop if buffer full
+		}
+	}
+}
+
+func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		jsonError(w, "Streaming not supported", 500)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	client := &sseClient{ch: make(chan string, 10)}
+	sseClientsMu.Lock()
+	sseClients[client] = true
+	sseClientsMu.Unlock()
+
+	defer func() {
+		sseClientsMu.Lock()
+		delete(sseClients, client)
+		sseClientsMu.Unlock()
+	}()
+
+	ctx := r.Context()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case msg := <-client.ch:
+			fmt.Fprint(w, msg)
+			flusher.Flush()
+		}
+	}
+}
+
+// ==================== BULK ACTIONS ====================
+
+func (s *Server) handleBulkAction(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		jsonError(w, "POST only", 405)
+		return
+	}
+
+	var body struct {
+		Table  string  `json:"table"`
+		IDs    []int64 `json:"ids"`
+		Action string  `json:"action"` // "delete", "retry", "reset"
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonError(w, "JSON invalido", 400)
+		return
+	}
+	if len(body.IDs) == 0 {
+		jsonError(w, "No IDs provided", 400)
+		return
+	}
+
+	username := s.getUsernameFromRequest(r)
+
+	switch body.Action {
+	case "delete":
+		count := s.db.BulkDelete(body.Table, body.IDs)
+		s.db.AddAudit(username, "bulk_delete", body.Table, fmt.Sprintf("%d records", count), "")
+		jsonResponse(w, map[string]interface{}{"status": "ok", "deleted": count})
+	case "retry":
+		count := s.db.BulkUpdateStatus(body.Table, body.IDs, "pending")
+		s.db.AddAudit(username, "bulk_retry", body.Table, fmt.Sprintf("%d records", count), "")
+		jsonResponse(w, map[string]interface{}{"status": "ok", "updated": count})
+	case "reset":
+		count := s.db.BulkUpdateStatus(body.Table, body.IDs, "pending")
+		s.db.AddAudit(username, "bulk_reset", body.Table, fmt.Sprintf("%d records", count), "")
+		jsonResponse(w, map[string]interface{}{"status": "ok", "updated": count})
+	default:
+		jsonError(w, "Invalid action", 400)
+	}
+}
+
+// ==================== WEBHOOKS ====================
+
+func (s *Server) webhookDispatch(event string, data interface{}) {
+	if !s.cfg.Webhooks.Enabled || len(s.cfg.Webhooks.Hooks) == 0 {
+		return
+	}
+	payload := map[string]interface{}{
+		"event":     event,
+		"timestamp": time.Now().UTC().Format(time.RFC3339),
+		"data":      data,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	for _, hook := range s.cfg.Webhooks.Hooks {
+		if !hook.Active {
+			continue
+		}
+		// Check if this hook is subscribed to this event
+		subscribed := false
+		for _, ev := range hook.Events {
+			if ev == event || ev == "*" {
+				subscribed = true
+				break
+			}
+		}
+		if !subscribed {
+			continue
+		}
+		go s.sendWebhook(hook, body)
+	}
+}
+
+func (s *Server) sendWebhook(hook config.WebhookDef, body []byte) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", hook.URL, bytes.NewReader(body))
+	if err != nil {
+		s.db.AddLog("error", "WEBHOOK", fmt.Sprintf("Error creando request a %s: %v", hook.URL, err))
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "SiigoSync-Webhook/1.0")
+
+	if hook.Secret != "" {
+		mac := hmac.New(sha256.New, []byte(hook.Secret))
+		mac.Write(body)
+		sig := hex.EncodeToString(mac.Sum(nil))
+		req.Header.Set("X-Webhook-Signature", "sha256="+sig)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		s.db.AddLog("error", "WEBHOOK", fmt.Sprintf("Error enviando a %s: %v", hook.URL, err))
+		return
+	}
+	resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		s.db.AddLog("warning", "WEBHOOK", fmt.Sprintf("Webhook %s respondio %d", hook.URL, resp.StatusCode))
+	}
+}
+
+func (s *Server) handleWebhookConfig(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case "GET":
+		// Return webhook config (mask secrets)
+		result := struct {
+			Enabled bool              `json:"enabled"`
+			Hooks   []config.WebhookDef `json:"hooks"`
+		}{
+			Enabled: s.cfg.Webhooks.Enabled,
+			Hooks:   s.cfg.Webhooks.Hooks,
+		}
+		if result.Hooks == nil {
+			result.Hooks = []config.WebhookDef{}
+		}
+		jsonResponse(w, result)
+	case "POST":
+		var body struct {
+			Enabled *bool               `json:"enabled,omitempty"`
+			Hooks   *[]config.WebhookDef `json:"hooks,omitempty"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			jsonError(w, "JSON invalido", 400)
+			return
+		}
+		if body.Enabled != nil {
+			s.cfg.Webhooks.Enabled = *body.Enabled
+		}
+		if body.Hooks != nil {
+			s.cfg.Webhooks.Hooks = *body.Hooks
+		}
+		s.cfg.Save("config.json")
+		username := s.getUsernameFromRequest(r)
+		s.db.AddAudit(username, "config_update", "webhooks", "", "")
+		jsonResponse(w, map[string]string{"status": "ok"})
+	default:
+		jsonError(w, "GET or POST only", 405)
+	}
+}
+
+func (s *Server) handleWebhookTest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		jsonError(w, "POST only", 405)
+		return
+	}
+	var body struct {
+		URL    string `json:"url"`
+		Secret string `json:"secret"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.URL == "" {
+		jsonError(w, "URL requerida", 400)
+		return
+	}
+	hook := config.WebhookDef{URL: body.URL, Secret: body.Secret, Events: []string{"test"}, Active: true}
+	payload, _ := json.Marshal(map[string]interface{}{
+		"event":     "test",
+		"timestamp": time.Now().UTC().Format(time.RFC3339),
+		"data":      map[string]string{"message": "Test webhook from Siigo Sync"},
+	})
+	go s.sendWebhook(hook, payload)
+	jsonResponse(w, map[string]string{"status": "ok", "message": "Webhook de prueba enviado"})
+}
+
+// ==================== SERVER INFO (LAN IP) ====================
+
+func getLANIPs() []string {
+	var ips []string
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return ips
+	}
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			var ip net.IP
+			switch v := addr.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
+			}
+			if ip == nil || ip.IsLoopback() || ip.To4() == nil {
+				continue
+			}
+			ips = append(ips, ip.String())
+		}
+	}
+	return ips
+}
+
+func (s *Server) handleServerInfo(w http.ResponseWriter, r *http.Request) {
+	port := "3210"
+	if p := os.Getenv("PORT"); p != "" {
+		port = p
+	}
+
+	lanIPs := getLANIPs()
+	urls := make([]string, 0, len(lanIPs))
+	for _, ip := range lanIPs {
+		urls = append(urls, fmt.Sprintf("http://%s:%s", ip, port))
+	}
+
+	tunnelURL := readTunnelURL()
+
+	info := map[string]interface{}{
+		"port":       port,
+		"lan_ips":    lanIPs,
+		"lan_urls":   urls,
+		"tunnel_url": tunnelURL,
+		"odata_paths": []string{"/odata"},
+		"api_v1_paths": []string{"/api/v1/docs", "/api/v1/auth"},
+	}
+	jsonResponse(w, info)
+}
+
+// ==================== USER MANAGEMENT ====================
+
+func (s *Server) requireRole(r *http.Request, roles ...string) bool {
+	token := extractToken(r)
+	info := s.getTokenInfo(token)
+	if info == nil {
+		return false
+	}
+	for _, role := range roles {
+		if info.Role == role {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
+	if !s.requireRole(r, "root", "admin") {
+		jsonError(w, "Solo administradores pueden gestionar usuarios", 403)
+		return
+	}
+
+	switch r.Method {
+	case "GET":
+		users, err := s.db.ListAppUsers()
+		if err != nil {
+			jsonError(w, err.Error(), 500)
+			return
+		}
+		jsonResponse(w, map[string]interface{}{
+			"users":       users,
+			"all_modules": AllModules,
+		})
+	case "POST":
+		var body struct {
+			Username    string   `json:"username"`
+			Password    string   `json:"password"`
+			Role        string   `json:"role"`
+			Permissions []string `json:"permissions"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			jsonError(w, "JSON invalido", 400)
+			return
+		}
+		if body.Username == "" || body.Password == "" {
+			jsonError(w, "Usuario y contrasena son requeridos", 400)
+			return
+		}
+		if body.Username == s.cfg.Auth.Username {
+			jsonError(w, "No se puede crear un usuario con el mismo nombre que el root", 400)
+			return
+		}
+		if body.Role == "" {
+			body.Role = "viewer"
+		}
+		if body.Permissions == nil {
+			body.Permissions = []string{"dashboard"}
+		}
+		if err := s.db.CreateAppUser(body.Username, body.Password, body.Role, body.Permissions); err != nil {
+			if strings.Contains(err.Error(), "UNIQUE") {
+				jsonError(w, "El usuario ya existe", 400)
+			} else {
+				jsonError(w, err.Error(), 500)
+			}
+			return
+		}
+		s.db.AddLog("info", "USERS", fmt.Sprintf("Usuario '%s' creado con rol '%s'", body.Username, body.Role))
+		jsonResponse(w, map[string]string{"status": "ok"})
+	default:
+		jsonError(w, "Method not allowed", 405)
+	}
+}
+
+func (s *Server) handleUserByID(w http.ResponseWriter, r *http.Request) {
+	if !s.requireRole(r, "root", "admin") {
+		jsonError(w, "Solo administradores pueden gestionar usuarios", 403)
+		return
+	}
+
+	// Extract ID from /api/users/{id}
+	parts := strings.Split(strings.TrimSuffix(r.URL.Path, "/"), "/")
+	if len(parts) < 4 {
+		jsonError(w, "ID requerido", 400)
+		return
+	}
+	id, err := strconv.ParseInt(parts[3], 10, 64)
+	if err != nil {
+		jsonError(w, "ID invalido", 400)
+		return
+	}
+
+	switch r.Method {
+	case "PUT":
+		var body struct {
+			Role        string   `json:"role"`
+			Permissions []string `json:"permissions"`
+			Active      *bool    `json:"active"`
+			Password    string   `json:"password"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			jsonError(w, "JSON invalido", 400)
+			return
+		}
+		user, err := s.db.GetAppUserByID(id)
+		if err != nil {
+			jsonError(w, "Usuario no encontrado", 404)
+			return
+		}
+		role := user.Role
+		if body.Role != "" {
+			role = body.Role
+		}
+		perms := user.Permissions
+		if body.Permissions != nil {
+			perms = body.Permissions
+		}
+		active := user.Active
+		if body.Active != nil {
+			active = *body.Active
+		}
+		if err := s.db.UpdateAppUser(id, role, perms, active); err != nil {
+			jsonError(w, err.Error(), 500)
+			return
+		}
+		if body.Password != "" {
+			s.db.UpdateAppUserPassword(id, body.Password)
+		}
+		s.db.AddLog("info", "USERS", fmt.Sprintf("Usuario '%s' actualizado", user.Username))
+		jsonResponse(w, map[string]string{"status": "ok"})
+	case "DELETE":
+		user, err := s.db.GetAppUserByID(id)
+		if err != nil {
+			jsonError(w, "Usuario no encontrado", 404)
+			return
+		}
+		if err := s.db.DeleteAppUser(id); err != nil {
+			jsonError(w, err.Error(), 500)
+			return
+		}
+		s.db.AddLog("info", "USERS", fmt.Sprintf("Usuario '%s' eliminado", user.Username))
+		jsonResponse(w, map[string]string{"status": "ok"})
+	default:
+		jsonError(w, "Method not allowed", 405)
 	}
 }
 
@@ -1565,7 +3564,7 @@ func (s *Server) registerBotCommands() {
 		defer cancel()
 
 		cmd := exec.CommandContext(ctx, "bash", "-c", cmdStr)
-		cmd.Dir = "/c/Users/lordmacu/siigo"
+		cmd.Dir = `C:\Users\lordmacu\siigo`
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout = &stdout
 		cmd.Stderr = &stderr
@@ -1599,7 +3598,7 @@ func (s *Server) registerBotCommands() {
 		}
 
 		cmd := exec.Command("bash", "-c", "claude --dangerously-skip-permissions &")
-		cmd.Dir = "/c/Users/lordmacu/siigo"
+		cmd.Dir = `C:\Users\lordmacu\siigo`
 		if err := cmd.Start(); err != nil {
 			return "❌ Error iniciando Claude: " + err.Error()
 		}

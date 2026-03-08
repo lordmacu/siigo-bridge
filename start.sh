@@ -84,6 +84,39 @@ kill_by_pid() {
     return 1
 }
 
+kill_port() {
+    local port="$1"
+    if command -v netstat &>/dev/null; then
+        local pids
+        pids=$(netstat -ano 2>/dev/null | grep ":${port} " | grep LISTENING | awk '{print $5}' | sort -u)
+        for pid in $pids; do
+            if [ -n "$pid" ] && [ "$pid" != "0" ]; then
+                taskkill //F //PID "$pid" &>/dev/null && log "Proceso en puerto $port matado (PID $pid)"
+            fi
+        done
+    fi
+}
+
+kill_all_processes() {
+    # Matar por PID files
+    kill_by_pid "$AIR_PID_FILE" "Air" || true
+    kill_by_pid "$PID_FILE" "Servidor" || true
+    kill_by_pid "$TUNNEL_PID_FILE" "Tunnel" || true
+    kill_by_pid "$VITE_PID_FILE" "Vite dev" || true
+
+    # Matar por nombre de proceso
+    kill_by_name "siigo-web.exe" &>/dev/null || true
+    kill_by_name "siigo-web-new.exe" &>/dev/null || true
+    kill_by_name "cloudflared.exe" &>/dev/null || true
+    kill_by_name "air.exe" &>/dev/null || true
+
+    # Matar por puerto (lo que sea que este escuchando)
+    kill_port $PORT
+    kill_port $VITE_PORT
+
+    sleep 1
+}
+
 is_running() {
     local pidfile="$1"
     [ -f "$pidfile" ] && kill -0 "$(cat "$pidfile")" 2>/dev/null
@@ -108,7 +141,7 @@ ensure_config() {
   },
   "sync": {
     "interval_seconds": 60,
-    "files": ["Z17", "Z06CP", "Z49", "Z092024"],
+    "files": ["Z17", "Z04", "Z49", "Z092024"],
     "state_path": "sync_state.json"
   }
 }
@@ -160,9 +193,19 @@ build_all() {
 # start_server: inicia el proceso Go
 # -------------------------------------------------------
 start_server() {
-    # Matar servidor previo
-    kill_by_pid "$PID_FILE" "Servidor" || kill_by_name "siigo-web.exe" || true
+    # Matar servidor previo (por PID, nombre y puerto)
+    kill_by_pid "$PID_FILE" "Servidor" || true
+    kill_by_name "siigo-web.exe" &>/dev/null || true
+    kill_by_name "siigo-web-new.exe" &>/dev/null || true
+    kill_port $PORT
     sleep 1
+
+    # Abrir puerto en firewall de Windows (idempotente, no falla si ya existe)
+    if command -v netsh &>/dev/null; then
+        netsh advfirewall firewall show rule name="Siigo Middleware" &>/dev/null 2>&1 || \
+        netsh advfirewall firewall add rule name="Siigo Middleware" dir=in action=allow protocol=TCP localport=$PORT &>/dev/null 2>&1 && \
+        log "Firewall: puerto $PORT abierto" || warn "No se pudo abrir el firewall (requiere admin)"
+    fi
 
     log "Iniciando servidor en puerto $PORT..."
     cd "$WEB_DIR"
@@ -258,11 +301,11 @@ show_banner() {
 do_start() {
     ensure_config
 
-    if is_running "$PID_FILE"; then
-        warn "El servidor ya esta corriendo (PID $(cat "$PID_FILE"))."
-        warn "Usa './start.sh restart' para reiniciar."
-        return 1
+    # Matar todo lo previo antes de arrancar
+    if is_running "$PID_FILE" || is_running "$AIR_PID_FILE"; then
+        warn "Procesos previos detectados, matando todo..."
     fi
+    kill_all_processes
 
     build_all
     start_server || return 1
@@ -276,10 +319,9 @@ do_start() {
 do_dev() {
     ensure_config
 
+    # Si ya hay algo corriendo, lo matamos todo
     if is_running "$AIR_PID_FILE" || is_running "$PID_FILE"; then
-        warn "Ya hay un servidor corriendo."
-        warn "Usa './start.sh stop' primero."
-        return 1
+        warn "Servidor previo detectado, matando todo..."
     fi
 
     echo ""
@@ -292,9 +334,8 @@ do_dev() {
     cd "$FRONTEND_DIR"
     [ ! -d "node_modules" ] && npm install --silent 2>/dev/null && log "Dependencias instaladas"
 
-    # Matar procesos previos
-    kill_by_name "siigo-web.exe" &>/dev/null || true
-    sleep 1
+    # Matar todos los procesos previos y liberar puertos
+    kill_all_processes
 
     # Iniciar Air (Go live reload) — recompila y reinicia al detectar cambios en .go
     log "Iniciando Air (Go live reload)..."
@@ -332,21 +373,9 @@ do_dev() {
 # do_stop: detiene todo
 # -------------------------------------------------------
 do_stop() {
-    local stopped=false
-
-    kill_by_pid "$AIR_PID_FILE" "Air" && stopped=true
-    kill_by_pid "$PID_FILE" "Servidor" && stopped=true
-    kill_by_pid "$TUNNEL_PID_FILE" "Tunnel" && stopped=true
-    kill_by_pid "$VITE_PID_FILE" "Vite dev" && stopped=true
-
-    # Fallback por nombre
-    kill_by_name "siigo-web.exe" &>/dev/null && { log "Servidor detenido (fallback)"; stopped=true; } || true
-    kill_by_name "siigo-web-new.exe" &>/dev/null && { log "Servidor (new) detenido (fallback)"; stopped=true; } || true
-    kill_by_name "cloudflared.exe" &>/dev/null && { log "Tunnel detenido (fallback)"; stopped=true; } || true
-
-    if [ "$stopped" = false ]; then
-        warn "No habia nada corriendo."
-    fi
+    log "Deteniendo todos los procesos y liberando puertos..."
+    kill_all_processes
+    log "Todo detenido."
 }
 
 # -------------------------------------------------------
@@ -363,7 +392,10 @@ do_restart() {
         sleep 2
         do_start
     else
-        info "Reiniciando servidor (tunnel intacto)..."
+        info "Reiniciando servidor..."
+
+        # Matar todos los procesos y liberar puertos
+        kill_all_processes
 
         # Recompilar frontend + backend
         log "Compilando frontend (React)..."
@@ -376,19 +408,8 @@ do_restart() {
         # Solo reiniciar el servidor Go
         start_server || return 1
 
-        # Verificar que el tunnel sigue vivo
-        if is_running "$TUNNEL_PID_FILE"; then
-            local url
-            url=$(tunnel_url)
-            if [ -n "$url" ]; then
-                log "Tunnel sigue activo: $url"
-            else
-                log "Tunnel sigue corriendo"
-            fi
-        else
-            warn "Tunnel no estaba corriendo. Iniciando..."
-            start_tunnel
-        fi
+        # Reiniciar tunnel (fue matado por kill_all_processes)
+        start_tunnel
 
         show_banner "PRODUCCION"
     fi

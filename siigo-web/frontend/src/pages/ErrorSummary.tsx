@@ -75,6 +75,7 @@ export default function ErrorSummary() {
               </div>
             </div>
 
+            <div className="table-wrapper">
             <table className="data-table">
               <thead>
                 <tr>
@@ -97,6 +98,7 @@ export default function ErrorSummary() {
                 ))}
               </tbody>
             </table>
+            </div>
           </>
         )}
       </div>

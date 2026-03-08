@@ -2,8 +2,8 @@
   "openapi": "3.0.3",
   "info": {
     "title": "Siigo Sync - API Publica v1",
-    "description": "API de solo lectura para consultar datos sincronizados desde Siigo Pyme (ISAM). Los datos incluyen clientes, productos, movimientos contables y cartera.\n\n## Autenticacion\n\nCuando JWT esta activado, primero obtener un token con `POST /api/v1/auth` enviando el `api_key`. Luego usar el token en el header `Authorization: Bearer {token}`.\n\nCuando JWT esta desactivado (modo pruebas), los endpoints son accesibles sin autenticacion.",
-    "version": "1.0.0",
+    "description": "API de solo lectura para consultar datos sincronizados desde Siigo Pyme (archivos ISAM/COBOL). Expone 20 tablas contables incluyendo clientes, productos, movimientos, cartera, plan de cuentas, saldos, documentos y mas.\n\n## Autenticacion\n\nObtener un token con `POST /api/v1/auth` usando:\n- **API Key:** `{\"api_key\": \"tu-clave\"}`\n- **Credenciales:** `{\"username\": \"user\", \"password\": \"pass\"}`\n\nLuego usar el header `Authorization: Bearer {token}` (24h de validez).\n\nCuando JWT esta desactivado (modo pruebas), los endpoints son accesibles sin autenticacion.\n\n## OData v4 (Power BI / Excel)\n\nEndpoints OData v4 en `/odata/` con el mismo JWT. Power BI: Get Data > OData Feed > URL + header Authorization.\n\n- `GET /odata` — Service document\n- `GET /odata/$metadata` — Schema CSDL XML (con NavigationProperty para relaciones)\n- `GET /odata/{table}` — Query con `$top`, `$skip`, `$filter`, `$orderby`, `$select`, `$count`\n- `GET /odata/{table}('key')` — Entidad por clave\n- `GET /odata/{table}/$count` — Solo conteo\n\n20 tablas disponibles. El `$metadata` incluye relaciones (NavigationProperty) para que Power BI las auto-detecte.\n\n## Relaciones entre tablas\n\n| Tabla | Relacion | Via |\n|-------|----------|-----|\n| movements | -> clients | nit_tercero |\n| cartera | -> clients, plan_cuentas | nit_tercero, cuenta_contable |\n| saldos_terceros | -> clients, plan_cuentas | nit_tercero, cuenta_contable |\n| saldos_consolidados | -> plan_cuentas | cuenta_contable |\n| documentos | -> clients, plan_cuentas | nit_tercero, cuenta_contable |\n| terceros_ampliados | -> clients | nit |\n| transacciones_detalle | -> clients, plan_cuentas | nit_tercero, cuenta_contable |\n| libros_auxiliares | -> clients, plan_cuentas | nit_tercero, cuenta_contable |\n| condiciones_pago | -> clients | nit |\n| activos_fijos | -> clients | nit_responsable |\n| activos_fijos_detalle | -> clients | nit_responsable |\n| audit_trail_terceros | -> clients | nit_tercero |\n| clasificacion_cuentas | -> plan_cuentas | codigo_cuenta |",
+    "version": "1.1.0",
     "contact": {
       "name": "Siigo Sync"
     }
@@ -18,28 +18,43 @@
     {"name": "Auth", "description": "Autenticacion JWT"},
     {"name": "Stats", "description": "Estadisticas generales"},
     {"name": "Clients", "description": "Terceros / Clientes (Z17)"},
-    {"name": "Products", "description": "Productos (Z06CP)"},
+    {"name": "Products", "description": "Productos / Inventario (Z04)"},
     {"name": "Movements", "description": "Movimientos contables (Z49)"},
-    {"name": "Cartera", "description": "Cartera (Z09)"}
+    {"name": "Cartera", "description": "Cartera / Cuentas por cobrar (Z09)"},
+    {"name": "PlanCuentas", "description": "Plan Unico de Cuentas - PUC (Z03)"},
+    {"name": "ActivosFijos", "description": "Activos fijos (Z27)"},
+    {"name": "SaldosTerceros", "description": "Saldos por tercero con BCD (Z25)"},
+    {"name": "SaldosConsolidados", "description": "Saldos consolidados por cuenta con BCD (Z28)"},
+    {"name": "Documentos", "description": "Documentos / Facturas detalle (Z11)"},
+    {"name": "TercerosAmpliados", "description": "Terceros ampliados con email y direccion (Z08A)"},
+    {"name": "TransaccionesDetalle", "description": "Transacciones detalle por linea (Z07T)"},
+    {"name": "PeriodosContables", "description": "Periodos contables con saldos BCD (Z26)"},
+    {"name": "CondicionesPago", "description": "Condiciones de pago (Z05)"},
+    {"name": "LibrosAuxiliares", "description": "Libros auxiliares con saldos BCD (Z07)"},
+    {"name": "CodigosDane", "description": "Codigos DANE de municipios colombianos"},
+    {"name": "ActividadesICA", "description": "Actividades ICA con tarifas"},
+    {"name": "ConceptosPILA", "description": "Conceptos PILA (seguridad social)"},
+    {"name": "ActivosFijosDetalle", "description": "Detalle de activos fijos (Z27 detalle)"},
+    {"name": "AuditTrailTerceros", "description": "Auditoria de cambios en terceros (Z11N)"},
+    {"name": "ClasificacionCuentas", "description": "Clasificacion de cuentas contables (Z279CP)"},
+    {"name": "OData", "description": "OData v4 endpoints para Power BI y herramientas BI"}
   ],
   "paths": {
     "/api/v1/auth": {
       "post": {
         "tags": ["Auth"],
         "summary": "Obtener token JWT",
-        "description": "Enviar el api_key configurado para obtener un token JWT valido por 24 horas.",
+        "description": "Dos metodos de autenticacion:\n\n**Metodo 1 - API Key:** Enviar `api_key`.\n\n**Metodo 2 - Credenciales:** Enviar `username` + `password` (usuarios del dashboard o root).",
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["api_key"],
                 "properties": {
-                  "api_key": {
-                    "type": "string",
-                    "example": "tu-clave-secreta"
-                  }
+                  "api_key": {"type": "string", "example": "tu-clave-secreta", "description": "Metodo 1: API key configurada"},
+                  "username": {"type": "string", "example": "admin", "description": "Metodo 2: nombre de usuario"},
+                  "password": {"type": "string", "example": "mi-contrasena", "description": "Metodo 2: contrasena del usuario"}
                 }
               }
             }
@@ -54,7 +69,9 @@
                   "type": "object",
                   "properties": {
                     "token": {"type": "string", "example": "eyJhbGciOiJIUzI1NiIs..."},
-                    "expires_in": {"type": "integer", "example": 86400, "description": "Segundos hasta expiracion"}
+                    "expires_in": {"type": "integer", "example": 86400, "description": "Segundos hasta expiracion"},
+                    "method": {"type": "string", "enum": ["api_key", "credentials"], "description": "Metodo usado"},
+                    "user": {"type": "string", "description": "Usuario autenticado"}
                   }
                 }
               }
@@ -73,32 +90,7 @@
         "security": [{"bearerAuth": []}],
         "responses": {
           "200": {
-            "description": "Estadisticas",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "clients_total": {"type": "integer", "example": 150},
-                    "clients_synced": {"type": "integer", "example": 145},
-                    "clients_pending": {"type": "integer", "example": 3},
-                    "clients_errors": {"type": "integer", "example": 2},
-                    "products_total": {"type": "integer", "example": 50},
-                    "products_synced": {"type": "integer", "example": 50},
-                    "products_pending": {"type": "integer", "example": 0},
-                    "products_errors": {"type": "integer", "example": 0},
-                    "movements_total": {"type": "integer", "example": 3000},
-                    "movements_synced": {"type": "integer", "example": 2900},
-                    "movements_pending": {"type": "integer", "example": 100},
-                    "movements_errors": {"type": "integer", "example": 0},
-                    "cartera_total": {"type": "integer", "example": 200},
-                    "cartera_synced": {"type": "integer", "example": 200},
-                    "cartera_pending": {"type": "integer", "example": 0},
-                    "cartera_errors": {"type": "integer", "example": 0}
-                  }
-                }
-              }
-            }
+            "description": "Estadisticas por tabla ({tabla}_total, {tabla}_synced, {tabla}_pending, {tabla}_errors)"
           },
           "401": {"$ref": "#/components/responses/Unauthorized"},
           "403": {"$ref": "#/components/responses/APIDisabled"}
@@ -109,7 +101,7 @@
       "get": {
         "tags": ["Clients"],
         "summary": "Listar clientes",
-        "description": "Retorna lista paginada de clientes (terceros) sincronizados desde el archivo ISAM Z17.",
+        "description": "Terceros desde Z17. Campos: nit, nombre, tipo_doc, tipo_clave, empresa, codigo, fecha_creacion, tipo_cta_pref.",
         "security": [{"bearerAuth": []}],
         "parameters": [
           {"$ref": "#/components/parameters/page"},
@@ -119,16 +111,8 @@
           {"$ref": "#/components/parameters/since"}
         ],
         "responses": {
-          "200": {
-            "description": "Lista de clientes",
-            "content": {
-              "application/json": {
-                "schema": {"$ref": "#/components/schemas/PaginatedResponse"}
-              }
-            }
-          },
-          "401": {"$ref": "#/components/responses/Unauthorized"},
-          "403": {"$ref": "#/components/responses/APIDisabled"}
+          "200": {"description": "Lista paginada", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PaginatedResponse"}}}},
+          "401": {"$ref": "#/components/responses/Unauthorized"}
         }
       }
     },
@@ -136,23 +120,12 @@
       "get": {
         "tags": ["Clients"],
         "summary": "Detalle de un cliente",
-        "description": "Retorna un cliente por su NIT (clave primaria).",
+        "description": "Busca por NIT (clave primaria).",
         "security": [{"bearerAuth": []}],
-        "parameters": [
-          {"name": "key", "in": "path", "required": true, "schema": {"type": "string"}, "description": "NIT del cliente", "example": "900123456"}
-        ],
+        "parameters": [{"name": "key", "in": "path", "required": true, "schema": {"type": "string"}, "description": "NIT del cliente"}],
         "responses": {
-          "200": {
-            "description": "Detalle del cliente",
-            "content": {
-              "application/json": {
-                "schema": {"$ref": "#/components/schemas/Record"}
-              }
-            }
-          },
-          "404": {"$ref": "#/components/responses/NotFound"},
-          "401": {"$ref": "#/components/responses/Unauthorized"},
-          "403": {"$ref": "#/components/responses/APIDisabled"}
+          "200": {"description": "Detalle del cliente", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Record"}}}},
+          "404": {"$ref": "#/components/responses/NotFound"}
         }
       }
     },
@@ -160,7 +133,7 @@
       "get": {
         "tags": ["Products"],
         "summary": "Listar productos",
-        "description": "Retorna lista paginada de productos sincronizados desde el archivo ISAM Z06CP.",
+        "description": "Inventario desde Z04. Campos: code, nombre, nombre_corto, grupo, referencia, empresa.",
         "security": [{"bearerAuth": []}],
         "parameters": [
           {"$ref": "#/components/parameters/page"},
@@ -170,16 +143,8 @@
           {"$ref": "#/components/parameters/since"}
         ],
         "responses": {
-          "200": {
-            "description": "Lista de productos",
-            "content": {
-              "application/json": {
-                "schema": {"$ref": "#/components/schemas/PaginatedResponse"}
-              }
-            }
-          },
-          "401": {"$ref": "#/components/responses/Unauthorized"},
-          "403": {"$ref": "#/components/responses/APIDisabled"}
+          "200": {"description": "Lista paginada", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PaginatedResponse"}}}},
+          "401": {"$ref": "#/components/responses/Unauthorized"}
         }
       }
     },
@@ -187,23 +152,11 @@
       "get": {
         "tags": ["Products"],
         "summary": "Detalle de un producto",
-        "description": "Retorna un producto por su clave (comprobante-secuencia).",
         "security": [{"bearerAuth": []}],
-        "parameters": [
-          {"name": "key", "in": "path", "required": true, "schema": {"type": "string"}, "description": "Clave del producto", "example": "00001-00001"}
-        ],
+        "parameters": [{"name": "key", "in": "path", "required": true, "schema": {"type": "string"}, "description": "Codigo del producto"}],
         "responses": {
-          "200": {
-            "description": "Detalle del producto",
-            "content": {
-              "application/json": {
-                "schema": {"$ref": "#/components/schemas/Record"}
-              }
-            }
-          },
-          "404": {"$ref": "#/components/responses/NotFound"},
-          "401": {"$ref": "#/components/responses/Unauthorized"},
-          "403": {"$ref": "#/components/responses/APIDisabled"}
+          "200": {"description": "Detalle", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Record"}}}},
+          "404": {"$ref": "#/components/responses/NotFound"}
         }
       }
     },
@@ -211,7 +164,7 @@
       "get": {
         "tags": ["Movements"],
         "summary": "Listar movimientos",
-        "description": "Retorna lista paginada de movimientos contables sincronizados desde el archivo ISAM Z49.",
+        "description": "Movimientos desde Z49. Campos: tipo_comprobante, empresa, numero_doc, fecha, nit_tercero, cuenta_contable, descripcion, valor, tipo_mov.",
         "security": [{"bearerAuth": []}],
         "parameters": [
           {"$ref": "#/components/parameters/page"},
@@ -221,16 +174,8 @@
           {"$ref": "#/components/parameters/since"}
         ],
         "responses": {
-          "200": {
-            "description": "Lista de movimientos",
-            "content": {
-              "application/json": {
-                "schema": {"$ref": "#/components/schemas/PaginatedResponse"}
-              }
-            }
-          },
-          "401": {"$ref": "#/components/responses/Unauthorized"},
-          "403": {"$ref": "#/components/responses/APIDisabled"}
+          "200": {"description": "Lista paginada", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PaginatedResponse"}}}},
+          "401": {"$ref": "#/components/responses/Unauthorized"}
         }
       }
     },
@@ -238,23 +183,11 @@
       "get": {
         "tags": ["Movements"],
         "summary": "Detalle de un movimiento",
-        "description": "Retorna un movimiento por su clave (tipo_comprobante-numero_doc).",
         "security": [{"bearerAuth": []}],
-        "parameters": [
-          {"name": "key", "in": "path", "required": true, "schema": {"type": "string"}, "description": "Clave del movimiento", "example": "FC-000001"}
-        ],
+        "parameters": [{"name": "key", "in": "path", "required": true, "schema": {"type": "string"}, "description": "record_key del movimiento"}],
         "responses": {
-          "200": {
-            "description": "Detalle del movimiento",
-            "content": {
-              "application/json": {
-                "schema": {"$ref": "#/components/schemas/Record"}
-              }
-            }
-          },
-          "404": {"$ref": "#/components/responses/NotFound"},
-          "401": {"$ref": "#/components/responses/Unauthorized"},
-          "403": {"$ref": "#/components/responses/APIDisabled"}
+          "200": {"description": "Detalle", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Record"}}}},
+          "404": {"$ref": "#/components/responses/NotFound"}
         }
       }
     },
@@ -262,7 +195,7 @@
       "get": {
         "tags": ["Cartera"],
         "summary": "Listar cartera",
-        "description": "Retorna lista paginada de registros de cartera sincronizados desde el archivo ISAM Z09.",
+        "description": "Cartera desde Z09. Campos: tipo_registro (F/G/L/P/R), empresa, secuencia, tipo_doc, nit_tercero, cuenta_contable, fecha, descripcion, tipo_mov (D/C).",
         "security": [{"bearerAuth": []}],
         "parameters": [
           {"$ref": "#/components/parameters/page"},
@@ -272,16 +205,8 @@
           {"$ref": "#/components/parameters/since"}
         ],
         "responses": {
-          "200": {
-            "description": "Lista de cartera",
-            "content": {
-              "application/json": {
-                "schema": {"$ref": "#/components/schemas/PaginatedResponse"}
-              }
-            }
-          },
-          "401": {"$ref": "#/components/responses/Unauthorized"},
-          "403": {"$ref": "#/components/responses/APIDisabled"}
+          "200": {"description": "Lista paginada", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PaginatedResponse"}}}},
+          "401": {"$ref": "#/components/responses/Unauthorized"}
         }
       }
     },
@@ -289,23 +214,551 @@
       "get": {
         "tags": ["Cartera"],
         "summary": "Detalle de cartera",
-        "description": "Retorna un registro de cartera por su clave.",
+        "security": [{"bearerAuth": []}],
+        "parameters": [{"name": "key", "in": "path", "required": true, "schema": {"type": "string"}, "description": "record_key"}],
+        "responses": {
+          "200": {"description": "Detalle", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Record"}}}},
+          "404": {"$ref": "#/components/responses/NotFound"}
+        }
+      }
+    },
+    "/api/v1/plan_cuentas": {
+      "get": {
+        "tags": ["PlanCuentas"],
+        "summary": "Listar plan de cuentas",
+        "description": "Plan Unico de Cuentas (PUC) desde Z03. Campos: codigo_cuenta, nombre, empresa, activa, auxiliar, naturaleza.",
         "security": [{"bearerAuth": []}],
         "parameters": [
-          {"name": "key", "in": "path", "required": true, "schema": {"type": "string"}, "description": "Clave del registro", "example": "Z092024-1-01-00001"}
+          {"$ref": "#/components/parameters/page"},
+          {"$ref": "#/components/parameters/limit"},
+          {"$ref": "#/components/parameters/search"},
+          {"$ref": "#/components/parameters/sync_status"},
+          {"$ref": "#/components/parameters/since"}
         ],
         "responses": {
-          "200": {
-            "description": "Detalle del registro",
-            "content": {
-              "application/json": {
-                "schema": {"$ref": "#/components/schemas/Record"}
-              }
-            }
-          },
-          "404": {"$ref": "#/components/responses/NotFound"},
-          "401": {"$ref": "#/components/responses/Unauthorized"},
-          "403": {"$ref": "#/components/responses/APIDisabled"}
+          "200": {"description": "Lista paginada", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PaginatedResponse"}}}},
+          "401": {"$ref": "#/components/responses/Unauthorized"}
+        }
+      }
+    },
+    "/api/v1/plan_cuentas/{key}": {
+      "get": {
+        "tags": ["PlanCuentas"],
+        "summary": "Detalle de cuenta contable",
+        "security": [{"bearerAuth": []}],
+        "parameters": [{"name": "key", "in": "path", "required": true, "schema": {"type": "string"}, "description": "codigo_cuenta"}],
+        "responses": {
+          "200": {"description": "Detalle", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Record"}}}},
+          "404": {"$ref": "#/components/responses/NotFound"}
+        }
+      }
+    },
+    "/api/v1/activos_fijos": {
+      "get": {
+        "tags": ["ActivosFijos"],
+        "summary": "Listar activos fijos",
+        "description": "Activos fijos desde Z27. Campos: codigo, nombre, empresa, nit_responsable, fecha_adquisicion.",
+        "security": [{"bearerAuth": []}],
+        "parameters": [
+          {"$ref": "#/components/parameters/page"},
+          {"$ref": "#/components/parameters/limit"},
+          {"$ref": "#/components/parameters/search"},
+          {"$ref": "#/components/parameters/sync_status"},
+          {"$ref": "#/components/parameters/since"}
+        ],
+        "responses": {
+          "200": {"description": "Lista paginada", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PaginatedResponse"}}}},
+          "401": {"$ref": "#/components/responses/Unauthorized"}
+        }
+      }
+    },
+    "/api/v1/activos_fijos/{key}": {
+      "get": {
+        "tags": ["ActivosFijos"],
+        "summary": "Detalle de activo fijo",
+        "security": [{"bearerAuth": []}],
+        "parameters": [{"name": "key", "in": "path", "required": true, "schema": {"type": "string"}, "description": "record_key"}],
+        "responses": {
+          "200": {"description": "Detalle", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Record"}}}},
+          "404": {"$ref": "#/components/responses/NotFound"}
+        }
+      }
+    },
+    "/api/v1/saldos_terceros": {
+      "get": {
+        "tags": ["SaldosTerceros"],
+        "summary": "Listar saldos por tercero",
+        "description": "Saldos por tercero desde Z25. Campos: cuenta_contable, nit_tercero, empresa, saldo_anterior (Decimal), debito (Decimal), credito (Decimal), saldo_final (Decimal). Valores decodificados de BCD/packed decimal.",
+        "security": [{"bearerAuth": []}],
+        "parameters": [
+          {"$ref": "#/components/parameters/page"},
+          {"$ref": "#/components/parameters/limit"},
+          {"$ref": "#/components/parameters/search"},
+          {"$ref": "#/components/parameters/sync_status"},
+          {"$ref": "#/components/parameters/since"}
+        ],
+        "responses": {
+          "200": {"description": "Lista paginada", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PaginatedResponse"}}}},
+          "401": {"$ref": "#/components/responses/Unauthorized"}
+        }
+      }
+    },
+    "/api/v1/saldos_terceros/{key}": {
+      "get": {
+        "tags": ["SaldosTerceros"],
+        "summary": "Detalle de saldo por tercero",
+        "security": [{"bearerAuth": []}],
+        "parameters": [{"name": "key", "in": "path", "required": true, "schema": {"type": "string"}, "description": "record_key"}],
+        "responses": {
+          "200": {"description": "Detalle", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Record"}}}},
+          "404": {"$ref": "#/components/responses/NotFound"}
+        }
+      }
+    },
+    "/api/v1/saldos_consolidados": {
+      "get": {
+        "tags": ["SaldosConsolidados"],
+        "summary": "Listar saldos consolidados",
+        "description": "Saldos consolidados por cuenta desde Z28. Campos: cuenta_contable, empresa, saldo_anterior (Decimal), debito (Decimal), credito (Decimal), saldo_final (Decimal). Valores BCD.",
+        "security": [{"bearerAuth": []}],
+        "parameters": [
+          {"$ref": "#/components/parameters/page"},
+          {"$ref": "#/components/parameters/limit"},
+          {"$ref": "#/components/parameters/search"},
+          {"$ref": "#/components/parameters/sync_status"},
+          {"$ref": "#/components/parameters/since"}
+        ],
+        "responses": {
+          "200": {"description": "Lista paginada", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PaginatedResponse"}}}},
+          "401": {"$ref": "#/components/responses/Unauthorized"}
+        }
+      }
+    },
+    "/api/v1/saldos_consolidados/{key}": {
+      "get": {
+        "tags": ["SaldosConsolidados"],
+        "summary": "Detalle de saldo consolidado",
+        "security": [{"bearerAuth": []}],
+        "parameters": [{"name": "key", "in": "path", "required": true, "schema": {"type": "string"}, "description": "record_key"}],
+        "responses": {
+          "200": {"description": "Detalle", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Record"}}}},
+          "404": {"$ref": "#/components/responses/NotFound"}
+        }
+      }
+    },
+    "/api/v1/documentos": {
+      "get": {
+        "tags": ["Documentos"],
+        "summary": "Listar documentos",
+        "description": "Documentos/facturas desde Z11. Campos: tipo_comprobante, codigo_comp, secuencia, nit_tercero, cuenta_contable, producto_ref, bodega, centro_costo, fecha, descripcion, tipo_mov (D/C), referencia.",
+        "security": [{"bearerAuth": []}],
+        "parameters": [
+          {"$ref": "#/components/parameters/page"},
+          {"$ref": "#/components/parameters/limit"},
+          {"$ref": "#/components/parameters/search"},
+          {"$ref": "#/components/parameters/sync_status"},
+          {"$ref": "#/components/parameters/since"}
+        ],
+        "responses": {
+          "200": {"description": "Lista paginada", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PaginatedResponse"}}}},
+          "401": {"$ref": "#/components/responses/Unauthorized"}
+        }
+      }
+    },
+    "/api/v1/documentos/{key}": {
+      "get": {
+        "tags": ["Documentos"],
+        "summary": "Detalle de documento",
+        "security": [{"bearerAuth": []}],
+        "parameters": [{"name": "key", "in": "path", "required": true, "schema": {"type": "string"}, "description": "record_key"}],
+        "responses": {
+          "200": {"description": "Detalle", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Record"}}}},
+          "404": {"$ref": "#/components/responses/NotFound"}
+        }
+      }
+    },
+    "/api/v1/terceros_ampliados": {
+      "get": {
+        "tags": ["TercerosAmpliados"],
+        "summary": "Listar terceros ampliados",
+        "description": "Datos ampliados de terceros desde Z08A. Campos: nit, nombre, empresa, tipo_persona, representante_legal, direccion, email.",
+        "security": [{"bearerAuth": []}],
+        "parameters": [
+          {"$ref": "#/components/parameters/page"},
+          {"$ref": "#/components/parameters/limit"},
+          {"$ref": "#/components/parameters/search"},
+          {"$ref": "#/components/parameters/sync_status"},
+          {"$ref": "#/components/parameters/since"}
+        ],
+        "responses": {
+          "200": {"description": "Lista paginada", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PaginatedResponse"}}}},
+          "401": {"$ref": "#/components/responses/Unauthorized"}
+        }
+      }
+    },
+    "/api/v1/terceros_ampliados/{key}": {
+      "get": {
+        "tags": ["TercerosAmpliados"],
+        "summary": "Detalle de tercero ampliado",
+        "security": [{"bearerAuth": []}],
+        "parameters": [{"name": "key", "in": "path", "required": true, "schema": {"type": "string"}, "description": "record_key"}],
+        "responses": {
+          "200": {"description": "Detalle", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Record"}}}},
+          "404": {"$ref": "#/components/responses/NotFound"}
+        }
+      }
+    },
+    "/api/v1/transacciones_detalle": {
+      "get": {
+        "tags": ["TransaccionesDetalle"],
+        "summary": "Listar transacciones detalle",
+        "description": "Detalle por linea desde Z07T. Campos: tipo_comprobante, empresa, secuencia, nit_tercero, cuenta_contable, fecha_documento, fecha_vencimiento, tipo_movimiento (D/C), valor (Decimal), referencia.",
+        "security": [{"bearerAuth": []}],
+        "parameters": [
+          {"$ref": "#/components/parameters/page"},
+          {"$ref": "#/components/parameters/limit"},
+          {"$ref": "#/components/parameters/search"},
+          {"$ref": "#/components/parameters/sync_status"},
+          {"$ref": "#/components/parameters/since"}
+        ],
+        "responses": {
+          "200": {"description": "Lista paginada", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PaginatedResponse"}}}},
+          "401": {"$ref": "#/components/responses/Unauthorized"}
+        }
+      }
+    },
+    "/api/v1/transacciones_detalle/{key}": {
+      "get": {
+        "tags": ["TransaccionesDetalle"],
+        "summary": "Detalle de transaccion",
+        "security": [{"bearerAuth": []}],
+        "parameters": [{"name": "key", "in": "path", "required": true, "schema": {"type": "string"}, "description": "record_key"}],
+        "responses": {
+          "200": {"description": "Detalle", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Record"}}}},
+          "404": {"$ref": "#/components/responses/NotFound"}
+        }
+      }
+    },
+    "/api/v1/periodos_contables": {
+      "get": {
+        "tags": ["PeriodosContables"],
+        "summary": "Listar periodos contables",
+        "description": "Periodos contables desde Z26. Campos: empresa, numero_periodo, fecha_inicio, fecha_fin, estado, saldo1/saldo2/saldo3 (Decimal, BCD).",
+        "security": [{"bearerAuth": []}],
+        "parameters": [
+          {"$ref": "#/components/parameters/page"},
+          {"$ref": "#/components/parameters/limit"},
+          {"$ref": "#/components/parameters/search"},
+          {"$ref": "#/components/parameters/sync_status"},
+          {"$ref": "#/components/parameters/since"}
+        ],
+        "responses": {
+          "200": {"description": "Lista paginada", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PaginatedResponse"}}}},
+          "401": {"$ref": "#/components/responses/Unauthorized"}
+        }
+      }
+    },
+    "/api/v1/periodos_contables/{key}": {
+      "get": {
+        "tags": ["PeriodosContables"],
+        "summary": "Detalle de periodo contable",
+        "security": [{"bearerAuth": []}],
+        "parameters": [{"name": "key", "in": "path", "required": true, "schema": {"type": "string"}, "description": "record_key"}],
+        "responses": {
+          "200": {"description": "Detalle", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Record"}}}},
+          "404": {"$ref": "#/components/responses/NotFound"}
+        }
+      }
+    },
+    "/api/v1/condiciones_pago": {
+      "get": {
+        "tags": ["CondicionesPago"],
+        "summary": "Listar condiciones de pago",
+        "description": "Condiciones de pago desde Z05. Campos: tipo, empresa, secuencia, tipo_doc, fecha, nit, tipo_secundario, valor (Decimal, BCD), fecha_registro.",
+        "security": [{"bearerAuth": []}],
+        "parameters": [
+          {"$ref": "#/components/parameters/page"},
+          {"$ref": "#/components/parameters/limit"},
+          {"$ref": "#/components/parameters/search"},
+          {"$ref": "#/components/parameters/sync_status"},
+          {"$ref": "#/components/parameters/since"}
+        ],
+        "responses": {
+          "200": {"description": "Lista paginada", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PaginatedResponse"}}}},
+          "401": {"$ref": "#/components/responses/Unauthorized"}
+        }
+      }
+    },
+    "/api/v1/condiciones_pago/{key}": {
+      "get": {
+        "tags": ["CondicionesPago"],
+        "summary": "Detalle de condicion de pago",
+        "security": [{"bearerAuth": []}],
+        "parameters": [{"name": "key", "in": "path", "required": true, "schema": {"type": "string"}, "description": "record_key"}],
+        "responses": {
+          "200": {"description": "Detalle", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Record"}}}},
+          "404": {"$ref": "#/components/responses/NotFound"}
+        }
+      }
+    },
+    "/api/v1/libros_auxiliares": {
+      "get": {
+        "tags": ["LibrosAuxiliares"],
+        "summary": "Listar libros auxiliares",
+        "description": "Libros auxiliares desde Z07. Campos: empresa, cuenta_contable, tipo_comprobante, codigo_comprobante, fecha_documento, nit_tercero, saldo/debito/credito (Decimal, BCD).",
+        "security": [{"bearerAuth": []}],
+        "parameters": [
+          {"$ref": "#/components/parameters/page"},
+          {"$ref": "#/components/parameters/limit"},
+          {"$ref": "#/components/parameters/search"},
+          {"$ref": "#/components/parameters/sync_status"},
+          {"$ref": "#/components/parameters/since"}
+        ],
+        "responses": {
+          "200": {"description": "Lista paginada", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PaginatedResponse"}}}},
+          "401": {"$ref": "#/components/responses/Unauthorized"}
+        }
+      }
+    },
+    "/api/v1/libros_auxiliares/{key}": {
+      "get": {
+        "tags": ["LibrosAuxiliares"],
+        "summary": "Detalle de libro auxiliar",
+        "security": [{"bearerAuth": []}],
+        "parameters": [{"name": "key", "in": "path", "required": true, "schema": {"type": "string"}, "description": "record_key"}],
+        "responses": {
+          "200": {"description": "Detalle", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Record"}}}},
+          "404": {"$ref": "#/components/responses/NotFound"}
+        }
+      }
+    },
+    "/api/v1/codigos_dane": {
+      "get": {
+        "tags": ["CodigosDane"],
+        "summary": "Listar codigos DANE",
+        "description": "Codigos DANE de municipios colombianos. Campos: codigo (5 digitos), nombre.",
+        "security": [{"bearerAuth": []}],
+        "parameters": [
+          {"$ref": "#/components/parameters/page"},
+          {"$ref": "#/components/parameters/limit"},
+          {"$ref": "#/components/parameters/search"},
+          {"$ref": "#/components/parameters/sync_status"},
+          {"$ref": "#/components/parameters/since"}
+        ],
+        "responses": {
+          "200": {"description": "Lista paginada", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PaginatedResponse"}}}},
+          "401": {"$ref": "#/components/responses/Unauthorized"}
+        }
+      }
+    },
+    "/api/v1/codigos_dane/{key}": {
+      "get": {
+        "tags": ["CodigosDane"],
+        "summary": "Detalle de codigo DANE",
+        "security": [{"bearerAuth": []}],
+        "parameters": [{"name": "key", "in": "path", "required": true, "schema": {"type": "string"}, "description": "Codigo DANE (5 digitos)"}],
+        "responses": {
+          "200": {"description": "Detalle", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Record"}}}},
+          "404": {"$ref": "#/components/responses/NotFound"}
+        }
+      }
+    },
+    "/api/v1/actividades_ica": {
+      "get": {
+        "tags": ["ActividadesICA"],
+        "summary": "Listar actividades ICA",
+        "description": "Actividades economicas ICA con tarifas. Campos: codigo, nombre, tarifa.",
+        "security": [{"bearerAuth": []}],
+        "parameters": [
+          {"$ref": "#/components/parameters/page"},
+          {"$ref": "#/components/parameters/limit"},
+          {"$ref": "#/components/parameters/search"},
+          {"$ref": "#/components/parameters/sync_status"},
+          {"$ref": "#/components/parameters/since"}
+        ],
+        "responses": {
+          "200": {"description": "Lista paginada", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PaginatedResponse"}}}},
+          "401": {"$ref": "#/components/responses/Unauthorized"}
+        }
+      }
+    },
+    "/api/v1/actividades_ica/{key}": {
+      "get": {
+        "tags": ["ActividadesICA"],
+        "summary": "Detalle de actividad ICA",
+        "security": [{"bearerAuth": []}],
+        "parameters": [{"name": "key", "in": "path", "required": true, "schema": {"type": "string"}, "description": "Codigo actividad"}],
+        "responses": {
+          "200": {"description": "Detalle", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Record"}}}},
+          "404": {"$ref": "#/components/responses/NotFound"}
+        }
+      }
+    },
+    "/api/v1/conceptos_pila": {
+      "get": {
+        "tags": ["ConceptosPILA"],
+        "summary": "Listar conceptos PILA",
+        "description": "Conceptos de seguridad social PILA. Campos: tipo, fondo, concepto, flags, tipo_base, base_calculo.",
+        "security": [{"bearerAuth": []}],
+        "parameters": [
+          {"$ref": "#/components/parameters/page"},
+          {"$ref": "#/components/parameters/limit"},
+          {"$ref": "#/components/parameters/search"},
+          {"$ref": "#/components/parameters/sync_status"},
+          {"$ref": "#/components/parameters/since"}
+        ],
+        "responses": {
+          "200": {"description": "Lista paginada", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PaginatedResponse"}}}},
+          "401": {"$ref": "#/components/responses/Unauthorized"}
+        }
+      }
+    },
+    "/api/v1/conceptos_pila/{key}": {
+      "get": {
+        "tags": ["ConceptosPILA"],
+        "summary": "Detalle de concepto PILA",
+        "security": [{"bearerAuth": []}],
+        "parameters": [{"name": "key", "in": "path", "required": true, "schema": {"type": "string"}, "description": "record_key"}],
+        "responses": {
+          "200": {"description": "Detalle", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Record"}}}},
+          "404": {"$ref": "#/components/responses/NotFound"}
+        }
+      }
+    },
+    "/api/v1/activos_fijos_detalle": {
+      "get": {
+        "tags": ["ActivosFijosDetalle"],
+        "summary": "Listar activos fijos detalle",
+        "description": "Detalle de activos fijos desde Z27. Campos: grupo, secuencia, nombre, nit_responsable, codigo, fecha, valor_compra (Decimal).",
+        "security": [{"bearerAuth": []}],
+        "parameters": [
+          {"$ref": "#/components/parameters/page"},
+          {"$ref": "#/components/parameters/limit"},
+          {"$ref": "#/components/parameters/search"},
+          {"$ref": "#/components/parameters/sync_status"},
+          {"$ref": "#/components/parameters/since"}
+        ],
+        "responses": {
+          "200": {"description": "Lista paginada", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PaginatedResponse"}}}},
+          "401": {"$ref": "#/components/responses/Unauthorized"}
+        }
+      }
+    },
+    "/api/v1/activos_fijos_detalle/{key}": {
+      "get": {
+        "tags": ["ActivosFijosDetalle"],
+        "summary": "Detalle de activo fijo (detalle)",
+        "security": [{"bearerAuth": []}],
+        "parameters": [{"name": "key", "in": "path", "required": true, "schema": {"type": "string"}, "description": "record_key"}],
+        "responses": {
+          "200": {"description": "Detalle", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Record"}}}},
+          "404": {"$ref": "#/components/responses/NotFound"}
+        }
+      }
+    },
+    "/api/v1/audit_trail_terceros": {
+      "get": {
+        "tags": ["AuditTrailTerceros"],
+        "summary": "Listar audit trail de terceros",
+        "description": "Historial de cambios en terceros desde Z11N. Campos: fecha_cambio, nit_tercero, timestamp, usuario, fecha_periodo, tipo_doc, nombre, nit_representante, nombre_representante.",
+        "security": [{"bearerAuth": []}],
+        "parameters": [
+          {"$ref": "#/components/parameters/page"},
+          {"$ref": "#/components/parameters/limit"},
+          {"$ref": "#/components/parameters/search"},
+          {"$ref": "#/components/parameters/sync_status"},
+          {"$ref": "#/components/parameters/since"}
+        ],
+        "responses": {
+          "200": {"description": "Lista paginada", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PaginatedResponse"}}}},
+          "401": {"$ref": "#/components/responses/Unauthorized"}
+        }
+      }
+    },
+    "/api/v1/audit_trail_terceros/{key}": {
+      "get": {
+        "tags": ["AuditTrailTerceros"],
+        "summary": "Detalle de audit trail",
+        "security": [{"bearerAuth": []}],
+        "parameters": [{"name": "key", "in": "path", "required": true, "schema": {"type": "string"}, "description": "record_key"}],
+        "responses": {
+          "200": {"description": "Detalle", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Record"}}}},
+          "404": {"$ref": "#/components/responses/NotFound"}
+        }
+      }
+    },
+    "/api/v1/clasificacion_cuentas": {
+      "get": {
+        "tags": ["ClasificacionCuentas"],
+        "summary": "Listar clasificacion de cuentas",
+        "description": "Clasificacion de cuentas contables desde Z279CP. Campos: codigo_cuenta, codigo_grupo, codigo_detalle, descripcion.",
+        "security": [{"bearerAuth": []}],
+        "parameters": [
+          {"$ref": "#/components/parameters/page"},
+          {"$ref": "#/components/parameters/limit"},
+          {"$ref": "#/components/parameters/search"},
+          {"$ref": "#/components/parameters/sync_status"},
+          {"$ref": "#/components/parameters/since"}
+        ],
+        "responses": {
+          "200": {"description": "Lista paginada", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PaginatedResponse"}}}},
+          "401": {"$ref": "#/components/responses/Unauthorized"}
+        }
+      }
+    },
+    "/api/v1/clasificacion_cuentas/{key}": {
+      "get": {
+        "tags": ["ClasificacionCuentas"],
+        "summary": "Detalle de clasificacion de cuenta",
+        "security": [{"bearerAuth": []}],
+        "parameters": [{"name": "key", "in": "path", "required": true, "schema": {"type": "string"}, "description": "codigo_cuenta"}],
+        "responses": {
+          "200": {"description": "Detalle", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Record"}}}},
+          "404": {"$ref": "#/components/responses/NotFound"}
+        }
+      }
+    },
+    "/odata": {
+      "get": {
+        "tags": ["OData"],
+        "summary": "OData service document",
+        "description": "Retorna las 20 colecciones OData disponibles.",
+        "security": [{"bearerAuth": []}],
+        "responses": {
+          "200": {"description": "Service document con colecciones disponibles"},
+          "401": {"$ref": "#/components/responses/Unauthorized"}
+        }
+      }
+    },
+    "/odata/$metadata": {
+      "get": {
+        "tags": ["OData"],
+        "summary": "OData metadata (CSDL XML)",
+        "description": "Schema CSDL XML con 20 EntityTypes, propiedades tipadas (Edm.Decimal para saldos, Edm.DateTimeOffset para fechas), NavigationProperty con ReferentialConstraint para relaciones. Power BI usa esto para auto-detectar relaciones entre tablas.",
+        "security": [{"bearerAuth": []}],
+        "responses": {
+          "200": {"description": "CSDL XML con esquema de entidades y relaciones"}
+        }
+      }
+    },
+    "/odata/{table}": {
+      "get": {
+        "tags": ["OData"],
+        "summary": "Consultar coleccion OData",
+        "description": "Query OData v4 con $top, $skip, $filter, $orderby, $select, $count.\n\nTablas: clients, products, movements, cartera, plan_cuentas, activos_fijos, saldos_terceros, saldos_consolidados, documentos, terceros_ampliados, transacciones_detalle, periodos_contables, condiciones_pago, libros_auxiliares, codigos_dane, actividades_ica, conceptos_pila, activos_fijos_detalle, audit_trail_terceros, clasificacion_cuentas.\n\n**$filter operators**: eq, ne, gt, ge, lt, le, contains(), startswith()\n\nEjemplo: `/odata/saldos_terceros?$top=50&$filter=contains(nit_tercero,'900')&$orderby=saldo_final desc&$count=true`",
+        "security": [{"bearerAuth": []}],
+        "parameters": [
+          {"name": "table", "in": "path", "required": true, "schema": {"type": "string", "enum": ["clients", "products", "movements", "cartera", "plan_cuentas", "activos_fijos", "saldos_terceros", "saldos_consolidados", "documentos", "terceros_ampliados", "transacciones_detalle", "periodos_contables", "condiciones_pago", "libros_auxiliares", "codigos_dane", "actividades_ica", "conceptos_pila", "activos_fijos_detalle", "audit_trail_terceros", "clasificacion_cuentas"]}, "description": "Tabla a consultar"},
+          {"name": "$top", "in": "query", "schema": {"type": "integer", "default": 100, "maximum": 5000}, "description": "Maximo de registros a retornar"},
+          {"name": "$skip", "in": "query", "schema": {"type": "integer", "default": 0}, "description": "Registros a saltar (paginacion)"},
+          {"name": "$filter", "in": "query", "schema": {"type": "string"}, "description": "Filtro OData. Ejemplo: sync_status eq 'synced' and contains(nombre,'empresa')"},
+          {"name": "$orderby", "in": "query", "schema": {"type": "string"}, "description": "Ordenamiento. Ejemplo: nombre desc, updated_at asc"},
+          {"name": "$select", "in": "query", "schema": {"type": "string"}, "description": "Columnas (separadas por coma). Ejemplo: nit,nombre,sync_status"},
+          {"name": "$count", "in": "query", "schema": {"type": "string", "enum": ["true", "false"]}, "description": "Incluir @odata.count"}
+        ],
+        "responses": {
+          "200": {"description": "Resultado OData con @odata.context, value[], @odata.count, @odata.nextLink"},
+          "401": {"$ref": "#/components/responses/Unauthorized"}
         }
       }
     }
@@ -320,46 +773,17 @@
       }
     },
     "parameters": {
-      "page": {
-        "name": "page",
-        "in": "query",
-        "schema": {"type": "integer", "default": 1, "minimum": 1},
-        "description": "Numero de pagina"
-      },
-      "limit": {
-        "name": "limit",
-        "in": "query",
-        "schema": {"type": "integer", "default": 50, "minimum": 1, "maximum": 500},
-        "description": "Registros por pagina"
-      },
-      "search": {
-        "name": "search",
-        "in": "query",
-        "schema": {"type": "string"},
-        "description": "Texto de busqueda (filtra por key y campos principales)"
-      },
-      "sync_status": {
-        "name": "sync_status",
-        "in": "query",
-        "schema": {"type": "string", "enum": ["pending", "synced", "error"]},
-        "description": "Filtrar por estado de sincronizacion"
-      },
-      "since": {
-        "name": "since",
-        "in": "query",
-        "schema": {"type": "string", "format": "date-time"},
-        "description": "Solo registros actualizados despues de esta fecha (ISO 8601)"
-      }
+      "page": {"name": "page", "in": "query", "schema": {"type": "integer", "default": 1, "minimum": 1}, "description": "Numero de pagina"},
+      "limit": {"name": "limit", "in": "query", "schema": {"type": "integer", "default": 50, "minimum": 1, "maximum": 500}, "description": "Registros por pagina"},
+      "search": {"name": "search", "in": "query", "schema": {"type": "string"}, "description": "Texto de busqueda (filtra por key y campos principales)"},
+      "sync_status": {"name": "sync_status", "in": "query", "schema": {"type": "string", "enum": ["pending", "synced", "error"]}, "description": "Filtrar por estado de sincronizacion"},
+      "since": {"name": "since", "in": "query", "schema": {"type": "string", "format": "date-time"}, "description": "Solo registros actualizados despues de esta fecha (ISO 8601)"}
     },
     "schemas": {
       "PaginatedResponse": {
         "type": "object",
         "properties": {
-          "data": {
-            "type": "array",
-            "items": {"$ref": "#/components/schemas/Record"},
-            "description": "Lista de registros"
-          },
+          "data": {"type": "array", "items": {"$ref": "#/components/schemas/Record"}, "description": "Lista de registros"},
           "total": {"type": "integer", "description": "Total de registros que coinciden", "example": 150},
           "page": {"type": "integer", "description": "Pagina actual", "example": 1},
           "limit": {"type": "integer", "description": "Registros por pagina", "example": 50}
@@ -367,16 +791,14 @@
       },
       "Record": {
         "type": "object",
-        "description": "Registro dinamico. Los campos varian segun la tabla (clients, products, movements, cartera). Incluye todos los campos almacenados en SQLite.",
+        "description": "Registro dinamico. Los campos varian segun la tabla. Todas las tablas incluyen: id, hash, sync_status, sync_action, sync_error, updated_at, synced_at. Campos numericos (saldo, debito, credito, valor) son decimales.",
         "additionalProperties": true,
         "example": {
           "id": 1,
-          "key": "900123456",
           "nit": "900123456",
-          "client_name": "EMPRESA EJEMPLO SAS",
-          "business_name": "EMPRESA EJEMPLO",
+          "nombre": "EMPRESA EJEMPLO SAS",
           "sync_status": "synced",
-          "updated_at": "2026-03-07T19:00:00Z"
+          "updated_at": "2026-03-08T19:00:00Z"
         }
       },
       "Error": {
@@ -389,29 +811,15 @@
     "responses": {
       "Unauthorized": {
         "description": "No autorizado - Token JWT invalido, expirado o no proporcionado",
-        "content": {
-          "application/json": {
-            "schema": {"$ref": "#/components/schemas/Error"}
-          }
-        }
+        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}
       },
       "APIDisabled": {
         "description": "API publica deshabilitada",
-        "content": {
-          "application/json": {
-            "schema": {"$ref": "#/components/schemas/Error"},
-            "example": {"error": "API deshabilitada"}
-          }
-        }
+        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}, "example": {"error": "API deshabilitada"}}}
       },
       "NotFound": {
         "description": "Registro no encontrado",
-        "content": {
-          "application/json": {
-            "schema": {"$ref": "#/components/schemas/Error"},
-            "example": {"error": "No encontrado"}
-          }
-        }
+        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}, "example": {"error": "No encontrado"}}}
       }
     }
   }

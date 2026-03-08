@@ -1,0 +1,20 @@
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  cmd = "go build -o ./tmp/siigo-web.exe ."
+  bin = "./tmp/siigo-web.exe"
+  # Watch Go files in siigo-web and siigo-common
+  include_dir = [".", "../siigo-common"]
+  include_ext = ["go"]
+  exclude_dir = ["tmp", "frontend", "node_modules"]
+  delay = 1000
+  log = "build-errors.log"
+  send_interrupt = true
+  kill_delay = 500
+
+[log]
+  time = false
+
+[misc]
+  clean_on_exit = true

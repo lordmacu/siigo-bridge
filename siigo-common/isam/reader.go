@@ -2,12 +2,40 @@ package isam
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"log"
 	"os"
+	"syscall"
+	"time"
 
 	"golang.org/x/text/encoding/charmap"
 )
+
+// openWithRetry tries to open a file, retrying on Windows sharing violations.
+func openWithRetry(path string) (*os.File, error) {
+	var lastErr error
+	for attempt := 0; attempt <= MaxLockRetries; attempt++ {
+		f, err := os.Open(path)
+		if err == nil {
+			return f, nil
+		}
+		// Check for Windows sharing violation (ERROR_SHARING_VIOLATION = 32)
+		var pathErr *os.PathError
+		if errors.As(err, &pathErr) {
+			if errno, ok := pathErr.Err.(syscall.Errno); ok && errno == 32 {
+				lastErr = err
+				if attempt < MaxLockRetries {
+					log.Printf("[ISAM] File locked %s, retry %d/%d", path, attempt+1, MaxLockRetries)
+					time.Sleep(LockRetryDelay)
+					continue
+				}
+			}
+		}
+		return nil, err
+	}
+	return nil, fmt.Errorf("file locked after %d retries: %w", MaxLockRetries, lastErr)
+}
 
 // Record represents a single ISAM record with its raw bytes and offset in the file
 type Record struct {
@@ -88,8 +116,8 @@ func parseIsamHeader(data []byte, path string) (IsamHeader, error) {
 // ReadFile reads an ISAM file and extracts all records.
 // Uses header validation, stricter record marker detection, and record count verification.
 func ReadFile(path string) (*FileInfo, error) {
-	// Open with FileShare semantics (read even if Siigo has it locked)
-	f, err := os.Open(path)
+	// Open with retry on sharing violations (Siigo may have file locked)
+	f, err := openWithRetry(path)
 	if err != nil {
 		return nil, fmt.Errorf("cannot open %s: %w", path, err)
 	}

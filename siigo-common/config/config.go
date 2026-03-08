@@ -6,14 +6,29 @@ import (
 )
 
 type Config struct {
-	Auth          AuthConfig            `json:"auth"`
-	Siigo         SiigoConfig           `json:"siigo"`
-	Finearom      FinearomConfig        `json:"finearom"`
-	Sync          SyncConfig            `json:"sync"`
-	PublicAPI     PublicAPIConfig        `json:"public_api"`
-	Telegram      TelegramConfig        `json:"telegram"`
-	FieldMappings map[string][]FieldMap `json:"field_mappings,omitempty"`
-	SendEnabled   map[string]bool       `json:"send_enabled,omitempty"`
+	Auth            AuthConfig            `json:"auth"`
+	Siigo           SiigoConfig           `json:"siigo"`
+	Finearom        FinearomConfig        `json:"finearom"`
+	Sync            SyncConfig            `json:"sync"`
+	PublicAPI       PublicAPIConfig        `json:"public_api"`
+	Telegram        TelegramConfig        `json:"telegram"`
+	Webhooks        WebhookConfig         `json:"webhooks"`
+	FieldMappings   map[string][]FieldMap `json:"field_mappings,omitempty"`
+	SendEnabled     map[string]bool       `json:"send_enabled,omitempty"`
+	AllowEditDelete bool                  `json:"allow_edit_delete"`
+	SetupComplete   bool                  `json:"setup_complete"`
+}
+
+type WebhookConfig struct {
+	Enabled bool          `json:"enabled"`
+	Hooks   []WebhookDef  `json:"hooks,omitempty"`
+}
+
+type WebhookDef struct {
+	URL    string   `json:"url"`
+	Secret string   `json:"secret,omitempty"` // HMAC-SHA256 signing key
+	Events []string `json:"events"`           // e.g. ["sync_complete","sync_error","send_complete","record_change"]
+	Active bool     `json:"active"`
 }
 
 type AuthConfig struct {
@@ -26,6 +41,58 @@ type TelegramConfig struct {
 	BotToken string `json:"bot_token"`
 	ChatID   int64  `json:"chat_id"`
 	ExecPin  string `json:"exec_pin"`
+	// Notification toggles (per type)
+	NotifyServerStart  *bool `json:"notify_server_start,omitempty"`
+	NotifySyncComplete *bool `json:"notify_sync_complete,omitempty"`
+	NotifySyncErrors   *bool `json:"notify_sync_errors,omitempty"`
+	NotifyLoginFailed  *bool `json:"notify_login_failed,omitempty"`
+	NotifyChanges      *bool `json:"notify_changes,omitempty"`
+	NotifyDBCleared    *bool `json:"notify_db_cleared,omitempty"`
+	NotifyMaxRetries   *bool `json:"notify_max_retries,omitempty"`
+}
+
+// IsNotifyEnabled checks if a notification type is enabled.
+// Server start defaults to true; all others default to false.
+func (t *TelegramConfig) IsNotifyEnabled(notifType string) bool {
+	switch notifType {
+	case "server_start":
+		if t.NotifyServerStart == nil {
+			return true // default enabled
+		}
+		return *t.NotifyServerStart
+	case "sync_complete":
+		if t.NotifySyncComplete == nil {
+			return false
+		}
+		return *t.NotifySyncComplete
+	case "sync_errors":
+		if t.NotifySyncErrors == nil {
+			return false
+		}
+		return *t.NotifySyncErrors
+	case "login_failed":
+		if t.NotifyLoginFailed == nil {
+			return false
+		}
+		return *t.NotifyLoginFailed
+	case "changes":
+		if t.NotifyChanges == nil {
+			return false
+		}
+		return *t.NotifyChanges
+	case "db_cleared":
+		if t.NotifyDBCleared == nil {
+			return false
+		}
+		return *t.NotifyDBCleared
+	case "max_retries":
+		if t.NotifyMaxRetries == nil {
+			return false
+		}
+		return *t.NotifyMaxRetries
+	default:
+		return false
+	}
 }
 
 type PublicAPIConfig struct {
@@ -98,7 +165,7 @@ func Default() *Config {
 			BatchDelayMs:        500,
 			MaxRetries:          3,
 			RetryDelaySeconds:   30,
-			Files:             []string{"Z17", "Z06CP", "Z49", "Z092024"},
+			Files:             []string{"Z17", "Z04", "Z49", "Z092024"},
 			StatePath:         "sync_state.json",
 		},
 		PublicAPI: PublicAPIConfig{
@@ -158,7 +225,7 @@ func DefaultFieldMappings() map[string][]FieldMap {
 			{Source: "code", ApiKey: "code", Label: "Codigo", Enabled: true},
 			{Source: "product_name", ApiKey: "product_name", Label: "Nombre Producto", Enabled: true},
 			{Source: "grupo", ApiKey: "grupo", Label: "Grupo", Enabled: true},
-			{Source: "cuenta_contable", ApiKey: "cuenta_contable", Label: "Cuenta Contable", Enabled: true},
+			{Source: "referencia", ApiKey: "referencia", Label: "Referencia", Enabled: true},
 		},
 		"movements": {
 			{Source: "tipo_comprobante", ApiKey: "tipo_comprobante", Label: "Tipo Comprobante", Enabled: true},

@@ -1,20 +1,29 @@
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useState, useEffect, useCallback } from 'react';
-import { api } from '../api';
+import { api, UserInfo } from '../api';
 
 const navItems = [
-  { path: '/', label: 'Dashboard', badge: '' },
-  { path: '/clients', label: 'Clientes', badge: 'Z17' },
-  { path: '/products', label: 'Productos', badge: 'Z06CP' },
-  { path: '/movements', label: 'Movimientos', badge: 'Z49' },
-  { path: '/cartera', label: 'Cartera', badge: 'Z09' },
-  { path: '/field-mappings', label: 'Mapeo Campos', badge: '' },
-  { path: '/errors', label: 'Errores', badge: '' },
-  { path: '/logs', label: 'Logs', badge: '' },
-  { path: '/config', label: 'Configuracion', badge: '' },
+  { path: '/', label: 'Dashboard', badge: '', module: 'dashboard' },
+  { path: '/clients', label: 'Clientes', badge: 'Z17', module: 'clients' },
+  { path: '/products', label: 'Productos', badge: 'Z04', module: 'products' },
+  { path: '/movements', label: 'Movimientos', badge: 'Z49', module: 'movements' },
+  { path: '/cartera', label: 'Cartera', badge: 'Z09', module: 'cartera' },
+  { path: '/plan-cuentas', label: 'Plan Cuentas', badge: 'Z03', module: 'plan_cuentas' },
+  { path: '/activos-fijos', label: 'Activos Fijos', badge: 'Z27', module: 'activos_fijos' },
+  { path: '/saldos-terceros', label: 'Saldos x Tercero', badge: 'Z25', module: 'saldos_terceros' },
+  { path: '/saldos-consolidados', label: 'Saldos Consol.', badge: 'Z28', module: 'saldos_consolidados' },
+  { path: '/documentos', label: 'Documentos', badge: 'Z11', module: 'documentos' },
+  { path: '/terceros-ampliados', label: 'Terceros Amp.', badge: 'Z08A', module: 'terceros_ampliados' },
+  { path: '/field-mappings', label: 'Mapeo Campos', badge: '', module: 'field-mappings' },
+  { path: '/errors', label: 'Errores', badge: '', module: 'errors' },
+  { path: '/logs', label: 'Logs', badge: '', module: 'logs' },
+  { path: '/explorer', label: 'SQL Explorer', badge: '', module: 'explorer' },
+  { path: '/config', label: 'Configuracion', badge: '', module: 'config' },
+  { path: '/users', label: 'Usuarios', badge: '', module: 'users' },
+  { path: '/audit', label: 'Auditoria', badge: '', module: 'config' },
 ];
 
-export default function Sidebar({ onLogout, open }: { onLogout?: () => void; open?: boolean }) {
+export default function Sidebar({ onLogout, open, userInfo }: { onLogout?: () => void; open?: boolean; userInfo?: UserInfo | null }) {
   const location = useLocation();
   const navigate = useNavigate();
   const [syncing, setSyncing] = useState(false);
@@ -56,7 +65,10 @@ export default function Sidebar({ onLogout, open }: { onLogout?: () => void; ope
         <small>Middleware Manager</small>
       </div>
       <div className="nav-items">
-        {navItems.map(item => (
+        {navItems.filter(item => {
+          if (!userInfo || userInfo.role === 'root' || userInfo.role === 'admin') return true;
+          return item.module === 'dashboard' || userInfo.permissions.includes(item.module);
+        }).map(item => (
           <div
             key={item.path}
             className={`nav-item ${location.pathname === item.path ? 'active' : ''}`}
@@ -84,6 +96,12 @@ export default function Sidebar({ onLogout, open }: { onLogout?: () => void; ope
         >
           {paused ? 'Reanudar Auto-Sync' : 'Pausar Auto-Sync'}
         </button>
+        {userInfo && (
+          <div className="sidebar-user">
+            <span className="sidebar-username">{userInfo.username}</span>
+            <span className="sidebar-role">{userInfo.role}</span>
+          </div>
+        )}
         {onLogout && (
           <button className="logout-btn" onClick={onLogout}>
             Cerrar Sesion

@@ -3,7 +3,9 @@ package parsers
 import (
 	"crypto/sha256"
 	"fmt"
+	"path/filepath"
 	"siigo-common/isam"
+	"sort"
 	"strings"
 )
 
@@ -21,6 +23,34 @@ type Cartera struct {
 	Descripcion    string `json:"descripcion"`      // transaction description
 	TipoMov        string `json:"tipo_mov"`         // D=debit, C=credit
 	Hash           string `json:"hash"`
+}
+
+// FindLatestZ09 finds the most recent Z09YYYY file (excluding variants like Z09CL, Z09D, etc.)
+func FindLatestZ09(dataPath string) (string, string) {
+	matches, _ := filepath.Glob(dataPath + "Z09[0-9][0-9][0-9][0-9]")
+	if len(matches) == 0 {
+		return "", ""
+	}
+	sort.Sort(sort.Reverse(sort.StringSlice(matches)))
+	for _, m := range matches {
+		if strings.HasSuffix(strings.ToLower(m), ".idx") {
+			continue
+		}
+		base := filepath.Base(m)
+		year := base[3:]
+		return m, year
+	}
+	return "", ""
+}
+
+// ParseCarteraLatest reads the latest Z09YYYY file and returns cartera entries.
+func ParseCarteraLatest(dataPath string) ([]Cartera, string, error) {
+	_, year := FindLatestZ09(dataPath)
+	if year == "" {
+		return nil, "", fmt.Errorf("no Z09YYYY file found in %s", dataPath)
+	}
+	items, err := ParseCartera(dataPath, year)
+	return items, year, err
 }
 
 // ParseCartera reads a Z09YYYY file and returns all cartera entries

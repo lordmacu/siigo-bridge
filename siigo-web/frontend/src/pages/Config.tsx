@@ -2,14 +2,22 @@ import { useState, useEffect } from 'react';
 import { api } from '../api';
 import { showToast } from '../components/Toast';
 
-type Tab = 'general' | 'api' | 'telegram' | 'advanced';
+type Tab = 'general' | 'api' | 'telegram' | 'integrations' | 'advanced';
 
 const TAB_LABELS: Record<Tab, string> = {
   general: 'General',
   api: 'Servidor & API',
   telegram: 'Telegram',
+  integrations: 'Integraciones',
   advanced: 'Avanzado',
 };
+
+interface WebhookDef {
+  url: string;
+  secret: string;
+  events: string[];
+  active: boolean;
+}
 
 export default function Config() {
   const [activeTab, setActiveTab] = useState<Tab>('general');
@@ -33,12 +41,27 @@ export default function Config() {
   const [tgBotToken, setTgBotToken] = useState('');
   const [tgChatId, setTgChatId] = useState('');
   const [tgExecPin, setTgExecPin] = useState('');
+  const [tgNotify, setTgNotify] = useState({
+    server_start: true,
+    sync_complete: false,
+    sync_errors: false,
+    login_failed: false,
+    changes: false,
+    db_cleared: false,
+    max_retries: false,
+  });
+
+  // --- Integraciones (Webhooks + URLs) ---
+  const [whEnabled, setWhEnabled] = useState(false);
+  const [whHooks, setWhHooks] = useState<WebhookDef[]>([]);
+  const [serverInfo, setServerInfo] = useState<{ lan_urls: string[]; tunnel_url: string } | null>(null);
 
   // --- Avanzado ---
   const [batchSize, setBatchSize] = useState(50);
   const [batchDelay, setBatchDelay] = useState(500);
   const [maxRetries, setMaxRetries] = useState(3);
   const [retryDelay, setRetryDelay] = useState(30);
+  const [allowEditDelete, setAllowEditDelete] = useState(false);
 
   useEffect(() => {
     api.getConfig().then(cfg => {
@@ -60,7 +83,22 @@ export default function Config() {
     api.getTelegramConfig().then(cfg => {
       setTgEnabled(cfg.enabled === true);
       setTgChatId(cfg.chat_id ? String(cfg.chat_id) : '');
+      setTgNotify({
+        server_start: cfg.notify_server_start !== false,
+        sync_complete: cfg.notify_sync_complete === true,
+        sync_errors: cfg.notify_sync_errors === true,
+        login_failed: cfg.notify_login_failed === true,
+        changes: cfg.notify_changes === true,
+        db_cleared: cfg.notify_db_cleared === true,
+        max_retries: cfg.notify_max_retries === true,
+      });
     }).catch(() => {});
+    api.getAllowEditDelete().then(r => setAllowEditDelete(r.enabled === true)).catch(() => {});
+    api.getWebhookConfig().then(cfg => {
+      setWhEnabled(cfg.enabled === true);
+      setWhHooks(cfg.hooks || []);
+    }).catch(() => {});
+    api.getServerInfo().then(setServerInfo).catch(() => {});
   }, []);
 
   const handleSaveGeneral = async () => {
@@ -86,9 +124,14 @@ export default function Config() {
   };
 
   const handleClearDB = async () => {
-    if (!confirm('Seguro que quieres vaciar todas las tablas de SQLite?')) return;
+    if (!confirm('Seguro que quieres vaciar todas las tablas de SQLite? Se mostrara el wizard de setup nuevamente.')) return;
     const r = await api.clearDatabase();
-    showToast(r.status === 'ok' ? 'success' : 'error', r.status === 'ok' ? 'Base de datos vaciada' : 'Error');
+    if (r.status === 'ok') {
+      // Reload to trigger wizard (setup_complete is now false)
+      window.location.reload();
+    } else {
+      showToast('error', 'Error al vaciar base de datos');
+    }
   };
 
   return (
@@ -115,7 +158,7 @@ export default function Config() {
               <div className="form-group">
                 <label>Ruta de archivos ISAM</label>
                 <input value={dataPath} onChange={e => setDataPath(e.target.value)} placeholder="C:\DEMOS01\" />
-                <small className="form-hint">Carpeta donde Siigo guarda los archivos Z17, Z06CP, Z49, Z09, etc.</small>
+                <small className="form-hint">Carpeta donde Siigo guarda los archivos Z17, Z04, Z49, Z09, etc.</small>
               </div>
 
               <h3 className="config-section-title">Intervalos de Sincronizacion</h3>
@@ -261,6 +304,42 @@ export default function Config() {
                     <input value={tgExecPin} onChange={e => setTgExecPin(e.target.value)} placeholder="2337" />
                     <small className="form-hint">PIN de seguridad para ejecutar comandos remotos</small>
                   </div>
+
+                  <h3 className="config-section-title" style={{ marginTop: 20 }}>Tipos de Notificacion</h3>
+                  <p className="form-hint" style={{ marginBottom: 12 }}>
+                    Selecciona que notificaciones quieres recibir por Telegram.
+                  </p>
+                  <div className="notify-toggles">
+                    {([
+                      ['server_start', 'Inicio del servidor'],
+                      ['sync_complete', 'Sync completado (adds/edits)'],
+                      ['sync_errors', 'Errores de sync'],
+                      ['login_failed', 'Login fallido al API'],
+                      ['changes', 'Cambios detectados en ISAM'],
+                      ['db_cleared', 'Base de datos vaciada'],
+                      ['max_retries', 'Reintentos agotados'],
+                    ] as [string, string][]).map(([key, label]) => (
+                      <div key={key} className="send-toggle-row" style={{ marginBottom: 4 }}>
+                        <label className="toggle-switch">
+                          <input
+                            type="checkbox"
+                            checked={(tgNotify as Record<string, boolean>)[key]}
+                            onChange={async () => {
+                              const v = !(tgNotify as Record<string, boolean>)[key];
+                              setTgNotify(prev => ({ ...prev, [key]: v }));
+                              await api.saveTelegramConfig({ [`notify_${key}`]: v });
+                              showToast('success', `${label}: ${v ? 'activado' : 'desactivado'}`);
+                            }}
+                          />
+                          <span className="toggle-slider"></span>
+                        </label>
+                        <span className={`send-toggle-label ${(tgNotify as Record<string, boolean>)[key] ? 'active' : 'inactive'}`}>
+                          {label}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+
                   <div className="config-actions">
                     <button className="btn-save" onClick={async () => {
                       if (!tgChatId.trim()) return;
@@ -275,6 +354,156 @@ export default function Config() {
                       const r = await api.testTelegram();
                       showToast(r.status === 'ok' ? 'success' : 'error', r.status === 'ok' ? 'Mensaje de prueba enviado!' : (r.error || 'Error'));
                     }}>Enviar Test</button>
+                  </div>
+                </>
+              )}
+            </>
+          )}
+
+          {/* ===== INTEGRACIONES ===== */}
+          {activeTab === 'integrations' && (
+            <>
+              <h3 className="config-section-title">URLs de Conexion</h3>
+              <p className="form-hint" style={{ marginBottom: 12 }}>
+                Usa estas URLs para conectar herramientas externas (Power BI, Postman, etc.) desde la red local.
+              </p>
+              {serverInfo && (() => {
+                const primary = serverInfo.lan_urls[0] || '';
+                const base = primary || serverInfo.tunnel_url;
+                const services = [
+                  { label: 'OData (Power BI)', path: '/odata' },
+                  { label: 'API v1', path: '/api/v1' },
+                  { label: 'Swagger Docs', path: '/api/v1/docs' },
+                ];
+                return (
+                  <div className="connection-urls">
+                    {services.map(svc => (
+                      <div key={svc.path} className="url-row">
+                        <div className="url-group">
+                          <label>{svc.label}</label>
+                          <div className="url-copy">
+                            <code>{base}{svc.path}</code>
+                            <button className="btn-sm btn-copy" onClick={() => { navigator.clipboard.writeText(base + svc.path); showToast('success', 'URL copiada'); }}>Copiar</button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                    {serverInfo.lan_urls.length > 1 && (
+                      <details style={{ marginTop: 8 }}>
+                        <summary style={{ color: '#94a3b8', fontSize: 12, cursor: 'pointer' }}>
+                          Otras IPs de red ({serverInfo.lan_urls.length - 1})
+                        </summary>
+                        <div style={{ marginTop: 8 }}>
+                          {serverInfo.lan_urls.slice(1).map((url: string) => (
+                            <div key={url} className="url-row" style={{ padding: '4px 0' }}>
+                              <div className="url-copy">
+                                <code style={{ fontSize: 12 }}>{url}</code>
+                                <button className="btn-sm btn-copy" onClick={() => { navigator.clipboard.writeText(url); showToast('success', 'URL copiada'); }}>Copiar</button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </details>
+                    )}
+                    {serverInfo.tunnel_url && (
+                      <div className="url-row" style={{ borderTop: '1px solid #334155', paddingTop: 12, marginTop: 8 }}>
+                        <div className="url-group">
+                          <label>Tunnel (acceso publico)</label>
+                          <div className="url-copy">
+                            <code>{serverInfo.tunnel_url}</code>
+                            <button className="btn-sm btn-copy" onClick={() => { navigator.clipboard.writeText(serverInfo.tunnel_url); showToast('success', 'URL copiada'); }}>Copiar</button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
+              <div className="config-msg info" style={{ marginTop: 12 }}>
+                <strong>Power BI:</strong> Get Data &rarr; OData Feed &rarr; pega la URL de OData &rarr; en Headers agrega <code>Authorization: Bearer {'<token>'}</code>
+              </div>
+
+              <h3 className="config-section-title" style={{ marginTop: 24 }}>Webhooks</h3>
+              <p className="form-hint" style={{ marginBottom: 12 }}>
+                Notifica a sistemas externos (Laravel, Zapier, n8n) cuando ocurren eventos en el middleware.
+              </p>
+              <div className="send-toggle-row">
+                <label className="toggle-switch">
+                  <input type="checkbox" checked={whEnabled} onChange={async () => {
+                    const v = !whEnabled;
+                    setWhEnabled(v);
+                    await api.saveWebhookConfig({ enabled: v });
+                    showToast('success', `Webhooks ${v ? 'activados' : 'desactivados'}`);
+                  }} />
+                  <span className="toggle-slider"></span>
+                </label>
+                <span className={`send-toggle-label ${whEnabled ? 'active' : 'inactive'}`}>
+                  {whEnabled ? 'Webhooks ACTIVOS' : 'Webhooks DESACTIVADOS'}
+                </span>
+              </div>
+
+              {whEnabled && (
+                <>
+                  {whHooks.map((hook, idx) => (
+                    <div key={idx} className="webhook-card">
+                      <div className="form-group">
+                        <label>URL</label>
+                        <input value={hook.url} onChange={e => {
+                          const h = [...whHooks]; h[idx] = { ...h[idx], url: e.target.value }; setWhHooks(h);
+                        }} placeholder="https://tu-app.com/webhook" />
+                      </div>
+                      <div className="form-group">
+                        <label>Secret (HMAC-SHA256, opcional)</label>
+                        <input value={hook.secret} onChange={e => {
+                          const h = [...whHooks]; h[idx] = { ...h[idx], secret: e.target.value }; setWhHooks(h);
+                        }} placeholder="clave-secreta" />
+                      </div>
+                      <div className="form-group">
+                        <label>Eventos</label>
+                        <div className="webhook-events">
+                          {['sync_complete', 'send_complete', 'send_paused', 'record_change'].map(ev => (
+                            <label key={ev} className="webhook-event-check">
+                              <input type="checkbox" checked={hook.events.includes(ev)} onChange={() => {
+                                const h = [...whHooks];
+                                const events = h[idx].events.includes(ev) ? h[idx].events.filter(e => e !== ev) : [...h[idx].events, ev];
+                                h[idx] = { ...h[idx], events };
+                                setWhHooks(h);
+                              }} />
+                              <span>{ev}</span>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                        <label className="toggle-switch" style={{ marginRight: 8 }}>
+                          <input type="checkbox" checked={hook.active} onChange={() => {
+                            const h = [...whHooks]; h[idx] = { ...h[idx], active: !h[idx].active }; setWhHooks(h);
+                          }} />
+                          <span className="toggle-slider"></span>
+                        </label>
+                        <span style={{ color: hook.active ? '#6ee7b7' : '#94a3b8', fontSize: 12 }}>{hook.active ? 'Activo' : 'Inactivo'}</span>
+                        <button className="btn-sm btn-danger-sm" style={{ marginLeft: 'auto' }} onClick={() => {
+                          setWhHooks(whHooks.filter((_, i) => i !== idx));
+                        }}>Eliminar</button>
+                        <button className="btn-sm btn-resend" onClick={async () => {
+                          await api.testWebhook(hook.url, hook.secret);
+                          showToast('success', 'Test enviado a ' + hook.url);
+                        }}>Test</button>
+                      </div>
+                    </div>
+                  ))}
+
+                  <div className="config-actions">
+                    <button className="btn-test" onClick={() => {
+                      setWhHooks([...whHooks, { url: '', secret: '', events: ['sync_complete', 'send_complete'], active: true }]);
+                    }}>+ Agregar Webhook</button>
+                    <button className="btn-save" onClick={async () => {
+                      const valid = whHooks.filter(h => h.url.trim());
+                      await api.saveWebhookConfig({ enabled: whEnabled, hooks: valid });
+                      setWhHooks(valid);
+                      showToast('success', 'Webhooks guardados');
+                    }}>Guardar Webhooks</button>
                   </div>
                 </>
               )}
@@ -316,6 +545,58 @@ export default function Config() {
 
               <div className="config-actions">
                 <button className="btn-save" onClick={handleSaveGeneral}>Guardar</button>
+              </div>
+
+              <h3 className="config-section-title">Edicion de Registros</h3>
+              <p className="form-hint" style={{ marginBottom: 12 }}>
+                Permite editar y eliminar registros individuales desde las paginas de datos.
+              </p>
+              <div className="send-toggle-row">
+                <label className="toggle-switch">
+                  <input type="checkbox" checked={allowEditDelete} onChange={async () => {
+                    const v = !allowEditDelete;
+                    setAllowEditDelete(v);
+                    await api.saveAllowEditDelete(v);
+                    showToast('success', v ? 'Edicion/eliminacion habilitada' : 'Edicion/eliminacion deshabilitada');
+                  }} />
+                  <span className="toggle-slider"></span>
+                </label>
+                <span className={`send-toggle-label ${allowEditDelete ? 'active' : 'inactive'}`}>
+                  {allowEditDelete ? 'Editar/Eliminar HABILITADO' : 'Editar/Eliminar DESHABILITADO'}
+                </span>
+              </div>
+              {allowEditDelete && (
+                <div className="config-msg warning" style={{ marginTop: 8 }}>
+                  Los registros editados se marcaran como "pending" y se re-enviaran al servidor. Los registros eliminados se pierden permanentemente.
+                </div>
+              )}
+
+              <h3 className="config-section-title">Backup & Restauracion</h3>
+              <p className="form-hint" style={{ marginBottom: 12 }}>
+                Descarga una copia de la base de datos SQLite o restaura desde un archivo .db anterior.
+              </p>
+              <div className="config-actions">
+                <a className="btn-save" href={api.backupURL()} download style={{ textDecoration: 'none', textAlign: 'center' }}>
+                  Descargar Backup (.db)
+                </a>
+                <label className="btn-test" style={{ cursor: 'pointer', textAlign: 'center' }}>
+                  Restaurar desde archivo
+                  <input type="file" accept=".db,.sqlite,.sqlite3" style={{ display: 'none' }} onChange={async (e) => {
+                    const file = e.target.files?.[0];
+                    if (!file) return;
+                    if (!confirm(`Restaurar la base de datos desde "${file.name}"? Esto reemplazara TODOS los datos actuales.`)) {
+                      e.target.value = '';
+                      return;
+                    }
+                    try {
+                      const r = await api.restore(file);
+                      showToast(r.status === 'ok' ? 'success' : 'error', r.status === 'ok' ? 'Base de datos restaurada exitosamente' : (r.error || 'Error al restaurar'));
+                    } catch {
+                      showToast('error', 'Error al subir el archivo');
+                    }
+                    e.target.value = '';
+                  }} />
+                </label>
               </div>
 
               <h3 className="config-section-title danger">Zona de Peligro</h3>

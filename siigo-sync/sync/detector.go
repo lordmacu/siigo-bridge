@@ -60,7 +60,7 @@ func DetectChanges(dataPath string, filename string, state *SyncState) (*DetectR
 	switch {
 	case filename == "Z17":
 		return detectTercerosChanges(dataPath, fileState, modTime)
-	case filename == "Z06CP":
+	case filename == "Z04" || (len(filename) >= 3 && filename[:3] == "Z04"):
 		return detectProductosChanges(dataPath, fileState, modTime)
 	case filename == "Z49":
 		return detectMovimientosChanges(dataPath, fileState, modTime)
@@ -103,21 +103,21 @@ func detectTercerosChanges(dataPath string, fileState *FileState, modTime int64)
 }
 
 func detectProductosChanges(dataPath string, fileState *FileState, modTime int64) (*DetectResult, error) {
-	productos, err := parsers.ParseProductos(dataPath)
+	productos, year, err := parsers.ParseInventario(dataPath)
 	if err != nil {
 		return nil, err
 	}
 
 	result := &DetectResult{
-		FileName:    "Z06CP",
+		FileName:    "Z04" + year,
 		NewHashes:   make(map[string]string),
 		RecordCount: len(productos),
 	}
 
 	currentHashes := make(map[string]string)
 	for _, p := range productos {
-		key := p.Comprobante + "-" + p.Secuencia
-		if key == "-" {
+		key := p.Codigo
+		if key == "" {
 			key = p.Hash
 		}
 		currentHashes[key] = p.Hash
@@ -144,7 +144,7 @@ func detectMovimientosChanges(dataPath string, fileState *FileState, modTime int
 
 	currentHashes := make(map[string]string)
 	for _, m := range movimientos {
-		key := m.TipoComprobante + "-" + m.NumeroDoc + "-" + m.NitTercero
+		key := m.TipoComprobante + "-" + m.NumeroDoc + "-" + m.NombreTercero
 		if key == "--" {
 			key = m.Hash
 		}

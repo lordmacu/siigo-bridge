@@ -44,16 +44,18 @@ export const api = {
     });
     return res.json();
   },
-  checkAuth: async (): Promise<boolean> => {
+  checkAuth: async (): Promise<Record<string, unknown>> => {
     try {
       const res = await fetch(BASE + '/check-auth', { headers: authHeaders() });
-      return res.ok;
+      if (!res.ok) return { status: 'error' };
+      return res.json();
     } catch {
-      return false;
+      return { status: 'error' };
     }
   },
   logout: () => {
     localStorage.removeItem('siigo_token');
+    localStorage.removeItem('siigo_user');
   },
   isLoggedIn: () => !!getToken(),
 
@@ -66,6 +68,12 @@ export const api = {
   getProducts: (page: number, search: string) => get(`/products?page=${page}&search=${encodeURIComponent(search)}`),
   getMovements: (page: number, search: string) => get(`/movements?page=${page}&search=${encodeURIComponent(search)}`),
   getCartera: (page: number, search: string) => get(`/cartera?page=${page}&search=${encodeURIComponent(search)}`),
+  getPlanCuentas: (page: number, search: string) => get(`/plan-cuentas?page=${page}&search=${encodeURIComponent(search)}`),
+  getActivosFijos: (page: number, search: string) => get(`/activos-fijos?page=${page}&search=${encodeURIComponent(search)}`),
+  getSaldosTerceros: (page: number, search: string) => get(`/saldos-terceros?page=${page}&search=${encodeURIComponent(search)}`),
+  getSaldosConsolidados: (page: number, search: string) => get(`/saldos-consolidados?page=${page}&search=${encodeURIComponent(search)}`),
+  getDocumentos: (page: number, search: string) => get(`/documentos?page=${page}&search=${encodeURIComponent(search)}`),
+  getTercerosAmpliados: (page: number, search: string) => get(`/terceros-ampliados?page=${page}&search=${encodeURIComponent(search)}`),
   getSyncHistory: (table: string, page: number, search?: string, dateFrom?: string, dateTo?: string, status?: string) => {
     const params = new URLSearchParams({ table, page: String(page) });
     if (search) params.set('search', search);
@@ -106,7 +114,102 @@ export const api = {
     const token = getToken();
     return BASE + '/export-logs' + (token ? `?token=${token}` : '');
   },
+  query: (sql: string, limit: number, offset: number) => post('/query', { query: sql, limit, offset }),
+  getAllowEditDelete: () => get('/allow-edit-delete'),
+  saveAllowEditDelete: (enabled: boolean) => post('/allow-edit-delete', { enabled }),
+  getRecord: (table: string, id: number) => get(`/record?table=${table}&id=${id}`),
+  updateRecord: (table: string, id: number, fields: Record<string, unknown>) => {
+    return fetch(BASE + `/record?table=${table}&id=${id}`, {
+      method: 'PUT',
+      headers: authHeaders(),
+      body: JSON.stringify({ fields }),
+    }).then(r => r.json());
+  },
+  deleteRecord: (table: string, id: number) => {
+    return fetch(BASE + `/record?table=${table}&id=${id}`, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    }).then(r => r.json());
+  },
+
+  // User management
+  getUsers: () => get('/users'),
+  createUser: (data: { username: string; password: string; role: string; permissions: string[] }) =>
+    post('/users', data),
+  updateUser: (id: number, data: object) => {
+    return fetch(BASE + `/users/${id}`, {
+      method: 'PUT',
+      headers: authHeaders(),
+      body: JSON.stringify(data),
+    }).then(r => r.json());
+  },
+  deleteUser: (id: number) => {
+    return fetch(BASE + `/users/${id}`, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    }).then(r => r.json());
+  },
+
+  // User info helpers
+  getUserInfo: (): UserInfo | null => {
+    const raw = localStorage.getItem('siigo_user');
+    return raw ? JSON.parse(raw) : null;
+  },
+  setUserInfo: (info: UserInfo) => {
+    localStorage.setItem('siigo_user', JSON.stringify(info));
+  },
+  clearUserInfo: () => {
+    localStorage.removeItem('siigo_user');
+  },
+
+  // Audit trail
+  getAuditTrail: (page: number) => get(`/audit-trail?page=${page}`),
+
+  // Change history
+  getChangeHistory: (table: string, key: string) => get(`/change-history?table=${table}&key=${key}`),
+
+  // Sync stats for charts
+  getSyncStatsHistory: (hours: number) => get(`/sync-stats-history?hours=${hours}`),
+
+  // Bulk actions
+  bulkAction: (table: string, ids: number[], action: string) =>
+    post('/bulk-action', { table, ids, action }),
+
+  // Backup/Restore
+  backupURL: () => {
+    const token = getToken();
+    return BASE + '/backup' + (token ? `?token=${token}` : '');
+  },
+  restore: async (file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    const res = await fetch(BASE + '/restore', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${getToken()}` },
+      body: form,
+    });
+    return res.json();
+  },
+
+  // Webhooks
+  getWebhookConfig: () => get('/webhook-config'),
+  saveWebhookConfig: (data: object) => post('/webhook-config', data),
+  testWebhook: (url: string, secret?: string) => post('/webhook-test', { url, secret }),
+
+  // Server info (LAN IPs, URLs)
+  getServerInfo: () => get('/server-info'),
+
+  // Setup wizard
+  getSetupStatus: () => get('/setup-status'),
+  setupPopulate: (table: string) => post('/setup-populate', { table }),
+  setupComplete: () => post('/setup-complete'),
 };
+
+export interface UserInfo {
+  username: string;
+  role: string;
+  permissions: string[];
+}
 
 export interface FieldMap {
   source: string;

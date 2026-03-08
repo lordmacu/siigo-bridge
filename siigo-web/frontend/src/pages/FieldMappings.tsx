@@ -4,7 +4,7 @@ import { showToast } from '../components/Toast';
 
 const MODULE_LABELS: Record<string, string> = {
   clients: 'Clientes (Z17)',
-  products: 'Productos (Z06CP)',
+  products: 'Productos (Z04)',
   movements: 'Movimientos (Z49)',
   cartera: 'Cartera (Z09)',
 };

@@ -7,17 +7,17 @@ import (
 	"strings"
 )
 
-// Movimiento represents a transaction from Siigo Z49 file
+// Movimiento represents a document header from Siigo Z49 file.
+// Z49 is a document INDEX — it stores headers only (type, number, name, description).
+// It does NOT contain: dates, cuenta contable, valores, or tipo D/C.
+// For detailed accounting lines with those fields, use Z09 (cartera).
 type Movimiento struct {
 	TipoComprobante string `json:"tipo_comprobante"` // RC=recibo caja, FV=factura venta, etc.
 	Empresa         string `json:"empresa"`          // 001
 	NumeroDoc       string `json:"numero_doc"`       // document number
-	Fecha           string `json:"fecha"`            // YYYYMMDD
-	NitTercero      string `json:"nit_tercero"`      // NIT or CC of the third party
-	CuentaContable  string `json:"cuenta_contable"`  // PUC account code
+	NombreTercero   string `json:"nombre_tercero"`   // third party name (only E, T types)
 	Descripcion     string `json:"descripcion"`      // transaction description
-	Valor           string `json:"valor"`            // amount as text
-	TipoMov         string `json:"tipo_mov"`         // D=debit, C=credit
+	Descripcion2    string `json:"descripcion2"`     // secondary description / user initials
 	RawPreview      string `json:"raw_preview"`      // first 120 chars for debugging
 	Hash            string `json:"hash"`
 }
@@ -34,7 +34,7 @@ func ParseMovimientos(dataPath string) ([]Movimiento, error) {
 	var movimientos []Movimiento
 	for _, rec := range records {
 		m := parseMovimientoRecord(rec, extfh)
-		if m.Descripcion == "" && m.NitTercero == "" && m.NumeroDoc == "" {
+		if m.Descripcion == "" && m.NombreTercero == "" && m.NumeroDoc == "" {
 			continue
 		}
 		movimientos = append(movimientos, m)
@@ -55,7 +55,7 @@ func ParseMovimientosAnio(dataPath string, anio string) ([]Movimiento, error) {
 	var movimientos []Movimiento
 	for _, rec := range records {
 		m := parseMovimientoRecord(rec, extfh)
-		if m.Descripcion == "" && m.NitTercero == "" && m.NumeroDoc == "" {
+		if m.Descripcion == "" && m.NombreTercero == "" && m.NumeroDoc == "" {
 			continue
 		}
 		movimientos = append(movimientos, m)
@@ -79,32 +79,36 @@ func parseMovimientoRecord(rec []byte, extfh bool) Movimiento {
 }
 
 // parseMovimientoEXTFH extracts data from EXTFH-delivered Z49 records.
-// Z49 EXTFH structure (2295 bytes) - verified via hex dump:
+// Z49 EXTFH structure (2295 bytes) - verified via hex dump 2026-03-08:
 //
 //	[0]      tipo letter: R=recibo, T=traslado, F=factura, E=egreso,
 //	         N=nota, P=pago, L=libro, H=hoja, J=journal, C=comprobante
 //	         Space(0x20) = NIT-keyed record (no comprobante type)
 //	[1:4]    codigo_comprobante - 3 digit code (001, 010, 100, etc.)
 //	[4:15]   numero_doc - 11 chars zero-padded document number (also NIT for space-type)
-//	[15:50]  nombre_tercero - 35 chars (only present in some types: T, E)
-//	[72+]    descripcion - text description (variable position within ~72-200)
-//	[129+]   additional description / user initials
+//	[15:50]  nombre_tercero - 35 chars (only for types: T, E)
+//	[72:128] descripcion - primary description text
+//	[129:192] descripcion2 - secondary description / user initials
 //
-// Z49 does NOT store dates, cuenta_contable, valores, or tipo_mov as text.
-// Financial details must come from Z03 (movimientos contables) or Z09 (cartera).
+// Z49 does NOT store: dates, cuenta_contable, valores, or tipo D/C.
+// Actual data extent: max ~192 bytes used, rest is spaces.
+// For detailed accounting lines, use Z09 (cartera).
 func parseMovimientoEXTFH(rec []byte, hash [32]byte, rawPreview string) Movimiento {
 	tipo := rec[0]
 
 	// Space-prefixed records: keyed by NIT, no comprobante type
 	if tipo == ' ' || tipo == '0' {
 		numDoc := strings.TrimLeft(isam.ExtractField(rec, 4, 11), "0")
-		desc := findDescripcion(rec, 50)
+		desc := findDescripcion(rec, 50, 128)
+		desc2 := findDescripcion(rec, 129, 192)
 		if numDoc != "" || desc != "" {
 			return Movimiento{
-				NitTercero:  numDoc, // for space-type records, the doc number IS the NIT
-				Descripcion: desc,
-				RawPreview:  rawPreview,
-				Hash:        fmt.Sprintf("%x", hash[:8]),
+				NumeroDoc:    numDoc,
+				NombreTercero: numDoc, // for space-type records, the doc number IS the NIT
+				Descripcion:  desc,
+				Descripcion2: desc2,
+				RawPreview:   rawPreview,
+				Hash:         fmt.Sprintf("%x", hash[:8]),
 			}
 		}
 		return Movimiento{}
@@ -142,100 +146,93 @@ func parseMovimientoEXTFH(rec []byte, hash [32]byte, rawPreview string) Movimien
 	numeroDoc := strings.TrimLeft(isam.ExtractField(rec, 4, 11), "0")
 	nombreTercero := strings.TrimSpace(isam.ExtractField(rec, 15, 35))
 
-	// Description at offset 72+
-	descripcion := findDescripcion(rec, 72)
+	// Two description areas
+	descripcion := findDescripcion(rec, 72, 128)
+	descripcion2 := findDescripcion(rec, 129, 192)
 
 	return Movimiento{
 		TipoComprobante: tipoComp,
 		NumeroDoc:       numeroDoc,
-		NitTercero:      nombreTercero,
+		NombreTercero:   nombreTercero,
 		Descripcion:     descripcion,
+		Descripcion2:    descripcion2,
 		RawPreview:      rawPreview,
 		Hash:            fmt.Sprintf("%x", hash[:8]),
 	}
 }
 
 // parseMovimientoBinary extracts data from binary-reader Z49 records.
-// Binary reader includes 2-byte record markers, so offsets differ from EXTFH.
+// Binary reader includes 2-byte record markers, so all offsets shift +2.
 func parseMovimientoBinary(rec []byte, hash [32]byte, rawPreview string) Movimiento {
-	if len(rec) < 100 {
+	if len(rec) < 50 {
 		return Movimiento{}
 	}
 
-	tipoComp := isam.ExtractField(rec, 0, 4)
-	empresa := isam.ExtractField(rec, 4, 3)
-	numeroDoc := isam.ExtractField(rec, 7, 10)
-	fecha := isam.ExtractField(rec, 17, 8)
-	nitTercero := isam.ExtractField(rec, 25, 13)
-	cuentaContable := isam.ExtractField(rec, 38, 13)
-	tipoMov := isam.ExtractField(rec, 57, 1)
-	valor := isam.ExtractField(rec, 58, 15)
-	descripcion := findDescripcion(rec, 73)
+	tipo := rec[2] // +2 for binary marker
 
-	if !looksLikeDate(fecha) {
-		return parseMovimientoHeuristic(rec, hash, rawPreview)
+	if tipo == ' ' || tipo == '0' {
+		numDoc := strings.TrimLeft(isam.ExtractField(rec, 6, 11), "0")
+		desc := findDescripcion(rec, 52, 130)
+		desc2 := findDescripcion(rec, 131, 194)
+		if numDoc != "" || desc != "" {
+			return Movimiento{
+				NumeroDoc:     numDoc,
+				NombreTercero: numDoc,
+				Descripcion:   desc,
+				Descripcion2:  desc2,
+				RawPreview:    rawPreview,
+				Hash:          fmt.Sprintf("%x", hash[:8]),
+			}
+		}
+		return Movimiento{}
 	}
 
+	if tipo < 'A' || tipo > 'Z' {
+		return Movimiento{}
+	}
+
+	tipoMap := map[byte]string{
+		'R': "RC", 'T': "TR", 'F': "FV", 'E': "CE", 'N': "ND",
+		'C': "CC", 'P': "PG", 'L': "LB", 'H': "HJ", 'J': "JR",
+	}
+
+	tipoComp := tipoMap[tipo]
+	if tipoComp == "" {
+		tipoComp = string(tipo)
+	}
+
+	codigo := strings.TrimSpace(isam.ExtractField(rec, 3, 3))
+	if codigo != "" {
+		tipoComp = tipoComp + codigo
+	}
+
+	numeroDoc := strings.TrimLeft(isam.ExtractField(rec, 6, 11), "0")
+	nombreTercero := strings.TrimSpace(isam.ExtractField(rec, 17, 35))
+	descripcion := findDescripcion(rec, 74, 130)
+	descripcion2 := findDescripcion(rec, 131, 194)
+
 	return Movimiento{
-		TipoComprobante: strings.TrimSpace(tipoComp),
-		Empresa:         strings.TrimSpace(empresa),
-		NumeroDoc:       strings.TrimLeft(strings.TrimSpace(numeroDoc), "0"),
-		Fecha:           fecha,
-		NitTercero:      strings.TrimLeft(strings.TrimSpace(nitTercero), "0"),
-		CuentaContable:  strings.TrimSpace(cuentaContable),
+		TipoComprobante: tipoComp,
+		NumeroDoc:       numeroDoc,
+		NombreTercero:   nombreTercero,
 		Descripcion:     descripcion,
-		Valor:           strings.TrimSpace(valor),
-		TipoMov:         tipoMov,
+		Descripcion2:    descripcion2,
 		RawPreview:      rawPreview,
 		Hash:            fmt.Sprintf("%x", hash[:8]),
 	}
 }
 
-// parseMovimientoHeuristic tries to extract data when exact offsets don't match
-func parseMovimientoHeuristic(rec []byte, hash [32]byte, rawPreview string) Movimiento {
-	m := Movimiento{
-		RawPreview: rawPreview,
-		Hash:       fmt.Sprintf("%x", hash[:8]),
-	}
-
-	// Scan for date pattern (YYYYMMDD - starts with 20xx)
-	for i := 0; i < len(rec)-8 && i < 200; i++ {
-		if rec[i] == '2' && rec[i+1] == '0' && isDigitRange(rec, i, 8) {
-			candidate := isam.ExtractField(rec, i, 8)
-			if looksLikeDate(candidate) {
-				m.Fecha = candidate
-				for j := i - 1; j >= 0 && j > i-20; j-- {
-					if rec[j] >= '0' && rec[j] <= '9' {
-						start := j
-						for start > 0 && rec[start-1] >= '0' && rec[start-1] <= '9' {
-							start--
-						}
-						if j-start >= 4 {
-							m.NitTercero = strings.TrimLeft(isam.ExtractField(rec, start, j-start+1), "0")
-						}
-						break
-					}
-				}
-				break
-			}
-		}
-	}
-
-	m.Descripcion = findDescripcion(rec, 0)
-
-	if len(rec) > 4 {
-		tc := isam.ExtractField(rec, 0, 4)
-		if len(tc) >= 2 {
-			m.TipoComprobante = strings.TrimSpace(tc)
-		}
-	}
-
-	return m
-}
-
-func findDescripcion(rec []byte, startFrom int) string {
+func findDescripcion(rec []byte, startFrom int, endAtOpt ...int) string {
 	if startFrom >= len(rec) {
-		startFrom = 0
+		return ""
+	}
+
+	limit := 500
+	if len(endAtOpt) > 0 {
+		limit = endAtOpt[0]
+	}
+	if limit > len(rec) {
+		limit = len(rec)
 	}
 
 	bestStart := -1
@@ -243,23 +240,19 @@ func findDescripcion(rec []byte, startFrom int) string {
 	inText := false
 	textStart := 0
 
-	limit := len(rec)
-	if limit > 500 {
-		limit = 500
-	}
-
 	for i := startFrom; i < limit; i++ {
-		isReadable := (rec[i] >= 'A' && rec[i] <= 'Z') || rec[i] == ' ' || rec[i] == '.' ||
+		isReadable := (rec[i] >= 'A' && rec[i] <= 'Z') || (rec[i] >= 'a' && rec[i] <= 'z') ||
+			rec[i] == ' ' || rec[i] == '.' ||
 			rec[i] == ',' || rec[i] == '/' || rec[i] == '-' ||
 			(rec[i] >= '0' && rec[i] <= '9') ||
 			(rec[i] >= 0xC0 && rec[i] <= 0xFF) // accented chars
 
-		if !inText && rec[i] >= 'A' && rec[i] <= 'Z' {
+		if !inText && ((rec[i] >= 'A' && rec[i] <= 'Z') || (rec[i] >= 'a' && rec[i] <= 'z')) {
 			inText = true
 			textStart = i
 		} else if inText && !isReadable {
 			textLen := i - textStart
-			if textLen > bestLen && textLen > 5 {
+			if textLen > bestLen && textLen > 2 {
 				bestStart = textStart
 				bestLen = textLen
 			}
@@ -268,7 +261,7 @@ func findDescripcion(rec []byte, startFrom int) string {
 	}
 	if inText {
 		textLen := limit - textStart
-		if textLen > bestLen && textLen > 5 {
+		if textLen > bestLen && textLen > 2 {
 			bestStart = textStart
 			bestLen = textLen
 		}
@@ -327,30 +320,25 @@ func looksLikeAccount(s string) bool {
 
 // ToFinearomRecaudo converts a movement to a recaudo map for Finearom API
 func (m *Movimiento) ToFinearomRecaudo() map[string]interface{} {
+	desc := m.Descripcion
+	if m.Descripcion2 != "" {
+		desc = desc + " " + m.Descripcion2
+	}
 	return map[string]interface{}{
-		"nit":             m.NitTercero,
-		"numero_factura":  m.NumeroDoc,
-		"fecha_recaudo":   formatFecha(m.Fecha),
-		"valor_cancelado": m.Valor,
-		"descripcion":     m.Descripcion,
-		"siigo_sync_hash": m.Hash,
+		"nit":              m.NombreTercero,
+		"numero_factura":   m.NumeroDoc,
+		"tipo_comprobante": m.TipoComprobante,
+		"descripcion":      desc,
+		"siigo_sync_hash":  m.Hash,
 	}
 }
 
 // IsReciboCaja returns true if this movement is a cash receipt (recaudo)
 func (m *Movimiento) IsReciboCaja() bool {
-	return m.TipoComprobante == "RC" || m.TipoComprobante == "RC01"
+	return len(m.TipoComprobante) >= 2 && m.TipoComprobante[:2] == "RC"
 }
 
 // IsFacturaVenta returns true if this movement is a sales invoice
 func (m *Movimiento) IsFacturaVenta() bool {
-	return m.TipoComprobante == "FV" || m.TipoComprobante == "FV01"
-}
-
-// formatFecha converts YYYYMMDD to YYYY-MM-DD
-func formatFecha(fecha string) string {
-	if len(fecha) != 8 {
-		return fecha
-	}
-	return fecha[:4] + "-" + fecha[4:6] + "-" + fecha[6:8]
+	return len(m.TipoComprobante) >= 2 && m.TipoComprobante[:2] == "FV"
 }

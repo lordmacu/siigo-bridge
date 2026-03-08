@@ -175,11 +175,17 @@ func (b *Bot) helpMessage() string {
 // ==================== NOTIFICATIONS ====================
 
 func (b *Bot) NotifyServerStarted(localURL string) {
+	if !b.cfg.IsNotifyEnabled("server_start") {
+		return
+	}
 	b.Send(fmt.Sprintf("🟢 <b>Servidor iniciado</b>\n\n🖥 %s", localURL))
 }
 
 func (b *Bot) NotifySyncCycleComplete(adds, edits, errors, pending int) {
 	if adds == 0 && edits == 0 && errors == 0 {
+		return
+	}
+	if !b.cfg.IsNotifyEnabled("sync_complete") {
 		return
 	}
 	b.Send(fmt.Sprintf("🔄 <b>Sync completado</b>\n\n✅ Nuevos: %d\n📝 Editados: %d\n❌ Errores: %d\n⏳ Pendientes: %d", adds, edits, errors, pending))
@@ -189,10 +195,16 @@ func (b *Bot) NotifySyncErrors(table string, count int, lastError string) {
 	if count == 0 {
 		return
 	}
+	if !b.cfg.IsNotifyEnabled("sync_errors") {
+		return
+	}
 	b.Send(fmt.Sprintf("⚠️ <b>Errores en %s</b>\n\n%d registros fallaron\nUltimo error: <code>%s</code>", table, count, truncate(lastError, 200)))
 }
 
 func (b *Bot) NotifyLoginFailed(apiURL string, err string) {
+	if !b.cfg.IsNotifyEnabled("login_failed") {
+		return
+	}
 	b.Send(fmt.Sprintf("🔴 <b>Login fallido</b>\n\n🌐 %s\n❌ %s", apiURL, truncate(err, 200)))
 }
 
@@ -200,15 +212,24 @@ func (b *Bot) NotifyMaxRetriesExhausted(table string, count int) {
 	if count == 0 {
 		return
 	}
+	if !b.cfg.IsNotifyEnabled("max_retries") {
+		return
+	}
 	b.Send(fmt.Sprintf("🚨 <b>Reintentos agotados</b>\n\n📋 %s: %d registros alcanzaron el maximo de reintentos", table, count))
 }
 
 func (b *Bot) NotifyDBCleared() {
+	if !b.cfg.IsNotifyEnabled("db_cleared") {
+		return
+	}
 	b.Send("🗑 <b>Base de datos vaciada</b>\n\nUn usuario vacio todas las tablas de SQLite.")
 }
 
 func (b *Bot) NotifyChangesDetected(table string, adds, edits, deletes int) {
 	if adds == 0 && edits == 0 && deletes == 0 {
+		return
+	}
+	if !b.cfg.IsNotifyEnabled("changes") {
 		return
 	}
 	b.Send(fmt.Sprintf("📊 <b>Cambios en %s</b>\n\n➕ %d nuevos\n📝 %d editados\n🗑 %d eliminados", table, adds, edits, deletes))

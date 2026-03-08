@@ -146,7 +146,7 @@ func sendChanges(cfg *config.Config, file string, result *gosync.DetectResult, c
 	switch {
 	case file == "Z17":
 		return sendTercerosChanges(cfg, result, client)
-	case file == "Z06CP":
+	case file == "Z04" || (len(file) >= 3 && file[:3] == "Z04"):
 		return sendProductosChanges(cfg, result, client)
 	case file == "Z49":
 		return sendMovimientosChanges(cfg, result, client)
@@ -193,7 +193,7 @@ func sendTercerosChanges(cfg *config.Config, result *gosync.DetectResult, client
 }
 
 func sendProductosChanges(cfg *config.Config, result *gosync.DetectResult, client *api.Client) error {
-	productos, err := parsers.ParseProductos(cfg.Siigo.DataPath)
+	productos, _, err := parsers.ParseInventario(cfg.Siigo.DataPath)
 	if err != nil {
 		return err
 	}
@@ -207,8 +207,8 @@ func sendProductosChanges(cfg *config.Config, result *gosync.DetectResult, clien
 
 	sent := 0
 	for _, p := range productos {
-		key := p.Comprobante + "-" + p.Secuencia
-		if key == "-" {
+		key := p.Codigo
+		if key == "" {
 			key = p.Hash
 		}
 		if !changedKeys[key] {
@@ -216,12 +216,12 @@ func sendProductosChanges(cfg *config.Config, result *gosync.DetectResult, clien
 		}
 		data := p.ToFinearomProduct()
 		if err := client.Sync("products", "add", key, data); err != nil {
-			log.Printf("[Z06CP] Error syncing product %s: %v", p.Nombre, err)
+			log.Printf("[Z04] Error syncing product %s: %v", p.Nombre, err)
 			continue
 		}
 		sent++
 	}
-	log.Printf("[Z06CP] Sent %d products to Finearom", sent)
+	log.Printf("[Z04] Sent %d products to Finearom", sent)
 	return nil
 }
 
@@ -240,7 +240,7 @@ func sendMovimientosChanges(cfg *config.Config, result *gosync.DetectResult, cli
 
 	sent := 0
 	for _, m := range movimientos {
-		key := m.TipoComprobante + "-" + m.NumeroDoc + "-" + m.NitTercero
+		key := m.TipoComprobante + "-" + m.NumeroDoc + "-" + m.NombreTercero
 		if key == "--" {
 			key = m.Hash
 		}
@@ -248,15 +248,15 @@ func sendMovimientosChanges(cfg *config.Config, result *gosync.DetectResult, cli
 			continue
 		}
 
+		desc := m.Descripcion
+		if m.Descripcion2 != "" {
+			desc = desc + " " + m.Descripcion2
+		}
 		data := map[string]interface{}{
 			"tipo_comprobante": m.TipoComprobante,
 			"numero_doc":      m.NumeroDoc,
-			"fecha":           formatFechaISO(m.Fecha),
-			"nit_tercero":     m.NitTercero,
-			"cuenta_contable": m.CuentaContable,
-			"descripcion":     m.Descripcion,
-			"valor":           m.Valor,
-			"tipo_mov":        m.TipoMov,
+			"nombre_tercero":  m.NombreTercero,
+			"descripcion":     desc,
 			"siigo_sync_hash": m.Hash,
 		}
 		movKey := m.TipoComprobante + "-" + m.NumeroDoc

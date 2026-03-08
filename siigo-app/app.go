@@ -201,9 +201,9 @@ func (a *App) diffClientes() {
 }
 
 func (a *App) diffProductos() {
-	productos, err := parsers.ParseProductos(a.cfg.Siigo.DataPath)
+	productos, year, err := parsers.ParseInventario(a.cfg.Siigo.DataPath)
 	if err != nil {
-		a.db.AddLog("error", "Z06CP", "Error parseando: "+err.Error())
+		a.db.AddLog("error", "Z04", "Error parseando inventario: "+err.Error())
 		return
 	}
 
@@ -211,13 +211,13 @@ func (a *App) diffProductos() {
 	currentKeys := make(map[string]bool, len(productos))
 
 	for _, p := range productos {
-		key := p.Comprobante + "-" + p.Secuencia
-		if key == "-" {
+		key := p.Codigo
+		if key == "" {
 			key = p.Hash
 		}
 		currentKeys[key] = true
 
-		action := a.db.UpsertProduct(key, p.Nombre, p.Comprobante, p.Secuencia, p.TipoTercero, p.Grupo, p.CuentaContable, p.Fecha, p.TipoMov, p.Hash)
+		action := a.db.UpsertProduct(key, p.Nombre, p.NombreCorto, p.Grupo, p.Referencia, p.Empresa, p.Hash)
 		switch action {
 		case "add":
 			adds++
@@ -227,7 +227,8 @@ func (a *App) diffProductos() {
 	}
 
 	deletes := a.db.MarkDeletedProducts(currentKeys)
-	a.db.AddLog("info", "Z06CP", fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(productos)))
+	source := "Z04" + year
+	a.db.AddLog("info", source, fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(productos)))
 }
 
 func (a *App) diffMovimientos() {
@@ -384,7 +385,7 @@ type ISAMPreview struct {
 }
 
 func (a *App) GetISAMInfo() []ISAMPreview {
-	files := []string{"Z17", "Z06", "Z06CP", "Z49"}
+	files := []string{"Z17", "Z06", "Z49"}
 	var result []ISAMPreview
 	for _, f := range files {
 		path := a.cfg.Siigo.DataPath + f
@@ -412,11 +413,11 @@ func (a *App) GetISAMInfo() []ISAMPreview {
 // ISAM cache - avoid re-reading files on every page request
 var (
 	cachedClientes    []parsers.Tercero
-	cachedProductos   []parsers.Producto
+	cachedProductos   []parsers.Inventario
 	cachedMovimientos []parsers.Movimiento
 	cachedCartera     []parsers.Cartera
 	clientesByNIT     map[string]*parsers.Tercero
-	productosByCodigo map[string]*parsers.Producto
+	productosByCodigo map[string]*parsers.Inventario
 	movimientosByNIT  map[string][]parsers.Movimiento
 	carteraByNIT      map[string][]parsers.Cartera
 )
@@ -439,20 +440,19 @@ func (a *App) RefreshCache(which string) {
 		}
 		a.db.AddLog("info", "Z17", fmt.Sprintf("Cache: %d clientes", len(c)))
 	case "products":
-		p, err := parsers.ParseProductos(a.cfg.Siigo.DataPath)
+		p, year, err := parsers.ParseInventario(a.cfg.Siigo.DataPath)
 		if err != nil {
-			a.db.AddLog("error", "Z06CP", "Error leyendo productos: "+err.Error())
+			a.db.AddLog("error", "Z04", "Error leyendo inventario: "+err.Error())
 			return
 		}
 		cachedProductos = p
-		productosByCodigo = make(map[string]*parsers.Producto, len(p))
+		productosByCodigo = make(map[string]*parsers.Inventario, len(p))
 		for i := range p {
-			key := p[i].Comprobante + "-" + p[i].Secuencia
-			if key != "-" {
-				productosByCodigo[key] = &cachedProductos[i]
+			if p[i].Codigo != "" {
+				productosByCodigo[p[i].Codigo] = &cachedProductos[i]
 			}
 		}
-		a.db.AddLog("info", "Z06CP", fmt.Sprintf("Cache: %d productos", len(p)))
+		a.db.AddLog("info", "Z04"+year, fmt.Sprintf("Cache: %d productos", len(p)))
 	case "movements":
 		m, err := parsers.ParseMovimientos(a.cfg.Siigo.DataPath)
 		if err != nil {
@@ -526,11 +526,11 @@ func (a *App) GetProductos(page int, search string) PaginatedISAM {
 	}
 	data := cachedProductos
 	if search != "" {
-		var filtered []parsers.Producto
+		var filtered []parsers.Inventario
 		q := strings.ToLower(search)
 		for _, p := range data {
 			if strings.Contains(strings.ToLower(p.Nombre), q) ||
-				strings.Contains(strings.ToLower(p.Comprobante), q) ||
+				strings.Contains(strings.ToLower(p.Codigo), q) ||
 				strings.Contains(strings.ToLower(p.Grupo), q) {
 				filtered = append(filtered, p)
 			}
@@ -612,7 +612,7 @@ func (a *App) LookupByNIT(nit string) *parsers.Tercero {
 	return clientesByNIT[nit]
 }
 
-func (a *App) LookupProducto(codigo string) *parsers.Producto {
+func (a *App) LookupProducto(codigo string) *parsers.Inventario {
 	if productosByCodigo == nil {
 		a.RefreshCache("products")
 	}
