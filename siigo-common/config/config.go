@@ -6,6 +6,7 @@ import (
 )
 
 type Config struct {
+	Auth          AuthConfig            `json:"auth"`
 	Siigo         SiigoConfig           `json:"siigo"`
 	Finearom      FinearomConfig        `json:"finearom"`
 	Sync          SyncConfig            `json:"sync"`
@@ -13,6 +14,11 @@ type Config struct {
 	Telegram      TelegramConfig        `json:"telegram"`
 	FieldMappings map[string][]FieldMap `json:"field_mappings,omitempty"`
 	SendEnabled   map[string]bool       `json:"send_enabled,omitempty"`
+}
+
+type AuthConfig struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
 }
 
 type TelegramConfig struct {
@@ -73,6 +79,10 @@ func Load(path string) (*Config, error) {
 
 func Default() *Config {
 	return &Config{
+		Auth: AuthConfig{
+			Username: "admin",
+			Password: "change-me",
+		},
 		Siigo: SiigoConfig{
 			DataPath: `C:\DEMOS01\`,
 		},

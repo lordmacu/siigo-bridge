@@ -38,13 +38,12 @@ export default function Config() {
     api.getPublicAPIConfig().then(cfg => {
       setApiEnabled(cfg.enabled !== false);
       setJwtRequired(cfg.jwt_required !== false);
-      setApiKey(cfg.api_key || '');
+      // api_key is masked in response, don't load it
     }).catch(() => {});
     api.getTelegramConfig().then(cfg => {
       setTgEnabled(cfg.enabled === true);
-      setTgBotToken(cfg.bot_token || '');
       setTgChatId(cfg.chat_id ? String(cfg.chat_id) : '');
-      setTgExecPin(cfg.exec_pin || '');
+      // bot_token and exec_pin are masked in API response, don't load them
     }).catch(() => {});
   }, []);
 
@@ -225,9 +224,13 @@ export default function Config() {
               </div>
               <div className="config-actions">
                 <button className="btn-save" onClick={async () => {
-                  if (!tgBotToken.trim() || !tgChatId.trim()) return;
-                  await api.saveTelegramConfig({ bot_token: tgBotToken, chat_id: parseInt(tgChatId) || 0, exec_pin: tgExecPin });
+                  if (!tgChatId.trim()) return;
+                  const data: Record<string, unknown> = { chat_id: parseInt(tgChatId) || 0 };
+                  if (tgBotToken.trim()) data.bot_token = tgBotToken;
+                  if (tgExecPin.trim()) data.exec_pin = tgExecPin;
+                  await api.saveTelegramConfig(data);
                   showToast('success', 'Telegram configurado');
+                  setTgBotToken(''); setTgExecPin('');
                 }}>Guardar Telegram</button>
                 <button className="btn-test" onClick={async () => {
                   const r = await api.testTelegram();

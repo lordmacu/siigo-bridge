@@ -14,6 +14,15 @@ type DB struct {
 	conn *sql.DB
 }
 
+var validTables = map[string]bool{
+	"clients": true, "products": true, "movements": true, "cartera": true,
+	"sync_history": true, "logs": true,
+}
+
+func isValidTable(table string) bool {
+	return validTables[table]
+}
+
 // ==================== TYPED RECORDS (mirror Siigo tables) ====================
 
 type ClientRecord struct {
@@ -877,6 +886,9 @@ type APIQueryResult struct {
 }
 
 func (db *DB) APIGetRecords(table string, params APIQueryParams) APIQueryResult {
+	if !isValidTable(table) {
+		return APIQueryResult{Data: make([]map[string]interface{}, 0)}
+	}
 	keyCol := db.keyColForTable(table)
 	if keyCol == "" {
 		return APIQueryResult{Data: make([]map[string]interface{}, 0)}
@@ -942,6 +954,9 @@ func (db *DB) APIGetRecords(table string, params APIQueryParams) APIQueryResult 
 }
 
 func (db *DB) APIGetRecord(table, key string) map[string]interface{} {
+	if !isValidTable(table) {
+		return nil
+	}
 	keyCol := db.keyColForTable(table)
 	if keyCol == "" {
 		return nil

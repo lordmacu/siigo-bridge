@@ -25,9 +25,12 @@ VITE_PORT=5173
 SIIGO_EXE="siigo-web.exe"
 AIR_BIN="$(go env GOPATH)/bin/air"
 
-# --- Telegram Bot ---
-TG_BOT_TOKEN="8524307920:AAHPsQlU2XsLTnoexvo05Z9l09In8buCANQ"
-TG_CHAT_ID="1194292426"
+# --- Telegram Bot (set via env vars or .env file) ---
+if [ -f ".env" ]; then
+    source .env
+fi
+TG_BOT_TOKEN="${TG_BOT_TOKEN:-}"
+TG_CHAT_ID="${TG_CHAT_ID:-}"
 
 # --- Colores ---
 GREEN='\033[0;32m'

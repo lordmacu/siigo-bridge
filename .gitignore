@@ -14,6 +14,10 @@ siigo-app/frontend/node_modules/
 # Config with credentials
 siigo-sync/config.json
 siigo-app/config.json
+siigo-web/config.json
+
+# Environment variables (secrets)
+.env
 
 # Logs and temp
 *.log

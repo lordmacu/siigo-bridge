@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"siigo-common/api"
 	"siigo-common/config"
 	"siigo-common/isam"
@@ -25,10 +26,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-const (
-	authUser = "lordmacu"
-	authPass = "Lili-2337677"
-)
+// Auth credentials loaded from config.json (auth.username / auth.password)
 
 type Server struct {
 	db             *storage.DB
@@ -91,10 +89,16 @@ func main() {
 				http.NotFound(w, r)
 				return
 			}
+			// Sanitize path to prevent directory traversal
+			cleanPath := filepath.Clean(r.URL.Path)
+			if strings.Contains(cleanPath, "..") {
+				http.NotFound(w, r)
+				return
+			}
 			// Try to serve the file; if not found, serve index.html (SPA)
-			path := frontendDir + r.URL.Path
-			if _, err := os.Stat(path); os.IsNotExist(err) && r.URL.Path != "/" {
-				http.ServeFile(w, r, frontendDir+"/index.html")
+			fullPath := filepath.Join(frontendDir, cleanPath)
+			if _, err := os.Stat(fullPath); os.IsNotExist(err) && r.URL.Path != "/" {
+				http.ServeFile(w, r, filepath.Join(frontendDir, "index.html"))
 				return
 			}
 			fs.ServeHTTP(w, r)
@@ -164,8 +168,17 @@ func readTunnelURL() string {
 }
 
 func corsMiddleware(next http.Handler) http.Handler {
+	allowedOrigins := map[string]bool{
+		"http://localhost:3210":  true,
+		"http://localhost:5173":  true, // Vite dev
+		"http://127.0.0.1:3210": true,
+		"http://127.0.0.1:5173": true,
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		origin := r.Header.Get("Origin")
+		if allowedOrigins[origin] || strings.HasSuffix(origin, ".trycloudflare.com") {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+		}
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		if r.Method == "OPTIONS" {
@@ -211,7 +224,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "Invalid request", 400)
 		return
 	}
-	if body.Username != authUser || body.Password != authPass {
+	if body.Username != s.cfg.Auth.Username || body.Password != s.cfg.Auth.Password {
 		jsonError(w, "Credenciales incorrectas", 401)
 		return
 	}
@@ -809,7 +822,23 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		jsonResponse(w, map[string]string{"status": "ok"})
 		return
 	}
-	jsonResponse(w, s.cfg)
+	// Return config WITHOUT secrets
+	jsonResponse(w, map[string]interface{}{
+		"siigo": s.cfg.Siigo,
+		"finearom": map[string]interface{}{
+			"base_url": s.cfg.Finearom.BaseURL,
+			"email":    s.cfg.Finearom.Email,
+			"password": maskSecret(s.cfg.Finearom.Password),
+		},
+		"sync": s.cfg.Sync,
+	})
+}
+
+func maskSecret(s string) string {
+	if len(s) <= 3 {
+		return "***"
+	}
+	return s[:2] + strings.Repeat("*", len(s)-3) + s[len(s)-1:]
 }
 
 type ISAMPreview struct {
@@ -1177,11 +1206,11 @@ func (s *Server) handlePublicAPIConfig(w http.ResponseWriter, r *http.Request) {
 		jsonResponse(w, map[string]string{"status": "ok"})
 		return
 	}
-	// GET: return current public API config (hide jwt_secret)
+	// GET: return current public API config (hide secrets)
 	jsonResponse(w, map[string]interface{}{
 		"enabled":      s.cfg.PublicAPI.Enabled,
 		"jwt_required": s.cfg.PublicAPI.JwtRequired,
-		"api_key":      s.cfg.PublicAPI.ApiKey,
+		"api_key":      maskSecret(s.cfg.PublicAPI.ApiKey),
 	})
 }
 
@@ -1227,10 +1256,10 @@ func (s *Server) handleTelegramConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jsonResponse(w, map[string]interface{}{
-		"enabled":   s.cfg.Telegram.Enabled,
-		"bot_token": s.cfg.Telegram.BotToken,
-		"chat_id":   s.cfg.Telegram.ChatID,
-		"exec_pin":  s.cfg.Telegram.ExecPin,
+		"enabled":       s.cfg.Telegram.Enabled,
+		"bot_token":     maskSecret(s.cfg.Telegram.BotToken),
+		"chat_id":       s.cfg.Telegram.ChatID,
+		"has_exec_pin":  s.cfg.Telegram.ExecPin != "",
 	})
 }
 
