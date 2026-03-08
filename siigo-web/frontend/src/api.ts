@@ -79,6 +79,7 @@ export const api = {
   pause: () => post('/pause'),
   resume: () => post('/resume'),
   getSyncStatus: () => get('/sync-status'),
+  sendResume: () => post('/send-resume'),
   retryErrors: (table: string) => post('/retry-errors', { table }),
   testConnection: () => post('/test-connection'),
   clearDatabase: () => post('/clear-database'),

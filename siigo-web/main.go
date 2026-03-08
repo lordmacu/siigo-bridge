@@ -31,17 +31,19 @@ const (
 )
 
 type Server struct {
-	db        *storage.DB
-	cfg       *config.Config
-	client    *api.Client
-	bot       *telegram.Bot
-	detecting bool
-	sending   bool
-	paused    bool
-	stopCh    chan bool
-	tokens    map[string]time.Time
-	tokenMu   gosync.RWMutex
-	startTime time.Time
+	db             *storage.DB
+	cfg            *config.Config
+	client         *api.Client
+	bot            *telegram.Bot
+	detecting      bool
+	sending        bool
+	paused         bool
+	sendPaused     bool // auto-paused by circuit breaker
+	sendFailCount  int  // consecutive send cycle failures
+	stopCh         chan bool
+	tokens         map[string]time.Time
+	tokenMu        gosync.RWMutex
+	startTime      time.Time
 }
 
 func main() {
@@ -273,6 +275,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/pause", s.authMiddleware(s.handlePause))
 	mux.HandleFunc("/api/resume", s.authMiddleware(s.handleResume))
 	mux.HandleFunc("/api/sync-status", s.authMiddleware(s.handleSyncStatus))
+	mux.HandleFunc("/api/send-resume", s.authMiddleware(s.handleSendResume))
 	mux.HandleFunc("/api/retry-errors", s.authMiddleware(s.handleRetryErrors))
 	mux.HandleFunc("/api/test-connection", s.authMiddleware(s.handleTestConnection))
 	mux.HandleFunc("/api/clear-database", s.authMiddleware(s.handleClearDatabase))
@@ -367,7 +370,7 @@ func (s *Server) startSendLoop() {
 	for {
 		select {
 		case <-ticker.C:
-			if !s.paused && !s.sending {
+			if !s.paused && !s.sendPaused && !s.sending {
 				s.doSendCycle()
 			}
 		case <-s.stopCh:
@@ -391,25 +394,56 @@ func (s *Server) doDetectCycle() {
 	s.db.AddLog("info", "DETECT", "--- Ciclo deteccion completado ---")
 }
 
+const maxSendFailures = 4
+
 func (s *Server) doSendCycle() {
 	s.sending = true
 	defer func() { s.sending = false }()
 
 	if !s.ensureLogin() {
+		s.sendFailCount++
+		s.checkSendCircuitBreaker("Login fallido")
 		return
 	}
 
 	s.db.AddLog("info", "SEND", "--- Ciclo envio iniciado ---")
 
-	s.sendPending("clients")
-	s.sendPending("products")
-	s.sendPending("movements")
-	s.sendPending("cartera")
+	totalSent, totalErrors := 0, 0
+	tables := []string{"clients", "products", "movements", "cartera"}
+	for _, t := range tables {
+		sent, errs := s.sendPending(t)
+		totalSent += sent
+		totalErrors += errs
+	}
 
 	// Automatic retry: requeue error records that haven't exceeded max retries
 	s.retryFailedRecords()
 
+	// Circuit breaker: if ALL records failed and none succeeded, count as failure
+	if totalErrors > 0 && totalSent == 0 {
+		s.sendFailCount++
+		s.checkSendCircuitBreaker(fmt.Sprintf("%d errores, 0 enviados", totalErrors))
+	} else if totalSent > 0 {
+		// At least some succeeded — reset counter
+		if s.sendFailCount > 0 {
+			s.db.AddLog("info", "SEND", fmt.Sprintf("Envio recuperado (fallos consecutivos reseteados de %d a 0)", s.sendFailCount))
+		}
+		s.sendFailCount = 0
+	}
+
 	s.db.AddLog("info", "SEND", "--- Ciclo envio completado ---")
+}
+
+func (s *Server) checkSendCircuitBreaker(reason string) {
+	if s.sendFailCount >= maxSendFailures && !s.sendPaused {
+		s.sendPaused = true
+		msg := fmt.Sprintf("🔴 <b>Envio auto-pausado</b>\n\n%d fallos consecutivos.\nUltimo: %s\n\nRevisa el servidor de destino y reactiva el envio con /send-resume o desde la web.",
+			s.sendFailCount, reason)
+		s.bot.Send(msg)
+		s.db.AddLog("error", "SEND", fmt.Sprintf("Circuit breaker activado: %d fallos consecutivos (%s). Envio pausado automaticamente.", s.sendFailCount, reason))
+	} else if s.sendFailCount > 0 && !s.sendPaused {
+		s.db.AddLog("warn", "SEND", fmt.Sprintf("Fallo de envio %d/%d (%s)", s.sendFailCount, maxSendFailures, reason))
+	}
 }
 
 func (s *Server) ensureLogin() bool {
@@ -567,9 +601,9 @@ func (s *Server) diffCartera() {
 
 // ==================== SEND PENDING ====================
 
-func (s *Server) sendPending(tableName string) {
+func (s *Server) sendPending(tableName string) (int, int) {
 	if !s.cfg.IsSendEnabled(tableName) {
-		return
+		return 0, 0
 	}
 
 	var pending []storage.PendingRecord
@@ -585,7 +619,7 @@ func (s *Server) sendPending(tableName string) {
 	}
 
 	if len(pending) == 0 {
-		return
+		return 0, 0
 	}
 
 	batchSize := s.cfg.Sync.BatchSize
@@ -626,6 +660,7 @@ func (s *Server) sendPending(tableName string) {
 	if errors > 0 {
 		s.bot.NotifySyncErrors(tableName, errors, lastErr)
 	}
+	return sent, errors
 }
 
 // ==================== AUTO RETRY ====================
@@ -948,11 +983,28 @@ func (s *Server) handleSyncStatus(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, map[string]interface{}{
 		"detecting":        s.detecting,
 		"sending":          s.sending,
-		"syncing":          s.detecting || s.sending, // backwards compat
+		"syncing":          s.detecting || s.sending,
 		"paused":           s.paused,
+		"send_paused":      s.sendPaused,
+		"send_fail_count":  s.sendFailCount,
 		"detect_interval":  s.cfg.Sync.IntervalSeconds,
 		"send_interval":    s.cfg.Sync.SendIntervalSeconds,
 	})
+}
+
+func (s *Server) handleSendResume(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		jsonError(w, "POST only", 405)
+		return
+	}
+	wasPaused := s.sendPaused
+	s.sendPaused = false
+	s.sendFailCount = 0
+	if wasPaused {
+		s.db.AddLog("info", "SEND", "Envio reactivado desde la web (circuit breaker reseteado)")
+		s.bot.Send("▶️ <b>Envio reactivado</b>\n\nReactivado desde la web. Contador de fallos reseteado.")
+	}
+	jsonResponse(w, map[string]string{"status": "ok"})
 }
 
 func (s *Server) handleRetryErrors(w http.ResponseWriter, r *http.Request) {
@@ -1161,9 +1213,16 @@ func (s *Server) handleTelegramConfig(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, err.Error(), 500)
 			return
 		}
-		// Recreate bot with new config
+		// Stop old bot polling, recreate with new config, re-register commands
+		s.bot.StopPolling()
 		s.bot = telegram.New(&s.cfg.Telegram)
-		s.db.AddLog("info", "CONFIG", fmt.Sprintf("Telegram: enabled=%v", s.cfg.Telegram.Enabled))
+		s.registerBotCommands()
+		if s.bot.IsEnabled() {
+			s.bot.StartPolling()
+			s.db.AddLog("info", "CONFIG", "Telegram bot activado y polling reiniciado")
+		} else {
+			s.db.AddLog("info", "CONFIG", "Telegram bot desactivado")
+		}
 		jsonResponse(w, map[string]string{"status": "ok"})
 		return
 	}
@@ -1324,6 +1383,9 @@ func (s *Server) registerBotCommands() {
 		if s.sending {
 			sendState = "Enviando al API..."
 		}
+		if s.sendPaused {
+			sendState = fmt.Sprintf("AUTO-PAUSADO (%d fallos)", s.sendFailCount)
+		}
 		if s.paused {
 			detectState = "PAUSADO"
 			sendState = "PAUSADO"
@@ -1334,10 +1396,14 @@ func (s *Server) registerBotCommands() {
 		totalPending := toInt(stats["clients_pending"]) + toInt(stats["products_pending"]) + toInt(stats["movements_pending"]) + toInt(stats["cartera_pending"])
 		totalErrors := toInt(stats["clients_errors"]) + toInt(stats["products_errors"]) + toInt(stats["movements_errors"]) + toInt(stats["cartera_errors"])
 
-		return fmt.Sprintf("📡 <b>Estado del servidor</b>\n\n📥 Deteccion: %s (cada %ds)\n📤 Envio: %s (cada %ds)\n⏱ Uptime: %s\n⏳ Pendientes: %d\n❌ Errores: %d",
+		msg := fmt.Sprintf("📡 <b>Estado del servidor</b>\n\n📥 Deteccion: %s (cada %ds)\n📤 Envio: %s (cada %ds)\n⏱ Uptime: %s\n⏳ Pendientes: %d\n❌ Errores: %d",
 			detectState, s.cfg.Sync.IntervalSeconds,
 			sendState, s.cfg.Sync.SendIntervalSeconds,
 			uptime, totalPending, totalErrors)
+		if s.sendPaused {
+			msg += "\n\n⚠️ Usa /send-resume para reactivar el envio"
+		}
+		return msg
 	})
 
 	s.bot.RegisterCommand("/stats", func(args string) string {
@@ -1381,8 +1447,20 @@ func (s *Server) registerBotCommands() {
 
 	s.bot.RegisterCommand("/resume", func(args string) string {
 		s.paused = false
+		s.sendPaused = false
+		s.sendFailCount = 0
 		s.db.AddLog("info", "SYNC", "Sync reanudado via Telegram")
-		return "▶️ Sincronizacion reanudada."
+		return "▶️ Sincronizacion reanudada (deteccion + envio)."
+	})
+
+	s.bot.RegisterCommand("/send-resume", func(args string) string {
+		if !s.sendPaused {
+			return "✅ El envio ya esta activo, no esta pausado."
+		}
+		s.sendPaused = false
+		s.sendFailCount = 0
+		s.db.AddLog("info", "SEND", "Envio reactivado via Telegram (circuit breaker reseteado)")
+		return "▶️ Envio reactivado. Contador de fallos reseteado a 0."
 	})
 
 	s.bot.RegisterCommand("/retry", func(args string) string {

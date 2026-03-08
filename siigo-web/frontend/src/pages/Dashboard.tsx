@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { api } from '../api';
+import { showToast } from '../components/Toast';
 
 interface Stats { [key: string]: number }
 interface ISAMFile { file: string; record_size: number; records: number; num_keys: number; used_extfh: boolean; mod_time: string }
@@ -8,6 +9,8 @@ export default function Dashboard() {
   const [stats, setStats] = useState<Stats>({});
   const [isamInfo, setIsamInfo] = useState<ISAMFile[]>([]);
   const [syncing, setSyncing] = useState(false);
+  const [sendPaused, setSendPaused] = useState(false);
+  const [sendFailCount, setSendFailCount] = useState(0);
   const [lastRefresh, setLastRefresh] = useState('');
 
   const refresh = useCallback(async () => {
@@ -20,6 +23,8 @@ export default function Dashboard() {
       setStats(s);
       setIsamInfo(info);
       setSyncing(status.syncing);
+      setSendPaused(status.send_paused === true);
+      setSendFailCount(status.send_fail_count || 0);
       setLastRefresh(new Date().toLocaleTimeString('es-CO'));
     } catch { /* ignore */ }
   }, []);
@@ -52,6 +57,17 @@ export default function Dashboard() {
         </div>
       </div>
       <div className="content">
+        {sendPaused && (
+          <div className="alert alert-danger" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span>Envio auto-pausado tras {sendFailCount} fallos consecutivos. Revisa el servidor de destino.</span>
+            <button className="btn-save" style={{ padding: '6px 16px', fontSize: 13 }} onClick={async () => {
+              await api.sendResume();
+              setSendPaused(false);
+              setSendFailCount(0);
+              showToast('success', 'Envio reactivado');
+            }}>Reactivar Envio</button>
+          </div>
+        )}
         {(totalPending > 0 || totalErrors > 0) && (
           <div className="dashboard-alerts">
             {totalPending > 0 && (

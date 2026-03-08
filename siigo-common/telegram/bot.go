@@ -164,6 +164,7 @@ func (b *Bot) helpMessage() string {
 		"/url - URLs actuales",
 		"/logs - Ultimos logs",
 		"/health - Health check",
+		"/send-resume - Reactivar envio (tras auto-pausa)",
 		"/exec {pin} {cmd} - Ejecutar comando",
 		"/claude - Iniciar Claude remoto",
 		"/help - Esta ayuda",
