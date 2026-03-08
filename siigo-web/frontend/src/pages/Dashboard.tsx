@@ -11,6 +11,7 @@ export default function Dashboard() {
   const [syncing, setSyncing] = useState(false);
   const [sendPaused, setSendPaused] = useState(false);
   const [sendFailCount, setSendFailCount] = useState(0);
+  const [sendEnabled, setSendEnabled] = useState<Record<string, boolean>>({});
   const [lastRefresh, setLastRefresh] = useState('');
 
   const refresh = useCallback(async () => {
@@ -25,6 +26,7 @@ export default function Dashboard() {
       setSyncing(status.syncing);
       setSendPaused(status.send_paused === true);
       setSendFailCount(status.send_fail_count || 0);
+      setSendEnabled(status.send_enabled || {});
       setLastRefresh(new Date().toLocaleTimeString('es-CO'));
     } catch { /* ignore */ }
   }, []);
@@ -44,6 +46,7 @@ export default function Dashboard() {
 
   const totalPending = cards.reduce((s, c) => s + c.pending, 0);
   const totalErrors = cards.reduce((s, c) => s + c.errors, 0);
+  const anySendEnabled = Object.values(sendEnabled).some(v => v === true);
 
   return (
     <>
@@ -66,6 +69,11 @@ export default function Dashboard() {
               setSendFailCount(0);
               showToast('success', 'Envio reactivado');
             }}>Reactivar Envio</button>
+          </div>
+        )}
+        {!anySendEnabled && !sendPaused && (
+          <div className="alert alert-warning">
+            Envio al servidor deshabilitado. Activa el envio por tabla en <strong>Mapeo de Campos</strong>.
           </div>
         )}
         {(totalPending > 0 || totalErrors > 0) && (

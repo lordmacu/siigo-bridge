@@ -95,13 +95,13 @@ export default function FieldMappings() {
             <label className="toggle-switch">
               <input
                 type="checkbox"
-                checked={sendEnabled[activeModule] !== false}
+                checked={sendEnabled[activeModule] === true}
                 onChange={() => toggleSend(activeModule)}
               />
               <span className="toggle-slider"></span>
             </label>
-            <span className={`send-toggle-label ${sendEnabled[activeModule] !== false ? 'active' : 'inactive'}`}>
-              {sendEnabled[activeModule] !== false ? 'Envio al servidor ACTIVO' : 'Envio al servidor DESACTIVADO'}
+            <span className={`send-toggle-label ${sendEnabled[activeModule] === true ? 'active' : 'inactive'}`}>
+              {sendEnabled[activeModule] === true ? 'Envio al servidor ACTIVO' : 'Envio al servidor DESACTIVADO'}
             </span>
           </div>
 

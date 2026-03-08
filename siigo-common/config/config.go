@@ -118,24 +118,25 @@ func Default() *Config {
 	}
 }
 
-// DefaultSendEnabled returns all modules enabled by default
+// DefaultSendEnabled returns all modules disabled by default.
+// The user must explicitly enable sending from the web UI or bot.
 func DefaultSendEnabled() map[string]bool {
 	return map[string]bool{
-		"clients":   true,
-		"products":  true,
-		"movements": true,
-		"cartera":   true,
+		"clients":   false,
+		"products":  false,
+		"movements": false,
+		"cartera":   false,
 	}
 }
 
 // IsSendEnabled checks if sending is enabled for a given table
 func (c *Config) IsSendEnabled(table string) bool {
 	if c.SendEnabled == nil {
-		return true // if not configured, default to enabled
+		return false // if not configured, default to disabled
 	}
 	enabled, ok := c.SendEnabled[table]
 	if !ok {
-		return true
+		return false
 	}
 	return enabled
 }

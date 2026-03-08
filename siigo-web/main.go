@@ -1018,6 +1018,7 @@ func (s *Server) handleSyncStatus(w http.ResponseWriter, r *http.Request) {
 		"send_fail_count":  s.sendFailCount,
 		"detect_interval":  s.cfg.Sync.IntervalSeconds,
 		"send_interval":    s.cfg.Sync.SendIntervalSeconds,
+		"send_enabled":     s.cfg.SendEnabled,
 	})
 }
 
