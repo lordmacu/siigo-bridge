@@ -23,12 +23,16 @@ export default function Logs() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
+  const [level, setLevel] = useState('');
+  const [source, setSource] = useState('');
+  const [search, setSearch] = useState('');
+  const [searchInput, setSearchInput] = useState('');
 
   const fetchLogs = useCallback(async () => {
-    const result = await api.getLogs(page);
+    const result = await api.getLogs(page, level, source, search);
     setLogs(result.logs || []);
     setTotal(result.total || 0);
-  }, [page]);
+  }, [page, level, source, search]);
 
   useEffect(() => { fetchLogs(); }, [fetchLogs]);
 
@@ -42,6 +46,11 @@ export default function Logs() {
     fetchLogs();
   };
 
+  const handleSearch = () => {
+    setSearch(searchInput);
+    setPage(1);
+  };
+
   return (
     <>
       <div className="topbar">
@@ -52,6 +61,35 @@ export default function Logs() {
         </div>
       </div>
       <div className="content">
+        <div className="logs-filters">
+          <select value={level} onChange={e => { setLevel(e.target.value); setPage(1); }}>
+            <option value="">Todos los niveles</option>
+            <option value="info">Info</option>
+            <option value="warn">Warning</option>
+            <option value="error">Error</option>
+          </select>
+          <select value={source} onChange={e => { setSource(e.target.value); setPage(1); }}>
+            <option value="">Todas las fuentes</option>
+            <option value="APP">APP</option>
+            <option value="DETECT">DETECT</option>
+            <option value="SEND">SEND</option>
+            <option value="CONFIG">CONFIG</option>
+            <option value="API">API</option>
+            <option value="SYNC">SYNC</option>
+          </select>
+          <div className="logs-search-row">
+            <input
+              placeholder="Buscar en mensajes..."
+              value={searchInput}
+              onChange={e => setSearchInput(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && handleSearch()}
+            />
+            <button className="btn-sm btn-primary" onClick={handleSearch}>Buscar</button>
+            {(search || level || source) && (
+              <button className="btn-sm btn-outline" onClick={() => { setLevel(''); setSource(''); setSearch(''); setSearchInput(''); setPage(1); }}>Limpiar filtros</button>
+            )}
+          </div>
+        </div>
         <p className="result-count">{total} entradas - Pagina {page} de {totalPages}</p>
         {logs.length === 0 ? (
           <div className="empty-state"><h3>Sin logs</h3></div>
@@ -60,6 +98,7 @@ export default function Logs() {
             {logs.map(l => (
               <div key={l.id} className={`log-entry ${l.level}`}>
                 <span className="time">{fmtDate(l.created_at)}</span>
+                <span className={`log-level-badge ${l.level}`}>{l.level.toUpperCase()}</span>
                 <span className="source">[{l.source}]</span>
                 <span className="msg">{l.message}</span>
               </div>

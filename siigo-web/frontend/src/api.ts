@@ -82,7 +82,13 @@ export const api = {
     if (status) params.set('status', status);
     return get(`/sync-history?${params}`);
   },
-  getLogs: (page: number) => get(`/logs?page=${page}`),
+  getLogs: (page: number, level?: string, source?: string, search?: string) => {
+    const params = new URLSearchParams({ page: String(page) });
+    if (level) params.set('level', level);
+    if (source) params.set('source', source);
+    if (search) params.set('search', search);
+    return get(`/logs?${params}`);
+  },
   syncNow: () => post('/sync-now'),
   pause: () => post('/pause'),
   resume: () => post('/resume'),
@@ -203,6 +209,10 @@ export const api = {
   getSetupStatus: () => get('/setup-status'),
   setupPopulate: (table: string) => post('/setup-populate', { table }),
   setupComplete: () => post('/setup-complete'),
+
+  // User preferences (stored in SQLite)
+  getUserPrefs: (key: string = 'dashboard') => get(`/user-prefs?key=${key}`),
+  saveUserPrefs: (data: object, key: string = 'dashboard') => post(`/user-prefs?key=${key}`, data),
 };
 
 export interface UserInfo {

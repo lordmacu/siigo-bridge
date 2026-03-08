@@ -959,6 +959,16 @@ func (db *DB) migrate() error {
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_syncstats_created ON sync_stats(created_at)`,
+
+		// User preferences (dashboard layout, etc.)
+		`CREATE TABLE IF NOT EXISTS user_preferences (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			username TEXT NOT NULL,
+			pref_key TEXT NOT NULL,
+			pref_value TEXT DEFAULT '{}',
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(username, pref_key)
+		)`,
 	}
 
 	for _, q := range queries {
@@ -2926,6 +2936,55 @@ func (db *DB) GetLogs(limit, offset int) ([]LogEntry, int, error) {
 	return logs, total, nil
 }
 
+// GetLogsFiltered returns logs with optional filtering by level, source, and message search
+func (db *DB) GetLogsFiltered(limit, offset int, level, source, search string) ([]LogEntry, int, error) {
+	where := ""
+	args := []interface{}{}
+
+	conditions := []string{}
+	if level != "" {
+		conditions = append(conditions, "level = ?")
+		args = append(args, level)
+	}
+	if source != "" {
+		conditions = append(conditions, "source = ?")
+		args = append(args, source)
+	}
+	if search != "" {
+		conditions = append(conditions, "message LIKE ?")
+		args = append(args, "%"+search+"%")
+	}
+	if len(conditions) > 0 {
+		where = " WHERE " + conditions[0]
+		for i := 1; i < len(conditions); i++ {
+			where += " AND " + conditions[i]
+		}
+	}
+
+	var total int
+	db.conn.QueryRow("SELECT COUNT(*) FROM logs"+where, args...).Scan(&total)
+
+	queryArgs := append(args, limit, offset)
+	rows, err := db.conn.Query(
+		"SELECT id, level, source, message, created_at FROM logs"+where+" ORDER BY id DESC LIMIT ? OFFSET ?",
+		queryArgs...,
+	)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	var logs []LogEntry
+	for rows.Next() {
+		var l LogEntry
+		if err := rows.Scan(&l.ID, &l.Level, &l.Source, &l.Message, &l.CreatedAt); err != nil {
+			continue
+		}
+		logs = append(logs, l)
+	}
+	return logs, total, nil
+}
+
 // ==================== CLEANUP ====================
 
 func (db *DB) ClearLogs() error {
@@ -3453,4 +3512,30 @@ func (db *DB) GetSyncStats(hours int) []SyncStatEntry {
 func (db *DB) CleanOldSyncStats(hours int) {
 	db.conn.Exec(`DELETE FROM sync_stats WHERE created_at < datetime('now', ?)`,
 		fmt.Sprintf("-%d hours", hours))
+}
+
+// ==================== USER PREFERENCES ====================
+
+// GetUserPref retrieves a preference value for a user+key, returns empty string if not found
+func (db *DB) GetUserPref(username, key string) string {
+	var val string
+	err := db.conn.QueryRow(
+		`SELECT pref_value FROM user_preferences WHERE username=? AND pref_key=?`,
+		username, key,
+	).Scan(&val)
+	if err != nil {
+		return ""
+	}
+	return val
+}
+
+// SetUserPref saves a preference value for a user+key (upsert)
+func (db *DB) SetUserPref(username, key, value string) error {
+	_, err := db.conn.Exec(
+		`INSERT INTO user_preferences (username, pref_key, pref_value, updated_at)
+		 VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+		 ON CONFLICT(username, pref_key) DO UPDATE SET pref_value=excluded.pref_value, updated_at=CURRENT_TIMESTAMP`,
+		username, key, value,
+	)
+	return err
 }

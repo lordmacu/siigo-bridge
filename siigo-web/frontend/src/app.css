@@ -115,6 +115,8 @@ body {
   font-weight: 700; font-size: 10px; text-transform: uppercase; letter-spacing: 1px;
   border-bottom: 2px solid #334155; position: sticky; top: 0; z-index: 1;
 }
+.sortable-th { cursor: pointer; user-select: none; }
+.sortable-th:hover { color: #e2e8f0; }
 .data-table td {
   padding: 8px 12px; border-bottom: 1px solid #1e293b;
   max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -153,6 +155,10 @@ body {
 .btn-danger-sm:hover { background: #7f1d1d; }
 .btn-clear { background: #334155; color: #94a3b8; padding: 8px 12px; border: none; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 600; }
 .btn-clear:hover { background: #475569; color: #e2e8f0; }
+.btn-outline { background: transparent; color: #94a3b8; border: 1px solid #475569; }
+.btn-outline:hover { background: #334155; color: #e2e8f0; border-color: #64748b; }
+.btn-primary { background: #2563eb; color: white; border: none; }
+.btn-primary:hover { background: #1d4ed8; }
 
 /* ========== SUBTABS ========== */
 .subtabs { display: flex; gap: 4px; margin-bottom: 16px; }
@@ -195,14 +201,37 @@ body {
 .pagination span { color: #94a3b8; font-size: 12px; }
 
 /* ========== LOGS ========== */
+.logs-filters {
+  display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+  margin-bottom: 12px; padding: 8px 12px;
+  background: #1e293b; border-radius: 6px;
+}
+.logs-filters select {
+  background: #0f172a; border: 1px solid #334155; color: #e2e8f0;
+  padding: 6px 10px; border-radius: 4px; font-size: 13px;
+}
+.logs-search-row {
+  display: flex; gap: 6px; align-items: center; flex: 1; min-width: 200px;
+}
+.logs-search-row input {
+  flex: 1; background: #0f172a; border: 1px solid #334155; color: #e2e8f0;
+  padding: 6px 10px; border-radius: 4px; font-size: 13px;
+}
+.log-level-badge {
+  font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 3px;
+  text-transform: uppercase; min-width: 42px; text-align: center;
+}
+.log-level-badge.info { background: #1e3a5f; color: #60a5fa; }
+.log-level-badge.warn { background: #422006; color: #facc15; }
+.log-level-badge.error { background: #450a0a; color: #f87171; }
 .log-entry {
   padding: 6px 12px; border-bottom: 1px solid #1e293b;
-  font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; display: flex; gap: 12px;
+  font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; display: flex; gap: 12px; align-items: center;
 }
 .log-entry .time { color: #64748b; min-width: 150px; }
 .log-entry .source { color: #60a5fa; min-width: 60px; font-weight: 600; }
 .log-entry.error .msg { color: #f87171; }
-.log-entry.warning .msg { color: #facc15; }
+.log-entry.warning .msg, .log-entry.warn .msg { color: #facc15; }
 .log-entry.info .msg { color: #e2e8f0; }
 
 /* ========== CONFIG ========== */
@@ -888,6 +917,43 @@ th.row-num { text-align: right; }
   background: #1e293b; border-radius: 12px; padding: 16px;
   border: 1px solid #334155; margin-bottom: 24px;
 }
+
+/* Dashboard Customization Panel */
+.dash-config-panel {
+  background: #1e293b; border: 1px solid #334155; border-radius: 10px;
+  padding: 16px; margin-bottom: 20px;
+  display: flex; flex-direction: column; gap: 16px;
+}
+.dash-config-section h4 {
+  color: #e2e8f0; font-size: 13px; font-weight: 700; margin-bottom: 6px;
+  text-transform: uppercase; letter-spacing: 0.5px;
+}
+.dash-config-hint {
+  color: #64748b; font-size: 12px; margin-bottom: 8px;
+}
+.dash-config-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 4px;
+}
+.dash-config-toggle {
+  display: flex; align-items: center; gap: 8px; padding: 4px 8px;
+  border-radius: 4px; cursor: pointer; font-size: 13px; color: #cbd5e1;
+  transition: background 0.15s;
+}
+.dash-config-toggle:hover { background: #334155; }
+.dash-config-row {
+  display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
+}
+.dash-config-row select {
+  background: #0f172a; border: 1px solid #334155; color: #e2e8f0;
+  padding: 4px 8px; border-radius: 4px; font-size: 12px;
+}
+.dash-config-quick {
+  display: flex; gap: 6px; margin-top: 8px;
+}
+.dash-config-section {
+  border-bottom: 1px solid #334155; padding-bottom: 12px;
+}
+.dash-config-section:last-child { border-bottom: none; padding-bottom: 0; }
 
 /* Audit trail table */
 .audit-table { width: 100%; border-collapse: collapse; }

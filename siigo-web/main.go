@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"siigo-common/api"
 	"siigo-common/config"
@@ -116,6 +117,7 @@ type Server struct {
 	tokenMu        gosync.RWMutex
 	startTime      time.Time
 	apiLimiter     *rateLimiter
+	loginLimiter   *rateLimiter
 }
 
 func main() {
@@ -142,7 +144,8 @@ func main() {
 		tokens:         make(map[string]TokenInfo),
 		setupPopulated: make(map[string]bool),
 		startTime:  time.Now(),
-		apiLimiter: newRateLimiter(120, time.Minute), // 120 req/min per IP
+		apiLimiter:   newRateLimiter(120, time.Minute), // 120 req/min per IP
+		loginLimiter: newRateLimiter(5, time.Minute),   // 5 login attempts/min per IP
 	}
 
 	// Periodic cleanup
@@ -150,6 +153,7 @@ func main() {
 		for {
 			time.Sleep(5 * time.Minute)
 			srv.apiLimiter.cleanup()
+			srv.loginLimiter.cleanup()
 		}
 	}()
 	go func() {
@@ -212,6 +216,11 @@ func main() {
 		port = p
 	}
 
+	// Config-based port (env var overrides)
+	if cfg.Server.Port != "" && os.Getenv("PORT") == "" {
+		port = cfg.Server.Port
+	}
+
 	log.Printf("Siigo Web running on http://localhost:%s", port)
 	// Notify with tunnel URL if available (tunnel may start after server)
 	go func() {
@@ -223,7 +232,39 @@ func main() {
 			bot.NotifyServerStarted(localURL)
 		}
 	}()
-	log.Fatal(http.ListenAndServe(":"+port, corsMiddleware(mux)))
+
+	// Graceful shutdown
+	httpServer := &http.Server{
+		Addr:    ":" + port,
+		Handler: corsMiddleware(mux),
+	}
+
+	go func() {
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, os.Interrupt)
+		<-sigCh
+		log.Println("Shutdown signal received, stopping...")
+		db.AddLog("info", "APP", "Servidor detenido (shutdown graceful)")
+
+		// Stop sync loops
+		select {
+		case srv.stopCh <- true:
+		default:
+		}
+		select {
+		case srv.stopCh <- true: // one for each loop
+		default:
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		httpServer.Shutdown(ctx)
+	}()
+
+	if err := httpServer.ListenAndServe(); err != http.ErrServerClosed {
+		log.Fatalf("Server error: %v", err)
+	}
+	log.Println("Server stopped")
 }
 
 // readTunnelURL reads the Cloudflare tunnel URL from the log file.
@@ -327,7 +368,75 @@ func (s *Server) getUsernameFromRequest(r *http.Request) string {
 // AllModules lists all permission-controlled module keys
 var AllModules = []string{
 	"dashboard", "clients", "products", "movements", "cartera",
+	"plan_cuentas", "activos_fijos", "saldos_terceros", "saldos_consolidados",
+	"documentos", "terceros_ampliados",
 	"field-mappings", "errors", "logs", "explorer", "config", "users",
+}
+
+// apiPathToModule maps API endpoint paths to their required module permission.
+// Routes not listed here are accessible to any authenticated user.
+var apiPathToModule = map[string]string{
+	"/api/clients":              "clients",
+	"/api/products":             "products",
+	"/api/movements":            "movements",
+	"/api/cartera":              "cartera",
+	"/api/plan-cuentas":         "plan_cuentas",
+	"/api/activos-fijos":        "activos_fijos",
+	"/api/saldos-terceros":      "saldos_terceros",
+	"/api/saldos-consolidados":  "saldos_consolidados",
+	"/api/documentos":           "documentos",
+	"/api/terceros-ampliados":   "terceros_ampliados",
+	"/api/field-mappings":       "field-mappings",
+	"/api/error-summary":        "errors",
+	"/api/logs":                 "logs",
+	"/api/export-logs":          "logs",
+	"/api/query":                "explorer",
+	"/api/config":               "config",
+	"/api/telegram-config":      "config",
+	"/api/telegram-test":        "config",
+	"/api/public-api-config":    "config",
+	"/api/webhook-config":       "config",
+	"/api/webhook-test":         "config",
+	"/api/clear-database":       "config",
+	"/api/clear-logs":           "config",
+	"/api/users":                "users",
+	"/api/users/":               "users",
+}
+
+// hasModulePermission checks if a token has access to a specific module
+func hasModulePermission(info *TokenInfo, module string) bool {
+	if info.Role == "root" || info.Role == "admin" {
+		return true
+	}
+	for _, p := range info.Permissions {
+		if p == module {
+			return true
+		}
+	}
+	return false
+}
+
+// permMiddleware wraps authMiddleware and additionally checks module permissions
+func (s *Server) permMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return s.authMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		module, needsPerm := apiPathToModule[path]
+		if !needsPerm {
+			next(w, r)
+			return
+		}
+		token := extractToken(r)
+		info := s.getTokenInfo(token)
+		if info == nil {
+			jsonError(w, "No autorizado", 401)
+			return
+		}
+		if !hasModulePermission(info, module) {
+			jsonError(w, "Sin permiso para este modulo", 403)
+			return
+		}
+		next(w, r)
+	})
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -335,6 +444,19 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "POST only", 405)
 		return
 	}
+
+	// Rate limit login attempts by IP
+	ip := r.RemoteAddr
+	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
+		ip = strings.Split(fwd, ",")[0]
+	}
+	if !s.loginLimiter.Allow(strings.TrimSpace(ip)) {
+		w.Header().Set("Retry-After", "60")
+		jsonError(w, "Demasiados intentos. Intente de nuevo en 1 minuto.", 429)
+		s.bot.NotifyLoginFailed("rate-limited", ip)
+		return
+	}
+
 	var body struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
@@ -434,24 +556,25 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// Public routes (no auth)
 	mux.HandleFunc("/api/login", s.handleLogin)
 	mux.HandleFunc("/api/check-auth", s.handleCheckAuth)
+	mux.HandleFunc("/health", s.handleHealth)
 
-	// Protected routes
+	// Protected routes (permMiddleware checks module permissions where mapped)
 	mux.HandleFunc("/api/stats", s.authMiddleware(s.handleStats))
-	mux.HandleFunc("/api/config", s.authMiddleware(s.handleConfig))
+	mux.HandleFunc("/api/config", s.permMiddleware(s.handleConfig))
 	mux.HandleFunc("/api/isam-info", s.authMiddleware(s.handleISAMInfo))
 	mux.HandleFunc("/api/extfh-status", s.authMiddleware(s.handleExtfhStatus))
-	mux.HandleFunc("/api/clients", s.authMiddleware(s.handleClients))
-	mux.HandleFunc("/api/products", s.authMiddleware(s.handleProducts))
-	mux.HandleFunc("/api/movements", s.authMiddleware(s.handleMovements))
-	mux.HandleFunc("/api/cartera", s.authMiddleware(s.handleCartera))
-	mux.HandleFunc("/api/plan-cuentas", s.authMiddleware(s.handlePlanCuentas))
-	mux.HandleFunc("/api/activos-fijos", s.authMiddleware(s.handleActivosFijos))
-	mux.HandleFunc("/api/saldos-terceros", s.authMiddleware(s.handleSaldosTerceros))
-	mux.HandleFunc("/api/saldos-consolidados", s.authMiddleware(s.handleSaldosConsolidados))
-	mux.HandleFunc("/api/documentos", s.authMiddleware(s.handleDocumentos))
-	mux.HandleFunc("/api/terceros-ampliados", s.authMiddleware(s.handleTercerosAmpliados))
+	mux.HandleFunc("/api/clients", s.permMiddleware(s.handleClients))
+	mux.HandleFunc("/api/products", s.permMiddleware(s.handleProducts))
+	mux.HandleFunc("/api/movements", s.permMiddleware(s.handleMovements))
+	mux.HandleFunc("/api/cartera", s.permMiddleware(s.handleCartera))
+	mux.HandleFunc("/api/plan-cuentas", s.permMiddleware(s.handlePlanCuentas))
+	mux.HandleFunc("/api/activos-fijos", s.permMiddleware(s.handleActivosFijos))
+	mux.HandleFunc("/api/saldos-terceros", s.permMiddleware(s.handleSaldosTerceros))
+	mux.HandleFunc("/api/saldos-consolidados", s.permMiddleware(s.handleSaldosConsolidados))
+	mux.HandleFunc("/api/documentos", s.permMiddleware(s.handleDocumentos))
+	mux.HandleFunc("/api/terceros-ampliados", s.permMiddleware(s.handleTercerosAmpliados))
 	mux.HandleFunc("/api/sync-history", s.authMiddleware(s.handleSyncHistory))
-	mux.HandleFunc("/api/logs", s.authMiddleware(s.handleLogs))
+	mux.HandleFunc("/api/logs", s.permMiddleware(s.handleLogs))
 	mux.HandleFunc("/api/sync-now", s.authMiddleware(s.handleSyncNow))
 	mux.HandleFunc("/api/pause", s.authMiddleware(s.handlePause))
 	mux.HandleFunc("/api/resume", s.authMiddleware(s.handleResume))
@@ -459,22 +582,22 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/send-resume", s.authMiddleware(s.handleSendResume))
 	mux.HandleFunc("/api/retry-errors", s.authMiddleware(s.handleRetryErrors))
 	mux.HandleFunc("/api/test-connection", s.authMiddleware(s.handleTestConnection))
-	mux.HandleFunc("/api/clear-database", s.authMiddleware(s.handleClearDatabase))
-	mux.HandleFunc("/api/clear-logs", s.authMiddleware(s.handleClearLogs))
+	mux.HandleFunc("/api/clear-database", s.permMiddleware(s.handleClearDatabase))
+	mux.HandleFunc("/api/clear-logs", s.permMiddleware(s.handleClearLogs))
 	mux.HandleFunc("/api/refresh-cache", s.authMiddleware(s.handleRefreshCache))
-	mux.HandleFunc("/api/field-mappings", s.authMiddleware(s.handleFieldMappings))
+	mux.HandleFunc("/api/field-mappings", s.permMiddleware(s.handleFieldMappings))
 	mux.HandleFunc("/api/send-enabled", s.authMiddleware(s.handleSendEnabled))
-	mux.HandleFunc("/api/error-summary", s.authMiddleware(s.handleErrorSummary))
+	mux.HandleFunc("/api/error-summary", s.permMiddleware(s.handleErrorSummary))
 	mux.HandleFunc("/api/export-history", s.authMiddleware(s.handleExportHistory))
-	mux.HandleFunc("/api/export-logs", s.authMiddleware(s.handleExportLogs))
-	mux.HandleFunc("/api/public-api-config", s.authMiddleware(s.handlePublicAPIConfig))
-	mux.HandleFunc("/api/telegram-config", s.authMiddleware(s.handleTelegramConfig))
-	mux.HandleFunc("/api/telegram-test", s.authMiddleware(s.handleTelegramTest))
-	mux.HandleFunc("/api/query", s.authMiddleware(s.handleQuery))
+	mux.HandleFunc("/api/export-logs", s.permMiddleware(s.handleExportLogs))
+	mux.HandleFunc("/api/public-api-config", s.permMiddleware(s.handlePublicAPIConfig))
+	mux.HandleFunc("/api/telegram-config", s.permMiddleware(s.handleTelegramConfig))
+	mux.HandleFunc("/api/telegram-test", s.permMiddleware(s.handleTelegramTest))
+	mux.HandleFunc("/api/query", s.permMiddleware(s.handleQuery))
 	mux.HandleFunc("/api/allow-edit-delete", s.authMiddleware(s.handleAllowEditDelete))
 	mux.HandleFunc("/api/record", s.authMiddleware(s.handleRecord))
-	mux.HandleFunc("/api/users", s.authMiddleware(s.handleUsers))
-	mux.HandleFunc("/api/users/", s.authMiddleware(s.handleUserByID))
+	mux.HandleFunc("/api/users", s.permMiddleware(s.handleUsers))
+	mux.HandleFunc("/api/users/", s.permMiddleware(s.handleUserByID))
 	mux.HandleFunc("/api/audit-trail", s.authMiddleware(s.handleAuditTrail))
 	mux.HandleFunc("/api/change-history", s.authMiddleware(s.handleChangeHistory))
 	mux.HandleFunc("/api/sync-stats-history", s.authMiddleware(s.handleSyncStatsHistory))
@@ -482,9 +605,10 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/restore", s.authMiddleware(s.handleRestore))
 	mux.HandleFunc("/api/events", s.authMiddleware(s.handleSSE))
 	mux.HandleFunc("/api/bulk-action", s.authMiddleware(s.handleBulkAction))
-	mux.HandleFunc("/api/webhook-config", s.authMiddleware(s.handleWebhookConfig))
-	mux.HandleFunc("/api/webhook-test", s.authMiddleware(s.handleWebhookTest))
+	mux.HandleFunc("/api/webhook-config", s.permMiddleware(s.handleWebhookConfig))
+	mux.HandleFunc("/api/webhook-test", s.permMiddleware(s.handleWebhookTest))
 	mux.HandleFunc("/api/server-info", s.authMiddleware(s.handleServerInfo))
+	mux.HandleFunc("/api/user-prefs", s.authMiddleware(s.handleUserPrefs))
 
 	// Setup wizard
 	mux.HandleFunc("/api/setup-status", s.authMiddleware(s.handleSetupStatus))
@@ -655,7 +779,7 @@ func (s *Server) doDetectCycle() {
 	s.webhookDispatch("sync_complete", stats)
 }
 
-const maxSendFailures = 4
+// maxSendFailures is the legacy constant; use s.cfg.Sync.GetCircuitBreakerThreshold() instead
 
 func (s *Server) doSendCycle() {
 	s.sending = true
@@ -714,7 +838,8 @@ func (s *Server) doSendCycle() {
 }
 
 func (s *Server) checkSendCircuitBreaker(reason string) {
-	if s.sendFailCount >= maxSendFailures && !s.sendPaused {
+	threshold := s.cfg.Sync.GetCircuitBreakerThreshold()
+	if s.sendFailCount >= threshold && !s.sendPaused {
 		s.sendPaused = true
 		msg := fmt.Sprintf("🔴 <b>Envio auto-pausado</b>\n\n%d fallos consecutivos.\nUltimo: %s\n\nRevisa el servidor de destino y reactiva el envio con /send-resume o desde la web.",
 			s.sendFailCount, reason)
@@ -722,7 +847,7 @@ func (s *Server) checkSendCircuitBreaker(reason string) {
 		s.db.AddLog("error", "SEND", fmt.Sprintf("Circuit breaker activado: %d fallos consecutivos (%s). Envio pausado automaticamente.", s.sendFailCount, reason))
 		s.webhookDispatch("send_paused", map[string]interface{}{"reason": reason, "fail_count": s.sendFailCount})
 	} else if s.sendFailCount > 0 && !s.sendPaused {
-		s.db.AddLog("warn", "SEND", fmt.Sprintf("Fallo de envio %d/%d (%s)", s.sendFailCount, maxSendFailures, reason))
+		s.db.AddLog("warn", "SEND", fmt.Sprintf("Fallo de envio %d/%d (%s)", s.sendFailCount, threshold, reason))
 	}
 }
 
@@ -1697,6 +1822,26 @@ func (s *Server) refreshCache(which string) {
 
 // ==================== HTTP HANDLERS ====================
 
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	uptime := time.Since(s.startTime).Truncate(time.Second).String()
+	dbOK := "ok"
+	if _, _, _, err := s.db.QueryReadOnly("SELECT 1", 1, 0); err != nil {
+		dbOK = "error"
+	}
+	status := "ok"
+	if dbOK != "ok" {
+		status = "degraded"
+	}
+	jsonResponse(w, map[string]interface{}{
+		"status":    status,
+		"uptime":    uptime,
+		"db":        dbOK,
+		"detecting": s.detecting,
+		"sending":   s.sending,
+		"paused":    s.paused,
+	})
+}
+
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, s.db.GetStats())
 }
@@ -2026,7 +2171,10 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	page := getQueryInt(r, "page", 1)
 	limit := 100
 	offset := (page - 1) * limit
-	logs, total, err := s.db.GetLogs(limit, offset)
+	level := r.URL.Query().Get("level")
+	source := r.URL.Query().Get("source")
+	search := r.URL.Query().Get("search")
+	logs, total, err := s.db.GetLogsFiltered(limit, offset, level, source, search)
 	if err != nil {
 		jsonError(w, err.Error(), 500)
 		return
@@ -3231,6 +3379,9 @@ func getLANIPs() []string {
 
 func (s *Server) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 	port := "3210"
+	if s.cfg.Server.Port != "" {
+		port = s.cfg.Server.Port
+	}
 	if p := os.Getenv("PORT"); p != "" {
 		port = p
 	}
@@ -3252,6 +3403,42 @@ func (s *Server) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 		"api_v1_paths": []string{"/api/v1/docs", "/api/v1/auth"},
 	}
 	jsonResponse(w, info)
+}
+
+// ==================== USER PREFERENCES ====================
+
+func (s *Server) handleUserPrefs(w http.ResponseWriter, r *http.Request) {
+	username := s.getUsernameFromRequest(r)
+	key := r.URL.Query().Get("key")
+	if key == "" {
+		key = "dashboard"
+	}
+
+	if r.Method == "GET" {
+		val := s.db.GetUserPref(username, key)
+		if val == "" {
+			val = "{}"
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, val)
+		return
+	}
+
+	if r.Method == "POST" || r.Method == "PUT" {
+		var body json.RawMessage
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			jsonError(w, "JSON invalido", 400)
+			return
+		}
+		if err := s.db.SetUserPref(username, key, string(body)); err != nil {
+			jsonError(w, "Error guardando preferencias", 500)
+			return
+		}
+		jsonResponse(w, map[string]string{"status": "ok"})
+		return
+	}
+
+	jsonError(w, "GET o POST", 405)
 }
 
 // ==================== USER MANAGEMENT ====================

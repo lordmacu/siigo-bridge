@@ -7,6 +7,7 @@ import (
 
 type Config struct {
 	Auth            AuthConfig            `json:"auth"`
+	Server          ServerConfig          `json:"server,omitempty"`
 	Siigo           SiigoConfig           `json:"siigo"`
 	Finearom        FinearomConfig        `json:"finearom"`
 	Sync            SyncConfig            `json:"sync"`
@@ -17,6 +18,10 @@ type Config struct {
 	SendEnabled     map[string]bool       `json:"send_enabled,omitempty"`
 	AllowEditDelete bool                  `json:"allow_edit_delete"`
 	SetupComplete   bool                  `json:"setup_complete"`
+}
+
+type ServerConfig struct {
+	Port string `json:"port,omitempty"` // default "3210"
 }
 
 type WebhookConfig struct {
@@ -121,14 +126,23 @@ type FinearomConfig struct {
 }
 
 type SyncConfig struct {
-	IntervalSeconds     int      `json:"interval_seconds"`
-	SendIntervalSeconds int      `json:"send_interval_seconds"`
-	BatchSize           int      `json:"batch_size"`
-	BatchDelayMs        int      `json:"batch_delay_ms"`
-	MaxRetries          int      `json:"max_retries"`
-	RetryDelaySeconds   int      `json:"retry_delay_seconds"`
-	Files               []string `json:"files"`
-	StatePath           string   `json:"state_path"`
+	IntervalSeconds         int      `json:"interval_seconds"`
+	SendIntervalSeconds     int      `json:"send_interval_seconds"`
+	BatchSize               int      `json:"batch_size"`
+	BatchDelayMs            int      `json:"batch_delay_ms"`
+	MaxRetries              int      `json:"max_retries"`
+	RetryDelaySeconds       int      `json:"retry_delay_seconds"`
+	CircuitBreakerThreshold int      `json:"circuit_breaker_threshold,omitempty"` // consecutive failures before auto-pause (default 4)
+	Files                   []string `json:"files"`
+	StatePath               string   `json:"state_path"`
+}
+
+// GetCircuitBreakerThreshold returns the configured threshold or default of 4
+func (s *SyncConfig) GetCircuitBreakerThreshold() int {
+	if s.CircuitBreakerThreshold > 0 {
+		return s.CircuitBreakerThreshold
+	}
+	return 4
 }
 
 func Load(path string) (*Config, error) {

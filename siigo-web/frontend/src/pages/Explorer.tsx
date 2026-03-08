@@ -675,6 +675,18 @@ export default function Explorer() {
             <div className="explorer-meta">
               {total >= 0 ? total.toLocaleString() : '?'} resultados — Pagina {page} de {totalPages}
               {execTime > 0 && <span className="explorer-time"> — {execTime}ms</span>}
+              <button className="btn-sm btn-export" style={{ marginLeft: 12 }} onClick={() => {
+                const header = columns.join(',');
+                const rows = data.map(row => columns.map(c => {
+                  const v = String(row[c] ?? '');
+                  return v.includes(',') || v.includes('"') || v.includes('\n') ? '"' + v.replace(/"/g, '""') + '"' : v;
+                }).join(','));
+                const csv = [header, ...rows].join('\n');
+                const blob = new Blob([csv], { type: 'text/csv' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a'); a.href = url; a.download = 'query_results.csv'; a.click();
+                URL.revokeObjectURL(url);
+              }}>Exportar CSV</button>
             </div>
             <div className="table-wrapper">
               <table className="data-table explorer-table">

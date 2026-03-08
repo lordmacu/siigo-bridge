@@ -15,6 +15,22 @@ const TABLE_LABELS: Record<string, string> = {
   products: 'Productos',
   movements: 'Movimientos',
   cartera: 'Cartera',
+  plan_cuentas: 'Plan Cuentas',
+  activos_fijos: 'Activos Fijos',
+  saldos_terceros: 'Saldos Terceros',
+  saldos_consolidados: 'Saldos Consolidados',
+  documentos: 'Documentos',
+  terceros_ampliados: 'Terceros Ampliados',
+  transacciones_detalle: 'Trans. Detalle',
+  periodos_contables: 'Periodos',
+  condiciones_pago: 'Cond. Pago',
+  libros_auxiliares: 'Libros Auxiliares',
+  codigos_dane: 'DANE',
+  actividades_ica: 'ICA',
+  conceptos_pila: 'PILA',
+  activos_fijos_detalle: 'Activos Detalle',
+  audit_trail_terceros: 'Audit Trail',
+  clasificacion_cuentas: 'Clasif. Cuentas',
 };
 
 function fmtDate(d: string) {

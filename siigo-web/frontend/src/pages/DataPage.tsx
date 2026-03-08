@@ -60,6 +60,10 @@ export default function DataPage({ table, title, file }: Props) {
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [bulkLoading, setBulkLoading] = useState(false);
 
+  // Column sorting
+  const [sortCol, setSortCol] = useState('');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+
   // Change history modal
   const [changeHistory, setChangeHistory] = useState<any[] | null>(null);
   const [changeHistoryKey, setChangeHistoryKey] = useState('');
@@ -211,12 +215,34 @@ export default function DataPage({ table, title, file }: Props) {
     </td>
   );
 
+  const handleSort = (col: string) => {
+    if (sortCol === col) {
+      setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortCol(col);
+      setSortDir('asc');
+    }
+  };
+
+  const sortedData = sortCol ? [...data].sort((a, b) => {
+    const va = a[sortCol] ?? '';
+    const vb = b[sortCol] ?? '';
+    const cmp = typeof va === 'number' && typeof vb === 'number' ? va - vb : String(va).localeCompare(String(vb));
+    return sortDir === 'asc' ? cmp : -cmp;
+  }) : data;
+
+  const sortTh = (label: string, col: string) => (
+    <th className="sortable-th" onClick={() => handleSort(col)} style={{ cursor: 'pointer', userSelect: 'none' }}>
+      {label} {sortCol === col ? (sortDir === 'asc' ? '▲' : '▼') : ''}
+    </th>
+  );
+
   const renderDataTable = () => {
     if (table === 'clients') {
       return (
         <table className="data-table">
-          <thead><tr>{renderCheckboxHeader()}<th>NIT</th><th>Nombre</th><th>Tipo Doc</th><th>Empresa</th><th>Codigo</th><th>Estado</th><th>Acciones</th></tr></thead>
-          <tbody>{data.map((r, i) => (
+          <thead><tr>{renderCheckboxHeader()}{sortTh('NIT','nit')}{sortTh('Nombre','nombre')}{sortTh('Tipo Doc','tipo_doc')}{sortTh('Empresa','empresa')}{sortTh('Codigo','codigo')}{sortTh('Estado','sync_status')}<th>Acciones</th></tr></thead>
+          <tbody>{sortedData.map((r, i) => (
             <tr key={i}>
               {renderCheckbox(r)}
               <td className="col-key">{r.nit}</td>
@@ -234,8 +260,8 @@ export default function DataPage({ table, title, file }: Props) {
     if (table === 'products') {
       return (
         <table className="data-table">
-          <thead><tr>{renderCheckboxHeader()}<th>Codigo</th><th>Nombre</th><th>Grupo</th><th>Cuenta</th><th>Estado</th><th>Acciones</th></tr></thead>
-          <tbody>{data.map((r, i) => (
+          <thead><tr>{renderCheckboxHeader()}{sortTh('Codigo','code')}{sortTh('Nombre','nombre')}{sortTh('Grupo','grupo')}{sortTh('Cuenta','cuenta_contable')}{sortTh('Estado','sync_status')}<th>Acciones</th></tr></thead>
+          <tbody>{sortedData.map((r, i) => (
             <tr key={i}>
               {renderCheckbox(r)}
               <td className="col-key">{r.code}</td>
@@ -252,8 +278,8 @@ export default function DataPage({ table, title, file }: Props) {
     if (table === 'movements') {
       return (
         <table className="data-table">
-          <thead><tr>{renderCheckboxHeader()}<th>Tipo</th><th>Num Doc</th><th>Fecha</th><th>NIT</th><th>Descripcion</th><th>Estado</th><th>Acciones</th></tr></thead>
-          <tbody>{data.map((r, i) => (
+          <thead><tr>{renderCheckboxHeader()}{sortTh('Tipo','tipo_comprobante')}{sortTh('Num Doc','numero_doc')}{sortTh('Fecha','fecha')}{sortTh('NIT','nit_tercero')}{sortTh('Descripcion','descripcion')}{sortTh('Estado','sync_status')}<th>Acciones</th></tr></thead>
+          <tbody>{sortedData.map((r, i) => (
             <tr key={i}>
               {renderCheckbox(r)}
               <td className="col-type">{r.tipo_comprobante}</td>
@@ -271,8 +297,8 @@ export default function DataPage({ table, title, file }: Props) {
     if (table === 'cartera') {
       return (
         <table className="data-table">
-          <thead><tr>{renderCheckboxHeader()}<th>Tipo</th><th>NIT</th><th>Cuenta</th><th>Fecha</th><th>Descripcion</th><th>D/C</th><th>Estado</th><th>Acciones</th></tr></thead>
-          <tbody>{data.map((r, i) => (
+          <thead><tr>{renderCheckboxHeader()}{sortTh('Tipo','tipo_registro')}{sortTh('NIT','nit_tercero')}{sortTh('Cuenta','cuenta_contable')}{sortTh('Fecha','fecha')}{sortTh('Descripcion','descripcion')}{sortTh('D/C','tipo_mov')}{sortTh('Estado','sync_status')}<th>Acciones</th></tr></thead>
+          <tbody>{sortedData.map((r, i) => (
             <tr key={i}>
               {renderCheckbox(r)}
               <td className="col-type">{r.tipo_registro}</td>
@@ -291,8 +317,8 @@ export default function DataPage({ table, title, file }: Props) {
     if (table === 'plan_cuentas') {
       return (
         <table className="data-table">
-          <thead><tr>{renderCheckboxHeader()}<th>Codigo</th><th>Nombre</th><th>Empresa</th><th>Activa</th><th>Auxiliar</th><th>Naturaleza</th><th>Estado</th><th>Acciones</th></tr></thead>
-          <tbody>{data.map((r, i) => (
+          <thead><tr>{renderCheckboxHeader()}{sortTh('Codigo','codigo_cuenta')}{sortTh('Nombre','nombre')}{sortTh('Empresa','empresa')}{sortTh('Activa','activa')}{sortTh('Auxiliar','auxiliar')}{sortTh('Naturaleza','naturaleza')}{sortTh('Estado','sync_status')}<th>Acciones</th></tr></thead>
+          <tbody>{sortedData.map((r, i) => (
             <tr key={i}>
               {renderCheckbox(r)}
               <td className="col-key">{r.codigo_cuenta}</td>
@@ -311,8 +337,8 @@ export default function DataPage({ table, title, file }: Props) {
     if (table === 'activos_fijos') {
       return (
         <table className="data-table">
-          <thead><tr>{renderCheckboxHeader()}<th>Codigo</th><th>Nombre</th><th>Empresa</th><th>NIT Responsable</th><th>Fecha Adquisicion</th><th>Estado</th><th>Acciones</th></tr></thead>
-          <tbody>{data.map((r, i) => (
+          <thead><tr>{renderCheckboxHeader()}{sortTh('Codigo','codigo')}{sortTh('Nombre','nombre')}{sortTh('Empresa','empresa')}{sortTh('NIT Responsable','nit_responsable')}{sortTh('Fecha Adquisicion','fecha_adquisicion')}{sortTh('Estado','sync_status')}<th>Acciones</th></tr></thead>
+          <tbody>{sortedData.map((r, i) => (
             <tr key={i}>
               {renderCheckbox(r)}
               <td className="col-key">{r.codigo}</td>
@@ -330,8 +356,8 @@ export default function DataPage({ table, title, file }: Props) {
     if (table === 'saldos_terceros') {
       return (
         <table className="data-table">
-          <thead><tr>{renderCheckboxHeader()}<th>Cuenta</th><th>NIT</th><th>Empresa</th><th>Saldo Ant.</th><th>Debito</th><th>Credito</th><th>Saldo Final</th><th>Estado</th><th>Acciones</th></tr></thead>
-          <tbody>{data.map((r, i) => (
+          <thead><tr>{renderCheckboxHeader()}{sortTh('Cuenta','cuenta_contable')}{sortTh('NIT','nit_tercero')}{sortTh('Empresa','empresa')}{sortTh('Saldo Ant.','saldo_anterior')}{sortTh('Debito','debito')}{sortTh('Credito','credito')}{sortTh('Saldo Final','saldo_final')}{sortTh('Estado','sync_status')}<th>Acciones</th></tr></thead>
+          <tbody>{sortedData.map((r, i) => (
             <tr key={i}>
               {renderCheckbox(r)}
               <td className="col-code">{r.cuenta_contable}</td>
@@ -351,8 +377,8 @@ export default function DataPage({ table, title, file }: Props) {
     if (table === 'saldos_consolidados') {
       return (
         <table className="data-table">
-          <thead><tr>{renderCheckboxHeader()}<th>Cuenta</th><th>Empresa</th><th>Saldo Ant.</th><th>Debito</th><th>Credito</th><th>Saldo Final</th><th>Estado</th><th>Acciones</th></tr></thead>
-          <tbody>{data.map((r, i) => (
+          <thead><tr>{renderCheckboxHeader()}{sortTh('Cuenta','cuenta_contable')}{sortTh('Empresa','empresa')}{sortTh('Saldo Ant.','saldo_anterior')}{sortTh('Debito','debito')}{sortTh('Credito','credito')}{sortTh('Saldo Final','saldo_final')}{sortTh('Estado','sync_status')}<th>Acciones</th></tr></thead>
+          <tbody>{sortedData.map((r, i) => (
             <tr key={i}>
               {renderCheckbox(r)}
               <td className="col-key">{r.cuenta_contable}</td>
@@ -371,8 +397,8 @@ export default function DataPage({ table, title, file }: Props) {
     if (table === 'documentos') {
       return (
         <table className="data-table">
-          <thead><tr>{renderCheckboxHeader()}<th>Tipo</th><th>Cod</th><th>Seq</th><th>NIT</th><th>Cuenta</th><th>Producto</th><th>Fecha</th><th>Descripcion</th><th>D/C</th><th>Estado</th><th>Acciones</th></tr></thead>
-          <tbody>{data.map((r, i) => (
+          <thead><tr>{renderCheckboxHeader()}{sortTh('Tipo','tipo_comprobante')}{sortTh('Cod','codigo_comp')}{sortTh('Seq','secuencia')}{sortTh('NIT','nit_tercero')}{sortTh('Cuenta','cuenta_contable')}{sortTh('Producto','producto_ref')}{sortTh('Fecha','fecha')}{sortTh('Descripcion','descripcion')}{sortTh('D/C','tipo_mov')}{sortTh('Estado','sync_status')}<th>Acciones</th></tr></thead>
+          <tbody>{sortedData.map((r, i) => (
             <tr key={i}>
               {renderCheckbox(r)}
               <td className="col-type">{r.tipo_comprobante}</td>
@@ -394,8 +420,8 @@ export default function DataPage({ table, title, file }: Props) {
     // terceros_ampliados (default)
     return (
       <table className="data-table">
-        <thead><tr>{renderCheckboxHeader()}<th>NIT</th><th>Nombre</th><th>Tipo</th><th>Empresa</th><th>Rep. Legal</th><th>Direccion</th><th>Email</th><th>Estado</th><th>Acciones</th></tr></thead>
-        <tbody>{data.map((r, i) => (
+        <thead><tr>{renderCheckboxHeader()}{sortTh('NIT','nit')}{sortTh('Nombre','nombre')}{sortTh('Tipo','tipo_persona')}{sortTh('Empresa','empresa')}{sortTh('Rep. Legal','representante_legal')}{sortTh('Direccion','direccion')}{sortTh('Email','email')}{sortTh('Estado','sync_status')}<th>Acciones</th></tr></thead>
+        <tbody>{sortedData.map((r, i) => (
           <tr key={i}>
             {renderCheckbox(r)}
             <td className="col-key">{r.nit}</td>
