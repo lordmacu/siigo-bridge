@@ -136,6 +136,9 @@ export default function DataPage({ table, title, file }: Props) {
           <div className={`subtab ${subTab === 'history' ? 'active' : ''}`} onClick={() => setSubTab('history')}>
             Historial de Envios
           </div>
+          {subTab === 'history' && (
+            <a className="btn-sm btn-export subtab-export" href={api.exportHistoryURL(table)} target="_blank" rel="noreferrer">Exportar CSV</a>
+          )}
         </div>
 
         {subTab === 'data' ? (

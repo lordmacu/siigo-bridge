@@ -1,0 +1,418 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Siigo Sync - API Publica v1",
+    "description": "API de solo lectura para consultar datos sincronizados desde Siigo Pyme (ISAM). Los datos incluyen clientes, productos, movimientos contables y cartera.\n\n## Autenticacion\n\nCuando JWT esta activado, primero obtener un token con `POST /api/v1/auth` enviando el `api_key`. Luego usar el token en el header `Authorization: Bearer {token}`.\n\nCuando JWT esta desactivado (modo pruebas), los endpoints son accesibles sin autenticacion.",
+    "version": "1.0.0",
+    "contact": {
+      "name": "Siigo Sync"
+    }
+  },
+  "servers": [
+    {
+      "url": "/",
+      "description": "Servidor actual"
+    }
+  ],
+  "tags": [
+    {"name": "Auth", "description": "Autenticacion JWT"},
+    {"name": "Stats", "description": "Estadisticas generales"},
+    {"name": "Clients", "description": "Terceros / Clientes (Z17)"},
+    {"name": "Products", "description": "Productos (Z06CP)"},
+    {"name": "Movements", "description": "Movimientos contables (Z49)"},
+    {"name": "Cartera", "description": "Cartera (Z09)"}
+  ],
+  "paths": {
+    "/api/v1/auth": {
+      "post": {
+        "tags": ["Auth"],
+        "summary": "Obtener token JWT",
+        "description": "Enviar el api_key configurado para obtener un token JWT valido por 24 horas.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["api_key"],
+                "properties": {
+                  "api_key": {
+                    "type": "string",
+                    "example": "tu-clave-secreta"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Token generado exitosamente",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "token": {"type": "string", "example": "eyJhbGciOiJIUzI1NiIs..."},
+                    "expires_in": {"type": "integer", "example": 86400, "description": "Segundos hasta expiracion"}
+                  }
+                }
+              }
+            }
+          },
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/APIDisabled"}
+        }
+      }
+    },
+    "/api/v1/stats": {
+      "get": {
+        "tags": ["Stats"],
+        "summary": "Obtener estadisticas generales",
+        "description": "Retorna conteos de registros totales, sincronizados, pendientes y con error por cada modulo.",
+        "security": [{"bearerAuth": []}],
+        "responses": {
+          "200": {
+            "description": "Estadisticas",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "clients_total": {"type": "integer", "example": 150},
+                    "clients_synced": {"type": "integer", "example": 145},
+                    "clients_pending": {"type": "integer", "example": 3},
+                    "clients_errors": {"type": "integer", "example": 2},
+                    "products_total": {"type": "integer", "example": 50},
+                    "products_synced": {"type": "integer", "example": 50},
+                    "products_pending": {"type": "integer", "example": 0},
+                    "products_errors": {"type": "integer", "example": 0},
+                    "movements_total": {"type": "integer", "example": 3000},
+                    "movements_synced": {"type": "integer", "example": 2900},
+                    "movements_pending": {"type": "integer", "example": 100},
+                    "movements_errors": {"type": "integer", "example": 0},
+                    "cartera_total": {"type": "integer", "example": 200},
+                    "cartera_synced": {"type": "integer", "example": 200},
+                    "cartera_pending": {"type": "integer", "example": 0},
+                    "cartera_errors": {"type": "integer", "example": 0}
+                  }
+                }
+              }
+            }
+          },
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/APIDisabled"}
+        }
+      }
+    },
+    "/api/v1/clients": {
+      "get": {
+        "tags": ["Clients"],
+        "summary": "Listar clientes",
+        "description": "Retorna lista paginada de clientes (terceros) sincronizados desde el archivo ISAM Z17.",
+        "security": [{"bearerAuth": []}],
+        "parameters": [
+          {"$ref": "#/components/parameters/page"},
+          {"$ref": "#/components/parameters/limit"},
+          {"$ref": "#/components/parameters/search"},
+          {"$ref": "#/components/parameters/sync_status"},
+          {"$ref": "#/components/parameters/since"}
+        ],
+        "responses": {
+          "200": {
+            "description": "Lista de clientes",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/PaginatedResponse"}
+              }
+            }
+          },
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/APIDisabled"}
+        }
+      }
+    },
+    "/api/v1/clients/{key}": {
+      "get": {
+        "tags": ["Clients"],
+        "summary": "Detalle de un cliente",
+        "description": "Retorna un cliente por su NIT (clave primaria).",
+        "security": [{"bearerAuth": []}],
+        "parameters": [
+          {"name": "key", "in": "path", "required": true, "schema": {"type": "string"}, "description": "NIT del cliente", "example": "900123456"}
+        ],
+        "responses": {
+          "200": {
+            "description": "Detalle del cliente",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/Record"}
+              }
+            }
+          },
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/APIDisabled"}
+        }
+      }
+    },
+    "/api/v1/products": {
+      "get": {
+        "tags": ["Products"],
+        "summary": "Listar productos",
+        "description": "Retorna lista paginada de productos sincronizados desde el archivo ISAM Z06CP.",
+        "security": [{"bearerAuth": []}],
+        "parameters": [
+          {"$ref": "#/components/parameters/page"},
+          {"$ref": "#/components/parameters/limit"},
+          {"$ref": "#/components/parameters/search"},
+          {"$ref": "#/components/parameters/sync_status"},
+          {"$ref": "#/components/parameters/since"}
+        ],
+        "responses": {
+          "200": {
+            "description": "Lista de productos",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/PaginatedResponse"}
+              }
+            }
+          },
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/APIDisabled"}
+        }
+      }
+    },
+    "/api/v1/products/{key}": {
+      "get": {
+        "tags": ["Products"],
+        "summary": "Detalle de un producto",
+        "description": "Retorna un producto por su clave (comprobante-secuencia).",
+        "security": [{"bearerAuth": []}],
+        "parameters": [
+          {"name": "key", "in": "path", "required": true, "schema": {"type": "string"}, "description": "Clave del producto", "example": "00001-00001"}
+        ],
+        "responses": {
+          "200": {
+            "description": "Detalle del producto",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/Record"}
+              }
+            }
+          },
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/APIDisabled"}
+        }
+      }
+    },
+    "/api/v1/movements": {
+      "get": {
+        "tags": ["Movements"],
+        "summary": "Listar movimientos",
+        "description": "Retorna lista paginada de movimientos contables sincronizados desde el archivo ISAM Z49.",
+        "security": [{"bearerAuth": []}],
+        "parameters": [
+          {"$ref": "#/components/parameters/page"},
+          {"$ref": "#/components/parameters/limit"},
+          {"$ref": "#/components/parameters/search"},
+          {"$ref": "#/components/parameters/sync_status"},
+          {"$ref": "#/components/parameters/since"}
+        ],
+        "responses": {
+          "200": {
+            "description": "Lista de movimientos",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/PaginatedResponse"}
+              }
+            }
+          },
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/APIDisabled"}
+        }
+      }
+    },
+    "/api/v1/movements/{key}": {
+      "get": {
+        "tags": ["Movements"],
+        "summary": "Detalle de un movimiento",
+        "description": "Retorna un movimiento por su clave (tipo_comprobante-numero_doc).",
+        "security": [{"bearerAuth": []}],
+        "parameters": [
+          {"name": "key", "in": "path", "required": true, "schema": {"type": "string"}, "description": "Clave del movimiento", "example": "FC-000001"}
+        ],
+        "responses": {
+          "200": {
+            "description": "Detalle del movimiento",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/Record"}
+              }
+            }
+          },
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/APIDisabled"}
+        }
+      }
+    },
+    "/api/v1/cartera": {
+      "get": {
+        "tags": ["Cartera"],
+        "summary": "Listar cartera",
+        "description": "Retorna lista paginada de registros de cartera sincronizados desde el archivo ISAM Z09.",
+        "security": [{"bearerAuth": []}],
+        "parameters": [
+          {"$ref": "#/components/parameters/page"},
+          {"$ref": "#/components/parameters/limit"},
+          {"$ref": "#/components/parameters/search"},
+          {"$ref": "#/components/parameters/sync_status"},
+          {"$ref": "#/components/parameters/since"}
+        ],
+        "responses": {
+          "200": {
+            "description": "Lista de cartera",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/PaginatedResponse"}
+              }
+            }
+          },
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/APIDisabled"}
+        }
+      }
+    },
+    "/api/v1/cartera/{key}": {
+      "get": {
+        "tags": ["Cartera"],
+        "summary": "Detalle de cartera",
+        "description": "Retorna un registro de cartera por su clave.",
+        "security": [{"bearerAuth": []}],
+        "parameters": [
+          {"name": "key", "in": "path", "required": true, "schema": {"type": "string"}, "description": "Clave del registro", "example": "Z092024-1-01-00001"}
+        ],
+        "responses": {
+          "200": {
+            "description": "Detalle del registro",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/Record"}
+              }
+            }
+          },
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/APIDisabled"}
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "Token JWT obtenido de POST /api/v1/auth. No requerido si JWT esta desactivado en configuracion."
+      }
+    },
+    "parameters": {
+      "page": {
+        "name": "page",
+        "in": "query",
+        "schema": {"type": "integer", "default": 1, "minimum": 1},
+        "description": "Numero de pagina"
+      },
+      "limit": {
+        "name": "limit",
+        "in": "query",
+        "schema": {"type": "integer", "default": 50, "minimum": 1, "maximum": 500},
+        "description": "Registros por pagina"
+      },
+      "search": {
+        "name": "search",
+        "in": "query",
+        "schema": {"type": "string"},
+        "description": "Texto de busqueda (filtra por key y campos principales)"
+      },
+      "sync_status": {
+        "name": "sync_status",
+        "in": "query",
+        "schema": {"type": "string", "enum": ["pending", "synced", "error"]},
+        "description": "Filtrar por estado de sincronizacion"
+      },
+      "since": {
+        "name": "since",
+        "in": "query",
+        "schema": {"type": "string", "format": "date-time"},
+        "description": "Solo registros actualizados despues de esta fecha (ISO 8601)"
+      }
+    },
+    "schemas": {
+      "PaginatedResponse": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {"$ref": "#/components/schemas/Record"},
+            "description": "Lista de registros"
+          },
+          "total": {"type": "integer", "description": "Total de registros que coinciden", "example": 150},
+          "page": {"type": "integer", "description": "Pagina actual", "example": 1},
+          "limit": {"type": "integer", "description": "Registros por pagina", "example": 50}
+        }
+      },
+      "Record": {
+        "type": "object",
+        "description": "Registro dinamico. Los campos varian segun la tabla (clients, products, movements, cartera). Incluye todos los campos almacenados en SQLite.",
+        "additionalProperties": true,
+        "example": {
+          "id": 1,
+          "key": "900123456",
+          "nit": "900123456",
+          "client_name": "EMPRESA EJEMPLO SAS",
+          "business_name": "EMPRESA EJEMPLO",
+          "sync_status": "synced",
+          "updated_at": "2026-03-07T19:00:00Z"
+        }
+      },
+      "Error": {
+        "type": "object",
+        "properties": {
+          "error": {"type": "string", "example": "Token invalido o expirado"}
+        }
+      }
+    },
+    "responses": {
+      "Unauthorized": {
+        "description": "No autorizado - Token JWT invalido, expirado o no proporcionado",
+        "content": {
+          "application/json": {
+            "schema": {"$ref": "#/components/schemas/Error"}
+          }
+        }
+      },
+      "APIDisabled": {
+        "description": "API publica deshabilitada",
+        "content": {
+          "application/json": {
+            "schema": {"$ref": "#/components/schemas/Error"},
+            "example": {"error": "API deshabilitada"}
+          }
+        }
+      },
+      "NotFound": {
+        "description": "Registro no encontrado",
+        "content": {
+          "application/json": {
+            "schema": {"$ref": "#/components/schemas/Error"},
+            "example": {"error": "No encontrado"}
+          }
+        }
+      }
+    }
+  }
+}

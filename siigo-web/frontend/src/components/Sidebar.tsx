@@ -8,11 +8,13 @@ const navItems = [
   { path: '/products', label: 'Productos', badge: 'Z06CP' },
   { path: '/movements', label: 'Movimientos', badge: 'Z49' },
   { path: '/cartera', label: 'Cartera', badge: 'Z09' },
+  { path: '/field-mappings', label: 'Mapeo Campos', badge: '' },
+  { path: '/errors', label: 'Errores', badge: '' },
   { path: '/logs', label: 'Logs', badge: '' },
   { path: '/config', label: 'Configuracion', badge: '' },
 ];
 
-export default function Sidebar() {
+export default function Sidebar({ onLogout, open }: { onLogout?: () => void; open?: boolean }) {
   const location = useLocation();
   const navigate = useNavigate();
   const [syncing, setSyncing] = useState(false);
@@ -48,7 +50,7 @@ export default function Sidebar() {
   };
 
   return (
-    <div className="sidebar">
+    <div className={`sidebar ${open ? 'open' : ''}`}>
       <div className="sidebar-header">
         <h1>Siigo Sync</h1>
         <small>Middleware Manager</small>
@@ -82,6 +84,11 @@ export default function Sidebar() {
         >
           {paused ? 'Reanudar Auto-Sync' : 'Pausar Auto-Sync'}
         </button>
+        {onLogout && (
+          <button className="logout-btn" onClick={onLogout}>
+            Cerrar Sesion
+          </button>
+        )}
       </div>
     </div>
   );

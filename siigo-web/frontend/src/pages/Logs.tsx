@@ -46,7 +46,10 @@ export default function Logs() {
     <>
       <div className="topbar">
         <h2>Registro de Actividad</h2>
-        <button className="btn-sm btn-resend" onClick={handleClear}>Limpiar Logs</button>
+        <div className="topbar-actions">
+          <a className="btn-sm btn-export" href={api.exportLogsURL()} target="_blank" rel="noreferrer">Exportar CSV</a>
+          <button className="btn-sm btn-resend" onClick={handleClear}>Limpiar Logs</button>
+        </div>
       </div>
       <div className="content">
         <p className="result-count">{total} entradas - Pagina {page} de {totalPages}</p>

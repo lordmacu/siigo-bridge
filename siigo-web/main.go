@@ -1,27 +1,47 @@
 package main
 
 import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
-	"siigo-common/isam"
-	"siigo-common/parsers"
+	"os/exec"
 	"siigo-common/api"
 	"siigo-common/config"
+	"siigo-common/isam"
+	"siigo-common/parsers"
 	"siigo-common/storage"
+	"siigo-common/telegram"
+	"strconv"
 	"strings"
+	gosync "sync"
 	"time"
+
+	"github.com/golang-jwt/jwt/v5"
+)
+
+const (
+	authUser = "lordmacu"
+	authPass = "Lili-2337677"
 )
 
 type Server struct {
-	db      *storage.DB
-	cfg     *config.Config
-	client  *api.Client
-	syncing bool
-	paused  bool
-	stopCh  chan bool
+	db        *storage.DB
+	cfg       *config.Config
+	client    *api.Client
+	bot       *telegram.Bot
+	detecting bool
+	sending   bool
+	paused    bool
+	stopCh    chan bool
+	tokens    map[string]time.Time
+	tokenMu   gosync.RWMutex
+	startTime time.Time
 }
 
 func main() {
@@ -38,13 +58,21 @@ func main() {
 		log.Println("Config not found, created default")
 	}
 
+	bot := telegram.New(&cfg.Telegram)
+
 	srv := &Server{
-		db:     db,
-		cfg:    cfg,
-		stopCh: make(chan bool, 1),
+		db:        db,
+		cfg:       cfg,
+		bot:       bot,
+		stopCh:    make(chan bool, 1),
+		tokens:    make(map[string]time.Time),
+		startTime: time.Now(),
 	}
 
 	db.AddLog("info", "APP", "Servidor web iniciado")
+
+	srv.registerBotCommands()
+	bot.StartPolling()
 
 	go srv.startSyncLoop()
 
@@ -85,14 +113,59 @@ func main() {
 	}
 
 	log.Printf("Siigo Web running on http://localhost:%s", port)
+	// Notify with tunnel URL if available (tunnel may start after server)
+	go func() {
+		time.Sleep(5 * time.Second) // give tunnel time to start
+		localURL := "http://localhost:" + port
+		if tunnelURL := readTunnelURL(); tunnelURL != "" {
+			bot.Send(fmt.Sprintf("🟢 <b>Servidor iniciado</b>\n\n🖥 Local: %s\n🌍 Publica: %s\n📄 Swagger: %s/api/v1/docs", localURL, tunnelURL, tunnelURL))
+		} else {
+			bot.NotifyServerStarted(localURL)
+		}
+	}()
 	log.Fatal(http.ListenAndServe(":"+port, corsMiddleware(mux)))
+}
+
+// readTunnelURL reads the Cloudflare tunnel URL from the log file.
+// Tries multiple paths because MSYS /tmp maps to user temp dir on Windows.
+func readTunnelURL() string {
+	paths := []string{
+		os.Getenv("TEMP") + "\\cloudflared.log",
+		os.Getenv("TMP") + "\\cloudflared.log",
+		os.Getenv("USERPROFILE") + "\\AppData\\Local\\Temp\\cloudflared.log",
+		"C:\\tmp\\cloudflared.log",
+		"/tmp/cloudflared.log",
+	}
+	for _, p := range paths {
+		if p == "\\cloudflared.log" || p == "" {
+			continue
+		}
+		data, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		lines := strings.Split(string(data), "\n")
+		for _, line := range lines {
+			if idx := strings.Index(line, "https://"); idx >= 0 {
+				end := strings.IndexAny(line[idx:], " \n\r")
+				tunnelURL := line[idx:]
+				if end > 0 {
+					tunnelURL = line[idx : idx+end]
+				}
+				if strings.Contains(tunnelURL, "trycloudflare.com") {
+					return tunnelURL
+				}
+			}
+		}
+	}
+	return ""
 }
 
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(200)
 			return
@@ -101,26 +174,134 @@ func corsMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// ==================== AUTH ====================
+
+func (s *Server) generateToken() string {
+	b := make([]byte, 32)
+	rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+func (s *Server) isValidToken(token string) bool {
+	s.tokenMu.RLock()
+	defer s.tokenMu.RUnlock()
+	exp, ok := s.tokens[token]
+	if !ok {
+		return false
+	}
+	if time.Now().After(exp) {
+		delete(s.tokens, token)
+		return false
+	}
+	return true
+}
+
+func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		jsonError(w, "POST only", 405)
+		return
+	}
+	var body struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonError(w, "Invalid request", 400)
+		return
+	}
+	if body.Username != authUser || body.Password != authPass {
+		jsonError(w, "Credenciales incorrectas", 401)
+		return
+	}
+	token := s.generateToken()
+	s.tokenMu.Lock()
+	s.tokens[token] = time.Now().Add(24 * time.Hour)
+	s.tokenMu.Unlock()
+
+	jsonResponse(w, map[string]string{"token": token})
+}
+
+func (s *Server) handleCheckAuth(w http.ResponseWriter, r *http.Request) {
+	token := extractToken(r)
+	if s.isValidToken(token) {
+		jsonResponse(w, map[string]string{"status": "ok"})
+	} else {
+		jsonError(w, "No autorizado", 401)
+	}
+}
+
+func extractToken(r *http.Request) string {
+	auth := r.Header.Get("Authorization")
+	if strings.HasPrefix(auth, "Bearer ") {
+		return auth[7:]
+	}
+	// Fallback: token in query param (for download links that can't set headers)
+	if t := r.URL.Query().Get("token"); t != "" {
+		return t
+	}
+	return ""
+}
+
+func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		token := extractToken(r)
+		if !s.isValidToken(token) {
+			jsonError(w, "No autorizado", 401)
+			return
+		}
+		next(w, r)
+	}
+}
+
 func (s *Server) registerRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("/api/stats", s.handleStats)
-	mux.HandleFunc("/api/config", s.handleConfig)
-	mux.HandleFunc("/api/isam-info", s.handleISAMInfo)
-	mux.HandleFunc("/api/extfh-status", s.handleExtfhStatus)
-	mux.HandleFunc("/api/clients", s.handleClients)
-	mux.HandleFunc("/api/products", s.handleProducts)
-	mux.HandleFunc("/api/movements", s.handleMovements)
-	mux.HandleFunc("/api/cartera", s.handleCartera)
-	mux.HandleFunc("/api/sync-history", s.handleSyncHistory)
-	mux.HandleFunc("/api/logs", s.handleLogs)
-	mux.HandleFunc("/api/sync-now", s.handleSyncNow)
-	mux.HandleFunc("/api/pause", s.handlePause)
-	mux.HandleFunc("/api/resume", s.handleResume)
-	mux.HandleFunc("/api/sync-status", s.handleSyncStatus)
-	mux.HandleFunc("/api/retry-errors", s.handleRetryErrors)
-	mux.HandleFunc("/api/test-connection", s.handleTestConnection)
-	mux.HandleFunc("/api/clear-database", s.handleClearDatabase)
-	mux.HandleFunc("/api/clear-logs", s.handleClearLogs)
-	mux.HandleFunc("/api/refresh-cache", s.handleRefreshCache)
+	// Public routes (no auth)
+	mux.HandleFunc("/api/login", s.handleLogin)
+	mux.HandleFunc("/api/check-auth", s.handleCheckAuth)
+
+	// Protected routes
+	mux.HandleFunc("/api/stats", s.authMiddleware(s.handleStats))
+	mux.HandleFunc("/api/config", s.authMiddleware(s.handleConfig))
+	mux.HandleFunc("/api/isam-info", s.authMiddleware(s.handleISAMInfo))
+	mux.HandleFunc("/api/extfh-status", s.authMiddleware(s.handleExtfhStatus))
+	mux.HandleFunc("/api/clients", s.authMiddleware(s.handleClients))
+	mux.HandleFunc("/api/products", s.authMiddleware(s.handleProducts))
+	mux.HandleFunc("/api/movements", s.authMiddleware(s.handleMovements))
+	mux.HandleFunc("/api/cartera", s.authMiddleware(s.handleCartera))
+	mux.HandleFunc("/api/sync-history", s.authMiddleware(s.handleSyncHistory))
+	mux.HandleFunc("/api/logs", s.authMiddleware(s.handleLogs))
+	mux.HandleFunc("/api/sync-now", s.authMiddleware(s.handleSyncNow))
+	mux.HandleFunc("/api/pause", s.authMiddleware(s.handlePause))
+	mux.HandleFunc("/api/resume", s.authMiddleware(s.handleResume))
+	mux.HandleFunc("/api/sync-status", s.authMiddleware(s.handleSyncStatus))
+	mux.HandleFunc("/api/retry-errors", s.authMiddleware(s.handleRetryErrors))
+	mux.HandleFunc("/api/test-connection", s.authMiddleware(s.handleTestConnection))
+	mux.HandleFunc("/api/clear-database", s.authMiddleware(s.handleClearDatabase))
+	mux.HandleFunc("/api/clear-logs", s.authMiddleware(s.handleClearLogs))
+	mux.HandleFunc("/api/refresh-cache", s.authMiddleware(s.handleRefreshCache))
+	mux.HandleFunc("/api/field-mappings", s.authMiddleware(s.handleFieldMappings))
+	mux.HandleFunc("/api/send-enabled", s.authMiddleware(s.handleSendEnabled))
+	mux.HandleFunc("/api/error-summary", s.authMiddleware(s.handleErrorSummary))
+	mux.HandleFunc("/api/export-history", s.authMiddleware(s.handleExportHistory))
+	mux.HandleFunc("/api/export-logs", s.authMiddleware(s.handleExportLogs))
+	mux.HandleFunc("/api/public-api-config", s.authMiddleware(s.handlePublicAPIConfig))
+	mux.HandleFunc("/api/telegram-config", s.authMiddleware(s.handleTelegramConfig))
+	mux.HandleFunc("/api/telegram-test", s.authMiddleware(s.handleTelegramTest))
+
+	// Swagger docs
+	mux.HandleFunc("/api/v1/docs", handleSwaggerUI)
+	mux.HandleFunc("/api/v1/swagger.json", handleSwaggerJSON)
+
+	// Public API v1 (JWT auth)
+	mux.HandleFunc("/api/v1/auth", s.handleV1Auth)
+	mux.HandleFunc("/api/v1/stats", s.jwtMiddleware(s.handleV1Stats))
+	mux.HandleFunc("/api/v1/clients", s.jwtMiddleware(s.handleV1List("clients")))
+	mux.HandleFunc("/api/v1/clients/", s.jwtMiddleware(s.handleV1Detail("clients")))
+	mux.HandleFunc("/api/v1/products", s.jwtMiddleware(s.handleV1List("products")))
+	mux.HandleFunc("/api/v1/products/", s.jwtMiddleware(s.handleV1Detail("products")))
+	mux.HandleFunc("/api/v1/movements", s.jwtMiddleware(s.handleV1List("movements")))
+	mux.HandleFunc("/api/v1/movements/", s.jwtMiddleware(s.handleV1Detail("movements")))
+	mux.HandleFunc("/api/v1/cartera", s.jwtMiddleware(s.handleV1List("cartera")))
+	mux.HandleFunc("/api/v1/cartera/", s.jwtMiddleware(s.handleV1Detail("cartera")))
 }
 
 func jsonResponse(w http.ResponseWriter, data interface{}) {
@@ -138,14 +319,20 @@ func jsonError(w http.ResponseWriter, msg string, code int) {
 
 func (s *Server) startSyncLoop() {
 	s.paused = false
-	s.db.AddLog("info", "SYNC", "Sync loop iniciado")
+	s.db.AddLog("info", "SYNC", "Loops iniciados (deteccion + envio independientes)")
 
+	go s.startDetectLoop()
+	s.startSendLoop()
+}
+
+// startDetectLoop reads ISAM files and updates SQLite independently
+func (s *Server) startDetectLoop() {
 	interval := time.Duration(s.cfg.Sync.IntervalSeconds) * time.Second
 	if interval < 10*time.Second {
 		interval = 10 * time.Second
 	}
 
-	s.doOneSyncCycle()
+	s.doDetectCycle()
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -153,35 +340,76 @@ func (s *Server) startSyncLoop() {
 	for {
 		select {
 		case <-ticker.C:
-			if !s.paused && !s.syncing {
-				s.doOneSyncCycle()
+			if !s.paused && !s.detecting {
+				s.doDetectCycle()
 			}
 		case <-s.stopCh:
-			s.db.AddLog("info", "SYNC", "Sync loop detenido")
+			s.db.AddLog("info", "DETECT", "Detect loop detenido")
 			return
 		}
 	}
 }
 
-func (s *Server) doOneSyncCycle() {
-	s.syncing = true
-	defer func() { s.syncing = false }()
+// startSendLoop sends pending records from SQLite to the API independently
+func (s *Server) startSendLoop() {
+	sendInterval := time.Duration(s.cfg.Sync.SendIntervalSeconds) * time.Second
+	if sendInterval < 10*time.Second {
+		sendInterval = 30 * time.Second
+	}
 
-	s.db.AddLog("info", "SYNC", "--- Ciclo iniciado ---")
+	// Wait a few seconds before first send to let detect populate data
+	time.Sleep(5 * time.Second)
+	s.doSendCycle()
+
+	ticker := time.NewTicker(sendInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			if !s.paused && !s.sending {
+				s.doSendCycle()
+			}
+		case <-s.stopCh:
+			s.db.AddLog("info", "SEND", "Send loop detenido")
+			return
+		}
+	}
+}
+
+func (s *Server) doDetectCycle() {
+	s.detecting = true
+	defer func() { s.detecting = false }()
+
+	s.db.AddLog("info", "DETECT", "--- Ciclo deteccion iniciado ---")
 
 	s.diffClientes()
 	s.diffProductos()
 	s.diffMovimientos()
 	s.diffCartera()
 
-	if s.ensureLogin() {
-		s.sendPending("clients")
-		s.sendPending("products")
-		s.sendPending("movements")
-		s.sendPending("cartera")
+	s.db.AddLog("info", "DETECT", "--- Ciclo deteccion completado ---")
+}
+
+func (s *Server) doSendCycle() {
+	s.sending = true
+	defer func() { s.sending = false }()
+
+	if !s.ensureLogin() {
+		return
 	}
 
-	s.db.AddLog("info", "SYNC", "--- Ciclo completado ---")
+	s.db.AddLog("info", "SEND", "--- Ciclo envio iniciado ---")
+
+	s.sendPending("clients")
+	s.sendPending("products")
+	s.sendPending("movements")
+	s.sendPending("cartera")
+
+	// Automatic retry: requeue error records that haven't exceeded max retries
+	s.retryFailedRecords()
+
+	s.db.AddLog("info", "SEND", "--- Ciclo envio completado ---")
 }
 
 func (s *Server) ensureLogin() bool {
@@ -191,6 +419,7 @@ func (s *Server) ensureLogin() bool {
 	client := api.NewClient(s.cfg.Finearom.BaseURL, s.cfg.Finearom.Email, s.cfg.Finearom.Password)
 	if err := client.Login(); err != nil {
 		s.db.AddLog("error", "API", "Login failed: "+err.Error())
+		s.bot.NotifyLoginFailed(s.cfg.Finearom.BaseURL, err.Error())
 		return false
 	}
 	s.client = client
@@ -226,6 +455,7 @@ func (s *Server) diffClientes() {
 
 	deletes := s.db.MarkDeletedClients(currentKeys)
 	s.db.AddLog("info", "Z17", fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(clientes)))
+	s.bot.NotifyChangesDetected("Clientes", adds, edits, deletes)
 }
 
 func (s *Server) diffProductos() {
@@ -255,6 +485,7 @@ func (s *Server) diffProductos() {
 
 	deletes := s.db.MarkDeletedProducts(currentKeys)
 	s.db.AddLog("info", "Z06CP", fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(productos)))
+	s.bot.NotifyChangesDetected("Productos", adds, edits, deletes)
 }
 
 func (s *Server) diffMovimientos() {
@@ -289,6 +520,7 @@ func (s *Server) diffMovimientos() {
 
 	deletes := s.db.MarkDeletedMovements(currentKeys)
 	s.db.AddLog("info", "Z49", fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(movimientos)))
+	s.bot.NotifyChangesDetected("Movimientos", adds, edits, deletes)
 }
 
 func (s *Server) diffCartera() {
@@ -329,12 +561,17 @@ func (s *Server) diffCartera() {
 
 		deletes := s.db.MarkDeletedCartera(currentKeys)
 		s.db.AddLog("info", file, fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(cartera)))
+		s.bot.NotifyChangesDetected("Cartera ("+file+")", adds, edits, deletes)
 	}
 }
 
 // ==================== SEND PENDING ====================
 
 func (s *Server) sendPending(tableName string) {
+	if !s.cfg.IsSendEnabled(tableName) {
+		return
+	}
+
 	var pending []storage.PendingRecord
 	switch tableName {
 	case "clients":
@@ -351,15 +588,30 @@ func (s *Server) sendPending(tableName string) {
 		return
 	}
 
+	batchSize := s.cfg.Sync.BatchSize
+	if batchSize <= 0 {
+		batchSize = 50
+	}
+	batchDelay := time.Duration(s.cfg.Sync.BatchDelayMs) * time.Millisecond
+
 	sent, errors := 0, 0
-	for _, rec := range pending {
-		err := s.client.Sync(tableName, rec.SyncAction, rec.Key, rec.Data)
+	lastErr := ""
+	for i, rec := range pending {
+		// Delay between batches (not before the first record)
+		if i > 0 && i%batchSize == 0 && batchDelay > 0 {
+			s.db.AddLog("info", "API", fmt.Sprintf("[%s] Batch %d completado, esperando %dms...", tableName, i/batchSize, s.cfg.Sync.BatchDelayMs))
+			time.Sleep(batchDelay)
+		}
+
+		filteredData := s.cfg.ApplyFieldMapping(tableName, rec.Data)
+		err := s.client.Sync(tableName, rec.SyncAction, rec.Key, filteredData)
 		dataJSON, _ := json.Marshal(rec.Data)
 		dataStr := string(dataJSON)
 
 		if err != nil {
 			s.db.MarkSyncError(tableName, rec.ID, err.Error())
 			s.db.AddSyncHistory(tableName, rec.Key, rec.SyncAction, dataStr, "error", err.Error())
+			lastErr = err.Error()
 			errors++
 			continue
 		}
@@ -370,7 +622,59 @@ func (s *Server) sendPending(tableName string) {
 	}
 
 	s.db.RemoveDeletedSynced(tableName)
-	s.db.AddLog("info", "API", fmt.Sprintf("[%s] Enviados: %d, Errores: %d (de %d pendientes)", tableName, sent, errors, len(pending)))
+	s.db.AddLog("info", "API", fmt.Sprintf("[%s] Enviados: %d, Errores: %d (de %d pendientes, batch=%d)", tableName, sent, errors, len(pending), batchSize))
+	if errors > 0 {
+		s.bot.NotifySyncErrors(tableName, errors, lastErr)
+	}
+}
+
+// ==================== AUTO RETRY ====================
+
+func (s *Server) retryFailedRecords() {
+	maxRetries := s.cfg.Sync.MaxRetries
+	if maxRetries <= 0 {
+		return // retry disabled
+	}
+	baseDelay := time.Duration(s.cfg.Sync.RetryDelaySeconds) * time.Second
+	if baseDelay < 5*time.Second {
+		baseDelay = 5 * time.Second
+	}
+
+	tables := []string{"clients", "products", "movements", "cartera"}
+	totalRequeued := 0
+	maxRetryCount := 0
+
+	for _, table := range tables {
+		rc := s.db.GetMaxRetryCount(table, maxRetries)
+		if rc > maxRetryCount {
+			maxRetryCount = rc
+		}
+		n := s.db.RequeueRetryableErrors(table, maxRetries)
+		if n > 0 {
+			totalRequeued += n
+			s.db.AddLog("info", "RETRY", fmt.Sprintf("[%s] %d registros reintentados automaticamente (intento %d/%d)", table, n, rc+1, maxRetries))
+		}
+	}
+
+	if totalRequeued == 0 {
+		return
+	}
+
+	// Exponential backoff: baseDelay * 2^retryCount (capped at 5 min)
+	delay := baseDelay
+	for i := 0; i < maxRetryCount; i++ {
+		delay *= 2
+	}
+	if delay > 5*time.Minute {
+		delay = 5 * time.Minute
+	}
+
+	s.db.AddLog("info", "RETRY", fmt.Sprintf("Backoff exponencial: esperando %ds antes de reintentar %d registros...", int(delay.Seconds()), totalRequeued))
+	time.Sleep(delay)
+
+	for _, table := range tables {
+		s.sendPending(table)
+	}
 }
 
 // ==================== ISAM CACHE ====================
@@ -427,11 +731,16 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "POST" {
 		var body struct {
-			DataPath string `json:"data_path"`
-			BaseURL  string `json:"base_url"`
-			Email    string `json:"email"`
-			Password string `json:"password"`
-			Interval int    `json:"interval"`
+			DataPath          string `json:"data_path"`
+			BaseURL           string `json:"base_url"`
+			Email             string `json:"email"`
+			Password          string `json:"password"`
+			Interval          int    `json:"interval"`
+			SendInterval      int    `json:"send_interval"`
+			BatchSize         int    `json:"batch_size"`
+			BatchDelayMs      int    `json:"batch_delay_ms"`
+			MaxRetries        int    `json:"max_retries"`
+			RetryDelaySeconds int    `json:"retry_delay_seconds"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			jsonError(w, err.Error(), 400)
@@ -442,6 +751,21 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		s.cfg.Finearom.Email = body.Email
 		s.cfg.Finearom.Password = body.Password
 		s.cfg.Sync.IntervalSeconds = body.Interval
+		if body.SendInterval > 0 {
+			s.cfg.Sync.SendIntervalSeconds = body.SendInterval
+		}
+		if body.BatchSize > 0 {
+			s.cfg.Sync.BatchSize = body.BatchSize
+		}
+		if body.BatchDelayMs >= 0 {
+			s.cfg.Sync.BatchDelayMs = body.BatchDelayMs
+		}
+		if body.MaxRetries >= 0 {
+			s.cfg.Sync.MaxRetries = body.MaxRetries
+		}
+		if body.RetryDelaySeconds >= 0 {
+			s.cfg.Sync.RetryDelaySeconds = body.RetryDelaySeconds
+		}
 		if err := s.cfg.Save("config.json"); err != nil {
 			jsonError(w, err.Error(), 500)
 			return
@@ -589,12 +913,15 @@ func (s *Server) handleSyncNow(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "POST only", 405)
 		return
 	}
-	if s.syncing {
+	if s.detecting || s.sending {
 		jsonResponse(w, map[string]string{"message": "Ya hay una sincronizacion en curso"})
 		return
 	}
-	go s.doOneSyncCycle()
-	jsonResponse(w, map[string]string{"message": "Sincronizacion manual iniciada"})
+	go func() {
+		s.doDetectCycle()
+		s.doSendCycle()
+	}()
+	jsonResponse(w, map[string]string{"message": "Sincronizacion manual iniciada (deteccion + envio)"})
 }
 
 func (s *Server) handlePause(w http.ResponseWriter, r *http.Request) {
@@ -619,8 +946,12 @@ func (s *Server) handleResume(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleSyncStatus(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, map[string]interface{}{
-		"syncing": s.syncing,
-		"paused":  s.paused,
+		"detecting":        s.detecting,
+		"sending":          s.sending,
+		"syncing":          s.detecting || s.sending, // backwards compat
+		"paused":           s.paused,
+		"detect_interval":  s.cfg.Sync.IntervalSeconds,
+		"send_interval":    s.cfg.Sync.SendIntervalSeconds,
 	})
 }
 
@@ -663,6 +994,7 @@ func (s *Server) handleClearDatabase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.db.AddLog("warning", "APP", "Base de datos vaciada por el usuario")
+	s.bot.NotifyDBCleared()
 	jsonResponse(w, map[string]string{"status": "ok"})
 }
 
@@ -690,4 +1022,534 @@ func (s *Server) handleRefreshCache(w http.ResponseWriter, r *http.Request) {
 	json.NewDecoder(r.Body).Decode(&body)
 	s.refreshCache(body.Which)
 	jsonResponse(w, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleFieldMappings(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "POST" {
+		var body map[string][]config.FieldMap
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			jsonError(w, "JSON invalido: "+err.Error(), 400)
+			return
+		}
+		s.cfg.FieldMappings = body
+		if err := s.cfg.Save("config.json"); err != nil {
+			jsonError(w, err.Error(), 500)
+			return
+		}
+		s.db.AddLog("info", "CONFIG", "Mapeo de campos actualizado")
+		jsonResponse(w, map[string]string{"status": "ok"})
+		return
+	}
+
+	s.cfg.EnsureFieldMappings()
+	jsonResponse(w, s.cfg.FieldMappings)
+}
+
+func (s *Server) handleSendEnabled(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "POST" {
+		var body map[string]bool
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			jsonError(w, "JSON invalido: "+err.Error(), 400)
+			return
+		}
+		s.cfg.SendEnabled = body
+		if err := s.cfg.Save("config.json"); err != nil {
+			jsonError(w, err.Error(), 500)
+			return
+		}
+		s.db.AddLog("info", "CONFIG", "Envio por modulo actualizado")
+		jsonResponse(w, map[string]string{"status": "ok"})
+		return
+	}
+
+	s.cfg.EnsureFieldMappings() // also ensures SendEnabled
+	jsonResponse(w, s.cfg.SendEnabled)
+}
+
+func (s *Server) handleErrorSummary(w http.ResponseWriter, r *http.Request) {
+	jsonResponse(w, s.db.GetErrorSummary())
+}
+
+func (s *Server) handleExportHistory(w http.ResponseWriter, r *http.Request) {
+	table := r.URL.Query().Get("table")
+	data, err := s.db.ExportSyncHistoryCSV(table)
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", "attachment; filename=sync_history.csv")
+	w.Write(data)
+}
+
+func (s *Server) handleExportLogs(w http.ResponseWriter, r *http.Request) {
+	data, err := s.db.ExportLogsCSV()
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", "attachment; filename=logs.csv")
+	w.Write(data)
+}
+
+func (s *Server) handlePublicAPIConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "POST" {
+		var body struct {
+			Enabled     *bool  `json:"enabled"`
+			JwtRequired *bool  `json:"jwt_required"`
+			ApiKey      string `json:"api_key"`
+			JwtSecret   string `json:"jwt_secret"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			jsonError(w, "JSON invalido", 400)
+			return
+		}
+		if body.Enabled != nil {
+			s.cfg.PublicAPI.Enabled = *body.Enabled
+		}
+		if body.JwtRequired != nil {
+			s.cfg.PublicAPI.JwtRequired = *body.JwtRequired
+		}
+		if body.ApiKey != "" {
+			s.cfg.PublicAPI.ApiKey = body.ApiKey
+		}
+		if body.JwtSecret != "" {
+			s.cfg.PublicAPI.JwtSecret = body.JwtSecret
+		}
+		if err := s.cfg.Save("config.json"); err != nil {
+			jsonError(w, err.Error(), 500)
+			return
+		}
+		s.db.AddLog("info", "CONFIG", fmt.Sprintf("API publica: enabled=%v, jwt_required=%v", s.cfg.PublicAPI.Enabled, s.cfg.PublicAPI.JwtRequired))
+		jsonResponse(w, map[string]string{"status": "ok"})
+		return
+	}
+	// GET: return current public API config (hide jwt_secret)
+	jsonResponse(w, map[string]interface{}{
+		"enabled":      s.cfg.PublicAPI.Enabled,
+		"jwt_required": s.cfg.PublicAPI.JwtRequired,
+		"api_key":      s.cfg.PublicAPI.ApiKey,
+	})
+}
+
+func (s *Server) handleTelegramConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "POST" {
+		var body struct {
+			Enabled  *bool  `json:"enabled"`
+			BotToken string `json:"bot_token"`
+			ChatID   int64  `json:"chat_id"`
+			ExecPin  string `json:"exec_pin"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			jsonError(w, "JSON invalido", 400)
+			return
+		}
+		if body.Enabled != nil {
+			s.cfg.Telegram.Enabled = *body.Enabled
+		}
+		if body.BotToken != "" {
+			s.cfg.Telegram.BotToken = body.BotToken
+		}
+		if body.ChatID != 0 {
+			s.cfg.Telegram.ChatID = body.ChatID
+		}
+		if body.ExecPin != "" {
+			s.cfg.Telegram.ExecPin = body.ExecPin
+		}
+		if err := s.cfg.Save("config.json"); err != nil {
+			jsonError(w, err.Error(), 500)
+			return
+		}
+		// Recreate bot with new config
+		s.bot = telegram.New(&s.cfg.Telegram)
+		s.db.AddLog("info", "CONFIG", fmt.Sprintf("Telegram: enabled=%v", s.cfg.Telegram.Enabled))
+		jsonResponse(w, map[string]string{"status": "ok"})
+		return
+	}
+	jsonResponse(w, map[string]interface{}{
+		"enabled":   s.cfg.Telegram.Enabled,
+		"bot_token": s.cfg.Telegram.BotToken,
+		"chat_id":   s.cfg.Telegram.ChatID,
+		"exec_pin":  s.cfg.Telegram.ExecPin,
+	})
+}
+
+func (s *Server) handleTelegramTest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		jsonError(w, "POST only", 405)
+		return
+	}
+	if !s.bot.IsEnabled() {
+		jsonError(w, "Telegram no esta configurado o deshabilitado", 400)
+		return
+	}
+	s.bot.Send("✅ <b>Test exitoso</b>\n\nLas notificaciones de Telegram estan funcionando.")
+	jsonResponse(w, map[string]string{"status": "ok"})
+}
+
+// ==================== PUBLIC API v1 (JWT) ====================
+
+func (s *Server) jwtMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !s.cfg.PublicAPI.Enabled {
+			jsonError(w, "API deshabilitada", 403)
+			return
+		}
+
+		// Skip JWT validation when jwt_required is false (test mode)
+		if !s.cfg.PublicAPI.JwtRequired {
+			next(w, r)
+			return
+		}
+
+		auth := r.Header.Get("Authorization")
+		if !strings.HasPrefix(auth, "Bearer ") {
+			jsonError(w, "Token requerido", 401)
+			return
+		}
+		tokenStr := auth[7:]
+
+		token, err := jwt.Parse(tokenStr, func(t *jwt.Token) (interface{}, error) {
+			if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+				return nil, fmt.Errorf("metodo de firma inesperado")
+			}
+			return []byte(s.cfg.PublicAPI.JwtSecret), nil
+		})
+		if err != nil || !token.Valid {
+			jsonError(w, "Token invalido o expirado", 401)
+			return
+		}
+
+		next(w, r)
+	}
+}
+
+func (s *Server) handleV1Auth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		jsonError(w, "POST only", 405)
+		return
+	}
+	if !s.cfg.PublicAPI.Enabled {
+		jsonError(w, "API deshabilitada", 403)
+		return
+	}
+
+	var body struct {
+		ApiKey string `json:"api_key"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonError(w, "JSON invalido", 400)
+		return
+	}
+
+	if body.ApiKey != s.cfg.PublicAPI.ApiKey {
+		jsonError(w, "API key invalida", 401)
+		return
+	}
+
+	// Generate JWT valid for 24 hours
+	claims := jwt.MapClaims{
+		"iss": "siigo-sync",
+		"iat": time.Now().Unix(),
+		"exp": time.Now().Add(24 * time.Hour).Unix(),
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	tokenStr, err := token.SignedString([]byte(s.cfg.PublicAPI.JwtSecret))
+	if err != nil {
+		jsonError(w, "Error generando token", 500)
+		return
+	}
+
+	jsonResponse(w, map[string]interface{}{
+		"token":      tokenStr,
+		"expires_in": 86400,
+	})
+}
+
+func (s *Server) handleV1Stats(w http.ResponseWriter, r *http.Request) {
+	jsonResponse(w, s.db.GetStats())
+}
+
+func (s *Server) handleV1List(table string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+		if page < 1 {
+			page = 1
+		}
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		if limit <= 0 {
+			limit = 50
+		}
+
+		params := storage.APIQueryParams{
+			Search:     r.URL.Query().Get("search"),
+			SyncStatus: r.URL.Query().Get("sync_status"),
+			Since:      r.URL.Query().Get("since"),
+			Limit:      limit,
+			Offset:     (page - 1) * limit,
+		}
+
+		result := s.db.APIGetRecords(table, params)
+		jsonResponse(w, result)
+	}
+}
+
+func (s *Server) handleV1Detail(table string) http.HandlerFunc {
+	prefix := "/api/v1/" + table + "/"
+	return func(w http.ResponseWriter, r *http.Request) {
+		key := strings.TrimPrefix(r.URL.Path, prefix)
+		if key == "" {
+			jsonError(w, "Key requerida", 400)
+			return
+		}
+		record := s.db.APIGetRecord(table, key)
+		if record == nil {
+			jsonError(w, "No encontrado", 404)
+			return
+		}
+		jsonResponse(w, record)
+	}
+}
+
+// ==================== TELEGRAM BOT COMMANDS ====================
+
+func (s *Server) registerBotCommands() {
+	s.bot.RegisterCommand("/status", func(args string) string {
+		detectState := "En espera"
+		if s.detecting {
+			detectState = "Leyendo ISAM..."
+		}
+		sendState := "En espera"
+		if s.sending {
+			sendState = "Enviando al API..."
+		}
+		if s.paused {
+			detectState = "PAUSADO"
+			sendState = "PAUSADO"
+		}
+		uptime := time.Since(s.startTime).Round(time.Second)
+		stats := s.db.GetStats()
+
+		totalPending := toInt(stats["clients_pending"]) + toInt(stats["products_pending"]) + toInt(stats["movements_pending"]) + toInt(stats["cartera_pending"])
+		totalErrors := toInt(stats["clients_errors"]) + toInt(stats["products_errors"]) + toInt(stats["movements_errors"]) + toInt(stats["cartera_errors"])
+
+		return fmt.Sprintf("📡 <b>Estado del servidor</b>\n\n📥 Deteccion: %s (cada %ds)\n📤 Envio: %s (cada %ds)\n⏱ Uptime: %s\n⏳ Pendientes: %d\n❌ Errores: %d",
+			detectState, s.cfg.Sync.IntervalSeconds,
+			sendState, s.cfg.Sync.SendIntervalSeconds,
+			uptime, totalPending, totalErrors)
+	})
+
+	s.bot.RegisterCommand("/stats", func(args string) string {
+		stats := s.db.GetStats()
+		return fmt.Sprintf("📊 <b>Estadisticas</b>\n\n👤 Clientes: %v total, %v sync, %v pend, %v err\n📦 Productos: %v total, %v sync, %v pend, %v err\n📋 Movimientos: %v total, %v sync, %v pend, %v err\n💰 Cartera: %v total, %v sync, %v pend, %v err",
+			stats["clients_total"], stats["clients_synced"], stats["clients_pending"], stats["clients_errors"],
+			stats["products_total"], stats["products_synced"], stats["products_pending"], stats["products_errors"],
+			stats["movements_total"], stats["movements_synced"], stats["movements_pending"], stats["movements_errors"],
+			stats["cartera_total"], stats["cartera_synced"], stats["cartera_pending"], stats["cartera_errors"],
+		)
+	})
+
+	s.bot.RegisterCommand("/errors", func(args string) string {
+		errors := s.db.GetErrorSummary()
+		if len(errors) == 0 {
+			return "✅ <b>Sin errores</b>\n\nNo hay registros con error."
+		}
+		msg := "❌ <b>Resumen de errores</b>\n"
+		for _, e := range errors {
+			msg += fmt.Sprintf("\n📋 <b>%s</b> (%d)\n<code>%s</code>", e.Table, e.Count, truncateStr(e.Error, 100))
+		}
+		return msg
+	})
+
+	s.bot.RegisterCommand("/sync", func(args string) string {
+		if s.detecting || s.sending {
+			return "⏳ Ya hay una sincronizacion en curso."
+		}
+		go func() {
+			s.doDetectCycle()
+			s.doSendCycle()
+		}()
+		return "🔄 Sincronizacion manual iniciada (deteccion + envio)."
+	})
+
+	s.bot.RegisterCommand("/pause", func(args string) string {
+		s.paused = true
+		s.db.AddLog("info", "SYNC", "Sync pausado via Telegram")
+		return "⏸ Sincronizacion pausada."
+	})
+
+	s.bot.RegisterCommand("/resume", func(args string) string {
+		s.paused = false
+		s.db.AddLog("info", "SYNC", "Sync reanudado via Telegram")
+		return "▶️ Sincronizacion reanudada."
+	})
+
+	s.bot.RegisterCommand("/retry", func(args string) string {
+		tables := []string{"clients", "products", "movements", "cartera"}
+		total := 0
+		for _, t := range tables {
+			n := s.db.RetryErrors(t)
+			total += n
+		}
+		if total == 0 {
+			return "✅ No hay errores para reintentar."
+		}
+		s.db.AddLog("info", "SYNC", fmt.Sprintf("Reintentando %d errores via Telegram", total))
+		return fmt.Sprintf("🔄 %d registros movidos a pendiente para reintento.", total)
+	})
+
+	s.bot.RegisterCommand("/url", func(args string) string {
+		msg := "🌐 <b>URLs</b>\n\n🖥 Local: http://localhost:3210"
+		if tunnelURL := readTunnelURL(); tunnelURL != "" {
+			msg += fmt.Sprintf("\n🌍 Publica: %s", tunnelURL)
+			msg += fmt.Sprintf("\n📄 Swagger: %s/api/v1/docs", tunnelURL)
+		}
+		return msg
+	})
+
+	s.bot.RegisterCommand("/logs", func(args string) string {
+		logs, _, err := s.db.GetLogs(10, 0)
+		if err != nil || len(logs) == 0 {
+			return "📝 No hay logs disponibles."
+		}
+		msg := "📝 <b>Ultimos logs</b>\n"
+		for _, l := range logs {
+			icon := "ℹ️"
+			if l.Level == "error" {
+				icon = "❌"
+			} else if l.Level == "warning" {
+				icon = "⚠️"
+			}
+			msg += fmt.Sprintf("\n%s [%s] %s", icon, l.Source, truncateStr(l.Message, 80))
+		}
+		return msg
+	})
+
+	s.bot.RegisterCommand("/health", func(args string) string {
+		uptime := time.Since(s.startTime).Round(time.Second)
+		stats := s.db.GetStats()
+		totalRecords := toInt(stats["clients_total"]) + toInt(stats["products_total"]) + toInt(stats["movements_total"]) + toInt(stats["cartera_total"])
+
+		status := "🟢 OK"
+		if s.paused {
+			status = "🟡 PAUSADO"
+		}
+
+		return fmt.Sprintf("%s\n\n⏱ Uptime: %s\n📊 Registros: %d\n📥 Detectando: %v\n📤 Enviando: %v\n⏸ Pausado: %v", status, uptime, totalRecords, s.detecting, s.sending, s.paused)
+	})
+
+	s.bot.RegisterCommand("/exec", func(args string) string {
+		pin := s.cfg.Telegram.ExecPin
+		if pin == "" {
+			return "⛔ PIN no configurado. Configura exec_pin en Telegram Config."
+		}
+		parts := strings.SplitN(args, " ", 2)
+		if len(parts) < 2 {
+			return "Uso: /exec {pin} {comando}\nEjemplo: /exec 2337 ls -la"
+		}
+		if parts[0] != pin {
+			return "🔴 PIN incorrecto."
+		}
+		cmdStr := parts[1]
+
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		cmd := exec.CommandContext(ctx, "bash", "-c", cmdStr)
+		cmd.Dir = "/c/Users/lordmacu/siigo"
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+
+		err := cmd.Run()
+		output := stdout.String()
+		if stderr.Len() > 0 {
+			output += "\n" + stderr.String()
+		}
+		if err != nil {
+			output += "\n⚠️ " + err.Error()
+		}
+		output = strings.TrimSpace(output)
+		if output == "" {
+			output = "(sin output)"
+		}
+		if len(output) > 3900 {
+			output = output[:3900] + "\n... (truncado)"
+		}
+
+		return fmt.Sprintf("💻 <b>$ %s</b>\n\n<code>%s</code>", truncateStr(cmdStr, 100), output)
+	})
+
+	s.bot.RegisterCommand("/claude", func(args string) string {
+		pin := s.cfg.Telegram.ExecPin
+		if pin == "" {
+			return "⛔ PIN no configurado."
+		}
+		if strings.TrimSpace(args) != pin {
+			return "Uso: /claude {pin}"
+		}
+
+		cmd := exec.Command("bash", "-c", "claude --dangerously-skip-permissions &")
+		cmd.Dir = "/c/Users/lordmacu/siigo"
+		if err := cmd.Start(); err != nil {
+			return "❌ Error iniciando Claude: " + err.Error()
+		}
+
+		return "🤖 <b>Claude iniciado</b>\n\nProceso lanzado en background.\nRevisa la terminal del servidor para la URL de conexion."
+	})
+}
+
+func toInt(v interface{}) int {
+	switch n := v.(type) {
+	case int:
+		return n
+	case int64:
+		return int(n)
+	case float64:
+		return int(n)
+	default:
+		return 0
+	}
+}
+
+func truncateStr(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "..."
+}
+
+func handleSwaggerJSON(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	http.ServeFile(w, r, "swagger.json")
+}
+
+func handleSwaggerUI(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprint(w, `<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Siigo Sync - API Docs</title>
+  <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css">
+  <style>
+    body { margin: 0; background: #fafafa; }
+    .topbar { display: none !important; }
+  </style>
+</head>
+<body>
+  <div id="swagger-ui"></div>
+  <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+  <script>
+    SwaggerUIBundle({
+      url: '/api/v1/swagger.json',
+      dom_id: '#swagger-ui',
+      deepLinking: true,
+      presets: [SwaggerUIBundle.presets.apis, SwaggerUIBundle.SwaggerUIStandalonePreset],
+      layout: 'BaseLayout',
+    });
+  </script>
+</body>
+</html>`)
 }

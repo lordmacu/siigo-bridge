@@ -253,10 +253,20 @@ func (db *DB) migrate() error {
 
 		// Drop old generic table if it exists (migration from previous schema)
 		`DROP TABLE IF EXISTS siigo_records`,
+
+		// Add retry_count column to all tables (migration)
+		`ALTER TABLE clients ADD COLUMN retry_count INTEGER DEFAULT 0`,
+		`ALTER TABLE products ADD COLUMN retry_count INTEGER DEFAULT 0`,
+		`ALTER TABLE movements ADD COLUMN retry_count INTEGER DEFAULT 0`,
+		`ALTER TABLE cartera ADD COLUMN retry_count INTEGER DEFAULT 0`,
 	}
 
 	for _, q := range queries {
 		if _, err := db.conn.Exec(q); err != nil {
+			// Ignore ALTER TABLE errors (column may already exist)
+			if strings.Contains(q, "ALTER TABLE") {
+				continue
+			}
 			return err
 		}
 	}
@@ -592,10 +602,10 @@ func (db *DB) MarkSynced(table string, id int64) {
 	)
 }
 
-// MarkSyncError marks a record as failed to sync
+// MarkSyncError marks a record as failed to sync and increments retry_count
 func (db *DB) MarkSyncError(table string, id int64, errMsg string) {
 	db.conn.Exec(
-		fmt.Sprintf(`UPDATE %s SET sync_status='error', sync_error=? WHERE id=?`, table),
+		fmt.Sprintf(`UPDATE %s SET sync_status='error', sync_error=?, retry_count=COALESCE(retry_count,0)+1 WHERE id=?`, table),
 		errMsg, id,
 	)
 }
@@ -607,16 +617,140 @@ func (db *DB) RemoveDeletedSynced(table string) {
 	)
 }
 
-// RetryErrors resets error records to pending so they get retried
+// RetryErrors resets error records to pending so they get retried (manual retry resets retry_count)
 func (db *DB) RetryErrors(table string) int {
 	result, err := db.conn.Exec(
-		fmt.Sprintf(`UPDATE %s SET sync_status='pending' WHERE sync_status='error'`, table),
+		fmt.Sprintf(`UPDATE %s SET sync_status='pending', retry_count=0 WHERE sync_status='error'`, table),
 	)
 	if err != nil {
 		return 0
 	}
 	n, _ := result.RowsAffected()
 	return int(n)
+}
+
+// GetRetryableErrorCount returns the number of error records eligible for automatic retry
+func (db *DB) GetRetryableErrorCount(table string, maxRetries int) int {
+	var count int
+	db.conn.QueryRow(
+		fmt.Sprintf(`SELECT COUNT(*) FROM %s WHERE sync_status='error' AND COALESCE(retry_count,0) < ?`, table),
+		maxRetries,
+	).Scan(&count)
+	return count
+}
+
+// GetMaxRetryCount returns the highest retry_count among retryable error records
+func (db *DB) GetMaxRetryCount(table string, maxRetries int) int {
+	var maxCount int
+	db.conn.QueryRow(
+		fmt.Sprintf(`SELECT COALESCE(MAX(COALESCE(retry_count,0)),0) FROM %s WHERE sync_status='error' AND COALESCE(retry_count,0) < ?`, table),
+		maxRetries,
+	).Scan(&maxCount)
+	return maxCount
+}
+
+// RequeueRetryableErrors moves error records that haven't exceeded max retries back to pending
+func (db *DB) RequeueRetryableErrors(table string, maxRetries int) int {
+	result, err := db.conn.Exec(
+		fmt.Sprintf(`UPDATE %s SET sync_status='pending' WHERE sync_status='error' AND COALESCE(retry_count,0) < ?`, table),
+		maxRetries,
+	)
+	if err != nil {
+		return 0
+	}
+	n, _ := result.RowsAffected()
+	return int(n)
+}
+
+// ==================== ERROR SUMMARY ====================
+
+type ErrorSummary struct {
+	Table      string `json:"table"`
+	Error      string `json:"error"`
+	Count      int    `json:"count"`
+	MaxRetries int    `json:"max_retries"`
+	LastSeen   string `json:"last_seen"`
+}
+
+func (db *DB) GetErrorSummary() []ErrorSummary {
+	tables := []string{"clients", "products", "movements", "cartera"}
+	results := make([]ErrorSummary, 0)
+
+	for _, t := range tables {
+		rows, err := db.conn.Query(
+			fmt.Sprintf(`SELECT sync_error, COUNT(*) as cnt, MAX(COALESCE(retry_count,0)) as max_rc, MAX(updated_at) as last_seen
+				FROM %s WHERE sync_status='error' AND sync_error != ''
+				GROUP BY sync_error ORDER BY cnt DESC`, t),
+		)
+		if err != nil {
+			continue
+		}
+		for rows.Next() {
+			var e ErrorSummary
+			if err := rows.Scan(&e.Error, &e.Count, &e.MaxRetries, &e.LastSeen); err == nil {
+				e.Table = t
+				results = append(results, e)
+			}
+		}
+		rows.Close()
+	}
+	return results
+}
+
+// ==================== CSV EXPORT ====================
+
+func (db *DB) ExportSyncHistoryCSV(table string) ([]byte, error) {
+	where := "1=1"
+	args := []interface{}{}
+	if table != "" {
+		where = "table_name=?"
+		args = append(args, table)
+	}
+
+	rows, err := db.conn.Query(
+		"SELECT table_name, record_key, action, COALESCE(data,''), status, COALESCE(error,''), created_at FROM sync_history WHERE "+where+" ORDER BY id DESC",
+		args...,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var buf strings.Builder
+	buf.WriteString("tabla,key,accion,data,estado,error,fecha\n")
+	for rows.Next() {
+		var tbl, key, action, data, status, errMsg, created string
+		if err := rows.Scan(&tbl, &key, &action, &data, &status, &errMsg, &created); err != nil {
+			continue
+		}
+		buf.WriteString(fmt.Sprintf("%s,%s,%s,\"%s\",%s,\"%s\",%s\n",
+			csvEscape(tbl), csvEscape(key), csvEscape(action), csvEscape(data), csvEscape(status), csvEscape(errMsg), csvEscape(created)))
+	}
+	return []byte(buf.String()), nil
+}
+
+func (db *DB) ExportLogsCSV() ([]byte, error) {
+	rows, err := db.conn.Query(`SELECT level, source, message, created_at FROM logs ORDER BY id DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var buf strings.Builder
+	buf.WriteString("nivel,fuente,mensaje,fecha\n")
+	for rows.Next() {
+		var level, source, msg, created string
+		if err := rows.Scan(&level, &source, &msg, &created); err != nil {
+			continue
+		}
+		buf.WriteString(fmt.Sprintf("%s,%s,\"%s\",%s\n",
+			csvEscape(level), csvEscape(source), csvEscape(msg), csvEscape(created)))
+	}
+	return []byte(buf.String()), nil
+}
+
+func csvEscape(s string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(s, "\"", "\"\""), "\n", " ")
 }
 
 // ==================== SYNC HISTORY ====================
@@ -721,6 +855,152 @@ func (db *DB) GetStats() map[string]interface{} {
 	}
 
 	return stats
+}
+
+// ==================== PUBLIC API QUERIES ====================
+
+// APIQueryParams holds the parameters for public API queries
+type APIQueryParams struct {
+	Search     string
+	SyncStatus string
+	Since      string // ISO date, records updated after this
+	Limit      int
+	Offset     int
+}
+
+// APIQueryResult holds a paginated result for the public API
+type APIQueryResult struct {
+	Data  []map[string]interface{} `json:"data"`
+	Total int                      `json:"total"`
+	Page  int                      `json:"page"`
+	Limit int                      `json:"limit"`
+}
+
+func (db *DB) APIGetRecords(table string, params APIQueryParams) APIQueryResult {
+	keyCol := db.keyColForTable(table)
+	if keyCol == "" {
+		return APIQueryResult{Data: make([]map[string]interface{}, 0)}
+	}
+
+	where := "1=1"
+	args := []interface{}{}
+
+	if params.Search != "" {
+		like := "%" + strings.ToLower(params.Search) + "%"
+		switch table {
+		case "clients":
+			where += " AND (LOWER(nit) LIKE ? OR LOWER(nombre) LIKE ?)"
+			args = append(args, like, like)
+		case "products":
+			where += " AND (LOWER(code) LIKE ? OR LOWER(nombre) LIKE ?)"
+			args = append(args, like, like)
+		case "movements":
+			where += " AND (LOWER(nit_tercero) LIKE ? OR LOWER(descripcion) LIKE ? OR LOWER(numero_doc) LIKE ?)"
+			args = append(args, like, like, like)
+		case "cartera":
+			where += " AND (LOWER(nit_tercero) LIKE ? OR LOWER(descripcion) LIKE ?)"
+			args = append(args, like, like)
+		}
+	}
+	if params.SyncStatus != "" {
+		where += " AND sync_status=?"
+		args = append(args, params.SyncStatus)
+	}
+	if params.Since != "" {
+		where += " AND updated_at >= ?"
+		args = append(args, params.Since)
+	}
+
+	var total int
+	countArgs := make([]interface{}, len(args))
+	copy(countArgs, args)
+	db.conn.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE %s", table, where), countArgs...).Scan(&total)
+
+	if params.Limit <= 0 {
+		params.Limit = 50
+	}
+	if params.Limit > 500 {
+		params.Limit = 500
+	}
+
+	queryArgs := append(args, params.Limit, params.Offset)
+	rows, err := db.conn.Query(
+		fmt.Sprintf("SELECT * FROM %s WHERE %s ORDER BY id LIMIT ? OFFSET ?", table, where),
+		queryArgs...,
+	)
+	if err != nil {
+		return APIQueryResult{Data: make([]map[string]interface{}, 0), Total: total, Limit: params.Limit}
+	}
+	defer rows.Close()
+
+	data := db.scanRowsToMaps(rows)
+	page := 1
+	if params.Offset > 0 && params.Limit > 0 {
+		page = (params.Offset / params.Limit) + 1
+	}
+	return APIQueryResult{Data: data, Total: total, Page: page, Limit: params.Limit}
+}
+
+func (db *DB) APIGetRecord(table, key string) map[string]interface{} {
+	keyCol := db.keyColForTable(table)
+	if keyCol == "" {
+		return nil
+	}
+	rows, err := db.conn.Query(
+		fmt.Sprintf("SELECT * FROM %s WHERE %s=? LIMIT 1", table, keyCol), key,
+	)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	results := db.scanRowsToMaps(rows)
+	if len(results) == 0 {
+		return nil
+	}
+	return results[0]
+}
+
+func (db *DB) keyColForTable(table string) string {
+	switch table {
+	case "clients":
+		return "nit"
+	case "products":
+		return "code"
+	case "movements":
+		return "record_key"
+	case "cartera":
+		return "record_key"
+	}
+	return ""
+}
+
+func (db *DB) scanRowsToMaps(rows *sql.Rows) []map[string]interface{} {
+	cols, err := rows.Columns()
+	if err != nil {
+		return nil
+	}
+	result := make([]map[string]interface{}, 0)
+	for rows.Next() {
+		values := make([]interface{}, len(cols))
+		ptrs := make([]interface{}, len(cols))
+		for i := range values {
+			ptrs[i] = &values[i]
+		}
+		if err := rows.Scan(ptrs...); err != nil {
+			continue
+		}
+		row := make(map[string]interface{})
+		for i, col := range cols {
+			v := values[i]
+			if b, ok := v.([]byte); ok {
+				row[col] = string(b)
+			} else {
+				row[col] = v
+			}
+		}
+		result = append(result, row)
+	}
+	return result
 }
 
 // ==================== QUERY TABLES (for UI display) ====================
