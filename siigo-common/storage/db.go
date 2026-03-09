@@ -35,21 +35,20 @@ func isValidTable(table string) bool {
 // ==================== TYPED RECORDS (mirror Siigo tables) ====================
 
 type ClientRecord struct {
-	ID            int64  `json:"id"`
-	Nit           string `json:"nit"`
-	Nombre        string `json:"nombre"`
-	TipoDoc       string `json:"tipo_doc"`
-	TipoClave     string `json:"tipo_clave"`
-	Empresa       string `json:"empresa"`
-	Codigo        string `json:"codigo"`
-	FechaCreacion string `json:"fecha_creacion"`
-	TipoCtaPref   string `json:"tipo_cta_pref"`
-	Hash          string `json:"hash"`
-	SyncStatus    string `json:"sync_status"`
-	SyncAction    string `json:"sync_action"`
-	SyncError     string `json:"sync_error"`
-	UpdatedAt     string `json:"updated_at"`
-	SyncedAt      string `json:"synced_at"`
+	ID           int64  `json:"id"`
+	Nit          string `json:"nit"`
+	Nombre       string `json:"nombre"`
+	TipoPersona  string `json:"tipo_persona"`
+	Empresa      string `json:"empresa"`
+	Direccion    string `json:"direccion"`
+	Email        string `json:"email"`
+	RepLegal     string `json:"rep_legal"`
+	Hash         string `json:"hash"`
+	SyncStatus   string `json:"sync_status"`
+	SyncAction   string `json:"sync_action"`
+	SyncError    string `json:"sync_error"`
+	UpdatedAt    string `json:"updated_at"`
+	SyncedAt     string `json:"synced_at"`
 }
 
 type ProductRecord struct {
@@ -435,7 +434,7 @@ func NewDB(path string) (*DB, error) {
 
 func (db *DB) migrate() error {
 	queries := []string{
-		// Clients table (from Z17 - Terceros)
+		// Clients table (from Z08A - Terceros Ampliados)
 		`CREATE TABLE IF NOT EXISTS clients (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			nit TEXT NOT NULL UNIQUE,
@@ -446,6 +445,10 @@ func (db *DB) migrate() error {
 			codigo TEXT DEFAULT '',
 			fecha_creacion TEXT DEFAULT '',
 			tipo_cta_pref TEXT DEFAULT '',
+			tipo_persona TEXT DEFAULT '',
+			direccion TEXT DEFAULT '',
+			email TEXT DEFAULT '',
+			rep_legal TEXT DEFAULT '',
 			hash TEXT NOT NULL,
 			sync_status TEXT DEFAULT 'pending',
 			sync_action TEXT DEFAULT 'add',
@@ -552,6 +555,12 @@ func (db *DB) migrate() error {
 		`ALTER TABLE products ADD COLUMN retry_count INTEGER DEFAULT 0`,
 		`ALTER TABLE movements ADD COLUMN retry_count INTEGER DEFAULT 0`,
 		`ALTER TABLE cartera ADD COLUMN retry_count INTEGER DEFAULT 0`,
+
+		// Migration: clients from Z17 to Z08A (add ampliado fields)
+		`ALTER TABLE clients ADD COLUMN tipo_persona TEXT DEFAULT ''`,
+		`ALTER TABLE clients ADD COLUMN direccion TEXT DEFAULT ''`,
+		`ALTER TABLE clients ADD COLUMN email TEXT DEFAULT ''`,
+		`ALTER TABLE clients ADD COLUMN rep_legal TEXT DEFAULT ''`,
 
 		// Migration: products table from Z06CP (comprobantes) to Z04 (real inventory)
 		`ALTER TABLE products ADD COLUMN nombre_corto TEXT DEFAULT ''`,
@@ -989,16 +998,16 @@ func (db *DB) GetAllClientHashes() map[string]string {
 	return db.getAllHashes("clients", "nit")
 }
 
-func (db *DB) UpsertClient(nit, nombre, tipoDoc, tipoClave, empresa, codigo, fechaCreacion, tipoCtaPref, hash string) string {
+func (db *DB) UpsertClient(nit, nombre, tipoPersona, empresa, direccion, email, repLegal, hash string) string {
 	var existingHash string
 	err := db.conn.QueryRow(`SELECT hash FROM clients WHERE nit=?`, nit).Scan(&existingHash)
 	now := time.Now().Format(time.RFC3339)
 
 	if err == sql.ErrNoRows {
 		db.conn.Exec(
-			`INSERT INTO clients (nit, nombre, tipo_doc, tipo_clave, empresa, codigo, fecha_creacion, tipo_cta_pref, hash, sync_status, sync_action, updated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'add', ?)`,
-			nit, nombre, tipoDoc, tipoClave, empresa, codigo, fechaCreacion, tipoCtaPref, hash, now,
+			`INSERT INTO clients (nit, nombre, tipo_persona, empresa, direccion, email, rep_legal, hash, sync_status, sync_action, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'add', ?)`,
+			nit, nombre, tipoPersona, empresa, direccion, email, repLegal, hash, now,
 		)
 		return "add"
 	}
@@ -1006,14 +1015,14 @@ func (db *DB) UpsertClient(nit, nombre, tipoDoc, tipoClave, empresa, codigo, fec
 	if existingHash != hash {
 		// Track field changes
 		db.trackChanges("clients", nit, map[string]string{
-			"nombre": nombre, "tipo_doc": tipoDoc, "tipo_clave": tipoClave,
-			"empresa": empresa, "codigo": codigo, "fecha_creacion": fechaCreacion,
-			"tipo_cta_pref": tipoCtaPref,
+			"nombre": nombre, "tipo_persona": tipoPersona,
+			"empresa": empresa, "direccion": direccion, "email": email,
+			"rep_legal": repLegal,
 		})
 		db.conn.Exec(
-			`UPDATE clients SET nombre=?, tipo_doc=?, tipo_clave=?, empresa=?, codigo=?, fecha_creacion=?, tipo_cta_pref=?, hash=?, sync_status='pending', sync_action='edit', updated_at=?
+			`UPDATE clients SET nombre=?, tipo_persona=?, empresa=?, direccion=?, email=?, rep_legal=?, hash=?, sync_status='pending', sync_action='edit', updated_at=?
 			 WHERE nit=?`,
-			nombre, tipoDoc, tipoClave, empresa, codigo, fechaCreacion, tipoCtaPref, hash, now, nit,
+			nombre, tipoPersona, empresa, direccion, email, repLegal, hash, now, nit,
 		)
 		return "edit"
 	}
@@ -1026,7 +1035,7 @@ func (db *DB) MarkDeletedClients(currentKeys map[string]bool) int {
 
 func (db *DB) GetPendingClients() []PendingRecord {
 	rows, err := db.conn.Query(
-		`SELECT id, nit, nombre, tipo_doc, tipo_clave, empresa, codigo, fecha_creacion, tipo_cta_pref, sync_action
+		`SELECT id, nit, nombre, tipo_persona, empresa, direccion, email, rep_legal, sync_action
 		 FROM clients WHERE sync_status='pending' ORDER BY id`,
 	)
 	if err != nil {
@@ -1037,21 +1046,21 @@ func (db *DB) GetPendingClients() []PendingRecord {
 	var records []PendingRecord
 	for rows.Next() {
 		var id int64
-		var nit, nombre, tipoDoc, tipoClave, empresa, codigo, fechaCreacion, tipoCtaPref, action string
-		if err := rows.Scan(&id, &nit, &nombre, &tipoDoc, &tipoClave, &empresa, &codigo, &fechaCreacion, &tipoCtaPref, &action); err != nil {
+		var nit, nombre, tipoPersona, empresa, direccion, email, repLegal, action string
+		if err := rows.Scan(&id, &nit, &nombre, &tipoPersona, &empresa, &direccion, &email, &repLegal, &action); err != nil {
 			continue
 		}
 		records = append(records, PendingRecord{
 			ID: id, Key: nit, SyncAction: action,
 			Data: map[string]interface{}{
-				"nit":             nit,
-				"client_name":     nombre,
-				"business_name":   nombre,
-				"taxpayer_type":   tipoDoc,
-				"tipo_clave":      tipoClave,
-				"siigo_empresa":   empresa,
-				"siigo_codigo":    codigo,
-				"fecha_creacion":  fechaCreacion,
+				"nit":           nit,
+				"client_name":   nombre,
+				"business_name": nombre,
+				"tipo_persona":  tipoPersona,
+				"siigo_empresa": empresa,
+				"direccion":     direccion,
+				"email":         email,
+				"rep_legal":     repLegal,
 			},
 		})
 	}
@@ -2772,7 +2781,7 @@ func (db *DB) GetClients(limit, offset int, search string) ([]ClientRecord, int)
 
 	if search != "" {
 		like := "%" + strings.ToLower(search) + "%"
-		where = "(LOWER(nit) LIKE ? OR LOWER(nombre) LIKE ? OR LOWER(codigo) LIKE ?)"
+		where = "(LOWER(nit) LIKE ? OR LOWER(nombre) LIKE ? OR LOWER(COALESCE(email,'')) LIKE ?)"
 		args = append(args, like, like, like)
 	}
 
@@ -2781,7 +2790,7 @@ func (db *DB) GetClients(limit, offset int, search string) ([]ClientRecord, int)
 
 	queryArgs := append(args, limit, offset)
 	rows, err := db.conn.Query(
-		"SELECT id, nit, nombre, tipo_doc, tipo_clave, empresa, codigo, fecha_creacion, tipo_cta_pref, hash, sync_status, COALESCE(sync_action,''), COALESCE(sync_error,''), updated_at, COALESCE(synced_at,'') FROM clients WHERE "+where+" ORDER BY id LIMIT ? OFFSET ?",
+		"SELECT id, nit, nombre, COALESCE(tipo_persona,''), empresa, COALESCE(direccion,''), COALESCE(email,''), COALESCE(rep_legal,''), hash, sync_status, COALESCE(sync_action,''), COALESCE(sync_error,''), updated_at, COALESCE(synced_at,'') FROM clients WHERE "+where+" ORDER BY id LIMIT ? OFFSET ?",
 		queryArgs...,
 	)
 	if err != nil {
@@ -2792,7 +2801,7 @@ func (db *DB) GetClients(limit, offset int, search string) ([]ClientRecord, int)
 	var records []ClientRecord
 	for rows.Next() {
 		var r ClientRecord
-		if err := rows.Scan(&r.ID, &r.Nit, &r.Nombre, &r.TipoDoc, &r.TipoClave, &r.Empresa, &r.Codigo, &r.FechaCreacion, &r.TipoCtaPref, &r.Hash, &r.SyncStatus, &r.SyncAction, &r.SyncError, &r.UpdatedAt, &r.SyncedAt); err != nil {
+		if err := rows.Scan(&r.ID, &r.Nit, &r.Nombre, &r.TipoPersona, &r.Empresa, &r.Direccion, &r.Email, &r.RepLegal, &r.Hash, &r.SyncStatus, &r.SyncAction, &r.SyncError, &r.UpdatedAt, &r.SyncedAt); err != nil {
 			log.Printf("scan client error: %v", err)
 			continue
 		}

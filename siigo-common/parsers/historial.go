@@ -121,9 +121,13 @@ func parseHistorialEXTFH(rec []byte, hash [32]byte) HistorialDoc {
 		nombre1 = strings.TrimSpace(isam.ExtractField(rec, 77, 40))
 	}
 
+	// nombre2 at offset 165 (not 161). Bytes 161-164 contain a 4-digit numeric
+	// code (e.g. "1266", "3361") that is NOT part of the company name.
+	// Inactive records (tipo=2) may have binary data here — filter it out.
 	nombre2 := ""
-	if len(rec) >= 201 {
-		nombre2 = strings.TrimSpace(isam.ExtractField(rec, 161, 40))
+	if len(rec) >= 205 {
+		nombre2 = strings.TrimSpace(isam.ExtractField(rec, 165, 40))
+		nombre2 = cleanPrintable(nombre2)
 	}
 
 	// NIT from area around offset 137

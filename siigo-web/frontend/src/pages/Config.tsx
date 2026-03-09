@@ -1,6 +1,13 @@
 import { useState, useEffect } from 'react';
 import { api } from '../api';
 import { showToast } from '../components/Toast';
+import SectionTitle from '../components/SectionTitle';
+import ToggleRow from '../components/ToggleRow';
+import Toggle from '../components/Toggle';
+import PageHeader from '../components/PageHeader';
+import FormGroup from '../components/FormGroup';
+import Alert from '../components/Alert';
+import TabBar from '../components/TabBar';
 
 type Tab = 'general' | 'api' | 'telegram' | 'integrations' | 'advanced';
 
@@ -136,43 +143,31 @@ export default function Config() {
 
   return (
     <>
-      <div className="topbar"><h2>Configuracion</h2></div>
+      <PageHeader title="Configuracion" />
       <div className="content">
-        <div className="module-tabs">
-          {(Object.keys(TAB_LABELS) as Tab[]).map(tab => (
-            <div
-              key={tab}
-              className={`module-tab ${activeTab === tab ? 'active' : ''}`}
-              onClick={() => setActiveTab(tab)}
-            >
-              {TAB_LABELS[tab]}
-            </div>
-          ))}
-        </div>
+        <TabBar
+          tabs={(Object.keys(TAB_LABELS) as Tab[]).map(k => ({ key: k, label: TAB_LABELS[k] }))}
+          activeTab={activeTab}
+          onTabChange={t => setActiveTab(t as Tab)}
+        />
 
         <div className="config-form">
           {/* ===== GENERAL ===== */}
           {activeTab === 'general' && (
             <>
-              <h3 className="config-section-title">Origen de Datos (Siigo)</h3>
-              <div className="form-group">
-                <label>Ruta de archivos ISAM</label>
+              <SectionTitle>Origen de Datos (Siigo)</SectionTitle>
+              <FormGroup label="Ruta de archivos ISAM" hint="Carpeta donde Siigo guarda los archivos Z17, Z04, Z49, Z09, etc.">
                 <input value={dataPath} onChange={e => setDataPath(e.target.value)} placeholder="C:\DEMOS01\" />
-                <small className="form-hint">Carpeta donde Siigo guarda los archivos Z17, Z04, Z49, Z09, etc.</small>
-              </div>
+              </FormGroup>
 
-              <h3 className="config-section-title">Intervalos de Sincronizacion</h3>
+              <SectionTitle>Intervalos de Sincronizacion</SectionTitle>
               <div className="form-row">
-                <div className="form-group">
-                  <label>Deteccion ISAM (seg)</label>
+                <FormGroup label="Deteccion ISAM (seg)" hint="Cada cuanto se revisan cambios en los archivos ISAM">
                   <input type="number" value={interval} onChange={e => setInterval(parseInt(e.target.value) || 60)} />
-                  <small className="form-hint">Cada cuanto se revisan cambios en los archivos ISAM</small>
-                </div>
-                <div className="form-group">
-                  <label>Envio al servidor (seg)</label>
+                </FormGroup>
+                <FormGroup label="Envio al servidor (seg)" hint="Cada cuanto se envian pendientes al API">
                   <input type="number" value={sendInterval} onChange={e => setSendInterval(parseInt(e.target.value) || 30)} />
-                  <small className="form-hint">Cada cuanto se envian pendientes al API</small>
-                </div>
+                </FormGroup>
               </div>
 
               <div className="config-actions">
@@ -184,20 +179,17 @@ export default function Config() {
           {/* ===== SERVIDOR & API ===== */}
           {activeTab === 'api' && (
             <>
-              <h3 className="config-section-title">Conexion a Finearom</h3>
-              <div className="form-group">
-                <label>Base URL</label>
+              <SectionTitle>Conexion a Finearom</SectionTitle>
+              <FormGroup label="Base URL">
                 <input value={baseURL} onChange={e => setBaseURL(e.target.value)} placeholder="https://ordenes.finearom.co/api" />
-              </div>
+              </FormGroup>
               <div className="form-row">
-                <div className="form-group">
-                  <label>Email</label>
+                <FormGroup label="Email">
                   <input value={email} onChange={e => setEmail(e.target.value)} placeholder="siigo-sync@finearom.com" />
-                </div>
-                <div className="form-group">
-                  <label>Password</label>
+                </FormGroup>
+                <FormGroup label="Password">
                   <input type="password" value={password} onChange={e => setPassword(e.target.value)} />
-                </div>
+                </FormGroup>
               </div>
 
               <div className="config-actions">
@@ -211,40 +203,24 @@ export default function Config() {
                 </div>
               )}
 
-              <h3 className="config-section-title">API Publica (v1)</h3>
+              <SectionTitle>API Publica (v1)</SectionTitle>
               <p className="form-hint" style={{ marginBottom: 12 }}>
                 Permite que sistemas externos consulten datos de Siigo via REST.
               </p>
-              <div className="send-toggle-row">
-                <label className="toggle-switch">
-                  <input type="checkbox" checked={apiEnabled} onChange={async () => {
+              <ToggleRow checked={apiEnabled} onChange={async () => {
                     const v = !apiEnabled;
                     setApiEnabled(v);
                     await api.savePublicAPIConfig({ enabled: v });
                     showToast('success', `API publica ${v ? 'activada' : 'desactivada'}`);
-                  }} />
-                  <span className="toggle-slider"></span>
-                </label>
-                <span className={`send-toggle-label ${apiEnabled ? 'active' : 'inactive'}`}>
-                  {apiEnabled ? 'API publica ACTIVA' : 'API publica DESACTIVADA'}
-                </span>
-              </div>
+                  }} activeLabel="API publica ACTIVA" inactiveLabel="API publica DESACTIVADA" />
               {apiEnabled && (
                 <>
-                  <div className="send-toggle-row" style={{ marginTop: 8 }}>
-                    <label className="toggle-switch">
-                      <input type="checkbox" checked={jwtRequired} onChange={async () => {
+                  <ToggleRow checked={jwtRequired} onChange={async () => {
                         const v = !jwtRequired;
                         setJwtRequired(v);
                         await api.savePublicAPIConfig({ jwt_required: v });
                         showToast('success', v ? 'JWT activado - se requiere token' : 'JWT desactivado - modo pruebas (sin auth)');
-                      }} />
-                      <span className="toggle-slider"></span>
-                    </label>
-                    <span className={`send-toggle-label ${jwtRequired ? 'active' : 'inactive'}`}>
-                      {jwtRequired ? 'JWT requerido' : 'Sin autenticacion (modo pruebas)'}
-                    </span>
-                  </div>
+                      }} activeLabel="JWT requerido" inactiveLabel="Sin autenticacion (modo pruebas)" style={{ marginTop: 8 }} />
                   <div className="form-group" style={{ marginTop: 12 }}>
                     <label>API Key</label>
                     <div style={{ display: 'flex', gap: 8 }}>
@@ -257,9 +233,9 @@ export default function Config() {
                     </div>
                   </div>
                   {!jwtRequired && (
-                    <div className="config-msg warning" style={{ marginTop: 8 }}>
+                    <Alert variant="warning" style={{ marginTop: 8 }}>
                       Modo pruebas activo: los endpoints /api/v1/* no requieren JWT. Cualquiera con la URL puede consultar los datos.
-                    </div>
+                    </Alert>
                   )}
                 </>
               )}
@@ -269,43 +245,29 @@ export default function Config() {
           {/* ===== TELEGRAM ===== */}
           {activeTab === 'telegram' && (
             <>
-              <h3 className="config-section-title">Bot de Telegram</h3>
+              <SectionTitle>Bot de Telegram</SectionTitle>
               <p className="form-hint" style={{ marginBottom: 12 }}>
                 Recibe alertas de errores, estado del sync y controla el servicio remotamente.
               </p>
-              <div className="send-toggle-row">
-                <label className="toggle-switch">
-                  <input type="checkbox" checked={tgEnabled} onChange={async () => {
+              <ToggleRow checked={tgEnabled} onChange={async () => {
                     const v = !tgEnabled;
                     setTgEnabled(v);
                     await api.saveTelegramConfig({ enabled: v });
                     showToast('success', `Telegram ${v ? 'activado' : 'desactivado'}`);
-                  }} />
-                  <span className="toggle-slider"></span>
-                </label>
-                <span className={`send-toggle-label ${tgEnabled ? 'active' : 'inactive'}`}>
-                  {tgEnabled ? 'Notificaciones ACTIVAS' : 'Notificaciones DESACTIVADAS'}
-                </span>
-              </div>
+                  }} activeLabel="Notificaciones ACTIVAS" inactiveLabel="Notificaciones DESACTIVADAS" />
               {tgEnabled && (
                 <>
-                  <div className="form-group" style={{ marginTop: 12 }}>
-                    <label>Bot Token</label>
+                  <FormGroup label="Bot Token" hint="Obtenido de @BotFather en Telegram" style={{ marginTop: 12 }}>
                     <input value={tgBotToken} onChange={e => setTgBotToken(e.target.value)} placeholder="123456789:ABCdef..." />
-                    <small className="form-hint">Obtenido de @BotFather en Telegram</small>
-                  </div>
-                  <div className="form-group">
-                    <label>Chat ID</label>
+                  </FormGroup>
+                  <FormGroup label="Chat ID" hint="ID del chat donde se envian las notificaciones">
                     <input value={tgChatId} onChange={e => setTgChatId(e.target.value)} placeholder="1234567890" />
-                    <small className="form-hint">ID del chat donde se envian las notificaciones</small>
-                  </div>
-                  <div className="form-group">
-                    <label>PIN para /exec</label>
+                  </FormGroup>
+                  <FormGroup label="PIN para /exec" hint="PIN de seguridad para ejecutar comandos remotos">
                     <input value={tgExecPin} onChange={e => setTgExecPin(e.target.value)} placeholder="2337" />
-                    <small className="form-hint">PIN de seguridad para ejecutar comandos remotos</small>
-                  </div>
+                  </FormGroup>
 
-                  <h3 className="config-section-title" style={{ marginTop: 20 }}>Tipos de Notificacion</h3>
+                  <SectionTitle style={{ marginTop: 20 }}>Tipos de Notificacion</SectionTitle>
                   <p className="form-hint" style={{ marginBottom: 12 }}>
                     Selecciona que notificaciones quieres recibir por Telegram.
                   </p>
@@ -319,24 +281,13 @@ export default function Config() {
                       ['db_cleared', 'Base de datos vaciada'],
                       ['max_retries', 'Reintentos agotados'],
                     ] as [string, string][]).map(([key, label]) => (
-                      <div key={key} className="send-toggle-row" style={{ marginBottom: 4 }}>
-                        <label className="toggle-switch">
-                          <input
-                            type="checkbox"
-                            checked={(tgNotify as Record<string, boolean>)[key]}
-                            onChange={async () => {
-                              const v = !(tgNotify as Record<string, boolean>)[key];
-                              setTgNotify(prev => ({ ...prev, [key]: v }));
-                              await api.saveTelegramConfig({ [`notify_${key}`]: v });
-                              showToast('success', `${label}: ${v ? 'activado' : 'desactivado'}`);
-                            }}
-                          />
-                          <span className="toggle-slider"></span>
-                        </label>
-                        <span className={`send-toggle-label ${(tgNotify as Record<string, boolean>)[key] ? 'active' : 'inactive'}`}>
-                          {label}
-                        </span>
-                      </div>
+                      <ToggleRow key={key} checked={(tgNotify as Record<string, boolean>)[key]}
+                        onChange={async () => {
+                          const v = !(tgNotify as Record<string, boolean>)[key];
+                          setTgNotify(prev => ({ ...prev, [key]: v }));
+                          await api.saveTelegramConfig({ [`notify_${key}`]: v });
+                          showToast('success', `${label}: ${v ? 'activado' : 'desactivado'}`);
+                        }} label={label} style={{ marginBottom: 4 }} />
                     ))}
                   </div>
 
@@ -363,7 +314,7 @@ export default function Config() {
           {/* ===== INTEGRACIONES ===== */}
           {activeTab === 'integrations' && (
             <>
-              <h3 className="config-section-title">URLs de Conexion</h3>
+              <SectionTitle>URLs de Conexion</SectionTitle>
               <p className="form-hint" style={{ marginBottom: 12 }}>
                 Usa estas URLs para conectar herramientas externas (Power BI, Postman, etc.) desde la red local.
               </p>
@@ -420,28 +371,20 @@ export default function Config() {
                 );
               })()}
 
-              <div className="config-msg info" style={{ marginTop: 12 }}>
+              <Alert variant="info" style={{ marginTop: 12 }}>
                 <strong>Power BI:</strong> Get Data &rarr; OData Feed &rarr; pega la URL de OData &rarr; en Headers agrega <code>Authorization: Bearer {'<token>'}</code>
-              </div>
+              </Alert>
 
-              <h3 className="config-section-title" style={{ marginTop: 24 }}>Webhooks</h3>
+              <SectionTitle style={{ marginTop: 24 }}>Webhooks</SectionTitle>
               <p className="form-hint" style={{ marginBottom: 12 }}>
                 Notifica a sistemas externos (Laravel, Zapier, n8n) cuando ocurren eventos en el middleware.
               </p>
-              <div className="send-toggle-row">
-                <label className="toggle-switch">
-                  <input type="checkbox" checked={whEnabled} onChange={async () => {
+              <ToggleRow checked={whEnabled} onChange={async () => {
                     const v = !whEnabled;
                     setWhEnabled(v);
                     await api.saveWebhookConfig({ enabled: v });
                     showToast('success', `Webhooks ${v ? 'activados' : 'desactivados'}`);
-                  }} />
-                  <span className="toggle-slider"></span>
-                </label>
-                <span className={`send-toggle-label ${whEnabled ? 'active' : 'inactive'}`}>
-                  {whEnabled ? 'Webhooks ACTIVOS' : 'Webhooks DESACTIVADOS'}
-                </span>
-              </div>
+                  }} activeLabel="Webhooks ACTIVOS" inactiveLabel="Webhooks DESACTIVADOS" />
 
               {whEnabled && (
                 <>
@@ -476,12 +419,9 @@ export default function Config() {
                         </div>
                       </div>
                       <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                        <label className="toggle-switch" style={{ marginRight: 8 }}>
-                          <input type="checkbox" checked={hook.active} onChange={() => {
+                        <span style={{ marginRight: 8 }}><Toggle checked={hook.active} onChange={() => {
                             const h = [...whHooks]; h[idx] = { ...h[idx], active: !h[idx].active }; setWhHooks(h);
-                          }} />
-                          <span className="toggle-slider"></span>
-                        </label>
+                          }} /></span>
                         <span style={{ color: hook.active ? '#6ee7b7' : '#94a3b8', fontSize: 12 }}>{hook.active ? 'Activo' : 'Inactivo'}</span>
                         <button className="btn-sm btn-danger-sm" style={{ marginLeft: 'auto' }} onClick={() => {
                           setWhHooks(whHooks.filter((_, i) => i !== idx));
@@ -513,65 +453,53 @@ export default function Config() {
           {/* ===== AVANZADO ===== */}
           {activeTab === 'advanced' && (
             <>
-              <h3 className="config-section-title">Envio por Lotes (Batching)</h3>
+              <SectionTitle>Envio por Lotes (Batching)</SectionTitle>
               <p className="form-hint" style={{ marginBottom: 12 }}>
                 Controla como se agrupan los registros al enviar al servidor.
               </p>
               <div className="form-row">
-                <div className="form-group">
-                  <label>Registros por lote</label>
+                <FormGroup label="Registros por lote">
                   <input type="number" value={batchSize} onChange={e => setBatchSize(parseInt(e.target.value) || 50)} />
-                </div>
-                <div className="form-group">
-                  <label>Pausa entre lotes (ms)</label>
+                </FormGroup>
+                <FormGroup label="Pausa entre lotes (ms)">
                   <input type="number" value={batchDelay} onChange={e => setBatchDelay(parseInt(e.target.value) || 0)} />
-                </div>
+                </FormGroup>
               </div>
 
-              <h3 className="config-section-title">Reintentos Automaticos</h3>
+              <SectionTitle>Reintentos Automaticos</SectionTitle>
               <p className="form-hint" style={{ marginBottom: 12 }}>
                 Si un registro falla al enviarse, se reintenta automaticamente.
               </p>
               <div className="form-row">
-                <div className="form-group">
-                  <label>Max reintentos (0 = desactivado)</label>
+                <FormGroup label="Max reintentos (0 = desactivado)">
                   <input type="number" value={maxRetries} onChange={e => setMaxRetries(parseInt(e.target.value) || 0)} />
-                </div>
-                <div className="form-group">
-                  <label>Delay entre reintentos (seg)</label>
+                </FormGroup>
+                <FormGroup label="Delay entre reintentos (seg)">
                   <input type="number" value={retryDelay} onChange={e => setRetryDelay(parseInt(e.target.value) || 5)} />
-                </div>
+                </FormGroup>
               </div>
 
               <div className="config-actions">
                 <button className="btn-save" onClick={handleSaveGeneral}>Guardar</button>
               </div>
 
-              <h3 className="config-section-title">Edicion de Registros</h3>
+              <SectionTitle>Edicion de Registros</SectionTitle>
               <p className="form-hint" style={{ marginBottom: 12 }}>
                 Permite editar y eliminar registros individuales desde las paginas de datos.
               </p>
-              <div className="send-toggle-row">
-                <label className="toggle-switch">
-                  <input type="checkbox" checked={allowEditDelete} onChange={async () => {
+              <ToggleRow checked={allowEditDelete} onChange={async () => {
                     const v = !allowEditDelete;
                     setAllowEditDelete(v);
                     await api.saveAllowEditDelete(v);
                     showToast('success', v ? 'Edicion/eliminacion habilitada' : 'Edicion/eliminacion deshabilitada');
-                  }} />
-                  <span className="toggle-slider"></span>
-                </label>
-                <span className={`send-toggle-label ${allowEditDelete ? 'active' : 'inactive'}`}>
-                  {allowEditDelete ? 'Editar/Eliminar HABILITADO' : 'Editar/Eliminar DESHABILITADO'}
-                </span>
-              </div>
+                  }} activeLabel="Editar/Eliminar HABILITADO" inactiveLabel="Editar/Eliminar DESHABILITADO" />
               {allowEditDelete && (
-                <div className="config-msg warning" style={{ marginTop: 8 }}>
+                <Alert variant="warning" style={{ marginTop: 8 }}>
                   Los registros editados se marcaran como "pending" y se re-enviaran al servidor. Los registros eliminados se pierden permanentemente.
-                </div>
+                </Alert>
               )}
 
-              <h3 className="config-section-title">Backup & Restauracion</h3>
+              <SectionTitle>Backup & Restauracion</SectionTitle>
               <p className="form-hint" style={{ marginBottom: 12 }}>
                 Descarga una copia de la base de datos SQLite o restaura desde un archivo .db anterior.
               </p>
@@ -599,7 +527,7 @@ export default function Config() {
                 </label>
               </div>
 
-              <h3 className="config-section-title danger">Zona de Peligro</h3>
+              <SectionTitle danger>Zona de Peligro</SectionTitle>
               <p className="form-hint" style={{ marginBottom: 12 }}>
                 Acciones destructivas que no se pueden deshacer.
               </p>

@@ -90,7 +90,7 @@ func parseTransaccionDetalleAtOffset(rec []byte, hash [32]byte, off int) Transac
 	empresa := strings.TrimSpace(isam.ExtractField(rec, off+1, 3))
 	secuencia := strings.TrimSpace(isam.ExtractField(rec, off+4, 12))
 	codigo1 := strings.TrimSpace(isam.ExtractField(rec, off+16, 2))
-	nit := strings.TrimLeft(isam.ExtractField(rec, off+18, 14), "0")
+	nit := strings.TrimLeft(strings.TrimSpace(isam.ExtractField(rec, off+18, 13)), "0")
 	empresaCuenta := strings.TrimSpace(isam.ExtractField(rec, off+32, 3))
 	cuenta := strings.TrimSpace(isam.ExtractField(rec, off+35, 9))
 	tipoCompSec := strings.TrimSpace(isam.ExtractField(rec, off+44, 1))

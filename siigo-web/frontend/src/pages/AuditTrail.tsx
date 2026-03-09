@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { api } from '../api';
+import PageHeader from '../components/PageHeader';
 
 interface AuditEntry {
   id: number;
@@ -25,10 +26,9 @@ export default function AuditTrail() {
 
   return (
     <>
-      <div className="topbar">
-        <h2>Audit Trail</h2>
+      <PageHeader title="Audit Trail">
         <span style={{ color: '#64748b', fontSize: 13 }}>{total} registros</span>
-      </div>
+      </PageHeader>
       <div className="content">
         <table className="audit-table">
           <thead>

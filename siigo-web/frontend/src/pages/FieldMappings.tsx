@@ -1,6 +1,10 @@
 import { useState, useEffect } from 'react';
 import { api, FieldMap } from '../api';
 import { showToast } from '../components/Toast';
+import ToggleRow from '../components/ToggleRow';
+import Toggle from '../components/Toggle';
+import PageHeader from '../components/PageHeader';
+import TabBar from '../components/TabBar';
 
 const MODULE_LABELS: Record<string, string> = {
   clients: 'Clientes (Z17)',
@@ -66,24 +70,18 @@ export default function FieldMappings() {
 
   return (
     <>
-      <div className="topbar"><h2>Mapeo de Campos</h2></div>
+      <PageHeader title="Mapeo de Campos" />
       <div className="content">
         <p className="mapping-desc">
           Configura que campos se envian al endpoint de Finearom por cada modulo.
           Solo los campos habilitados seran incluidos en el JSON enviado al API.
         </p>
 
-        <div className="module-tabs">
-          {modules.map(mod => (
-            <div
-              key={mod}
-              className={`module-tab ${activeModule === mod ? 'active' : ''}`}
-              onClick={() => setActiveModule(mod)}
-            >
-              {MODULE_LABELS[mod] || mod}
-            </div>
-          ))}
-        </div>
+        <TabBar
+          tabs={modules.map(mod => ({ key: mod, label: MODULE_LABELS[mod] || mod }))}
+          activeTab={activeModule}
+          onTabChange={setActiveModule}
+        />
 
         <div className="mapping-panel">
           <div className="mapping-header">
@@ -91,19 +89,9 @@ export default function FieldMappings() {
             <span className="field-count">{enabledCount} de {fields.length} campos habilitados</span>
           </div>
 
-          <div className="send-toggle-row">
-            <label className="toggle-switch">
-              <input
-                type="checkbox"
-                checked={sendEnabled[activeModule] === true}
-                onChange={() => toggleSend(activeModule)}
-              />
-              <span className="toggle-slider"></span>
-            </label>
-            <span className={`send-toggle-label ${sendEnabled[activeModule] === true ? 'active' : 'inactive'}`}>
-              {sendEnabled[activeModule] === true ? 'Envio al servidor ACTIVO' : 'Envio al servidor DESACTIVADO'}
-            </span>
-          </div>
+          <ToggleRow checked={sendEnabled[activeModule] === true}
+            onChange={() => toggleSend(activeModule)}
+            activeLabel="Envio al servidor ACTIVO" inactiveLabel="Envio al servidor DESACTIVADO" />
 
           <div className="mapping-table-wrapper">
             <table className="data-table mapping-table">
@@ -119,14 +107,7 @@ export default function FieldMappings() {
                 {fields.map((field, i) => (
                   <tr key={field.source} className={field.enabled ? '' : 'disabled-row'}>
                     <td>
-                      <label className="toggle-switch">
-                        <input
-                          type="checkbox"
-                          checked={field.enabled}
-                          onChange={() => toggleField(activeModule, i)}
-                        />
-                        <span className="toggle-slider"></span>
-                      </label>
+                      <Toggle checked={field.enabled} onChange={() => toggleField(activeModule, i)} />
                     </td>
                     <td><code>{field.source}</code></td>
                     <td>

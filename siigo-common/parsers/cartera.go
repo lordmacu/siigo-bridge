@@ -130,7 +130,9 @@ func parseCarteraEXTFH(rec []byte, hash [32]byte) Cartera {
 	nit := strings.TrimLeft(isam.ExtractField(rec, 16, 13), "0")
 	cuenta := isam.ExtractField(rec, 29, 13)
 	fecha := isam.ExtractField(rec, 42, 8)
-	descripcion := strings.TrimSpace(isam.ExtractField(rec, 93, 40))
+	// Description field: bytes 93-142 (50 chars). Previously extracted only 40 chars,
+	// truncating text like "PALACIO" → "PALACI". Extra 10 bytes before D/C@143 confirmed as text.
+	descripcion := strings.TrimSpace(isam.ExtractField(rec, 93, 50))
 	tipoMov := ""
 
 	// tipo_mov is at offset 143 (D or C)

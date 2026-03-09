@@ -1,6 +1,9 @@
 import { useState, useEffect } from 'react';
 import { api } from '../api';
 import { showToast } from '../components/Toast';
+import ToggleRow from '../components/ToggleRow';
+import PageHeader from '../components/PageHeader';
+import Modal from '../components/Modal';
 
 const MODULE_LABELS: Record<string, string> = {
   dashboard: 'Dashboard',
@@ -128,29 +131,18 @@ export default function Users() {
   const renderPermToggles = (perms: string[], setter: (p: string[]) => void) => (
     <div className="perm-toggles">
       {allModules.filter(m => m !== 'users').map(mod => (
-        <div key={mod} className="send-toggle-row" style={{ marginBottom: 4 }}>
-          <label className="toggle-switch">
-            <input
-              type="checkbox"
-              checked={perms.includes(mod)}
-              onChange={() => togglePerm(perms, mod, setter)}
-            />
-            <span className="toggle-slider"></span>
-          </label>
-          <span className={`send-toggle-label ${perms.includes(mod) ? 'active' : 'inactive'}`}>
-            {MODULE_LABELS[mod] || mod}
-          </span>
-        </div>
+        <ToggleRow key={mod} checked={perms.includes(mod)}
+          onChange={() => togglePerm(perms, mod, setter)}
+          label={MODULE_LABELS[mod] || mod} style={{ marginBottom: 4 }} />
       ))}
     </div>
   );
 
   return (
     <>
-      <div className="topbar">
-        <h2>Usuarios</h2>
+      <PageHeader title="Usuarios">
         <button className="btn-save" onClick={() => setShowCreate(true)}>+ Nuevo Usuario</button>
-      </div>
+      </PageHeader>
       <div className="content">
         <div className="config-msg warning" style={{ marginBottom: 16 }}>
           El usuario root (configurado en config.json) siempre tiene acceso total y no aparece aqui.
@@ -203,97 +195,68 @@ export default function Users() {
 
         {/* CREATE MODAL */}
         {showCreate && (
-          <div className="modal-overlay" onClick={() => setShowCreate(false)}>
-            <div className="user-modal" onClick={e => e.stopPropagation()}>
-              <div className="user-modal-header">
-                <h3>Nuevo Usuario</h3>
-                <button className="user-modal-close" onClick={() => setShowCreate(false)}>&times;</button>
-              </div>
-              <div className="user-modal-body">
-                <div className="form-group">
-                  <label>Username</label>
-                  <input value={newUsername} onChange={e => setNewUsername(e.target.value)} placeholder="nombre de usuario" autoFocus />
-                </div>
-                <div className="form-group">
-                  <label>Password</label>
-                  <input type="password" value={newPassword} onChange={e => setNewPassword(e.target.value)} placeholder="contrasena" />
-                </div>
-                <div className="form-group">
-                  <label>Rol</label>
-                  <select value={newRole} onChange={e => setNewRole(e.target.value)} className="form-select">
-                    <option value="viewer">Solo Lectura</option>
-                    <option value="editor">Editor</option>
-                    <option value="admin">Administrador</option>
-                  </select>
-                </div>
-                {newRole !== 'admin' && (
-                  <div className="form-group">
-                    <label>Modulos permitidos</label>
-                    {renderPermToggles(newPerms, setNewPerms)}
-                  </div>
-                )}
-                {newRole === 'admin' && (
-                  <div className="config-msg" style={{ color: '#6ee7b7', marginTop: 8 }}>
-                    Los administradores tienen acceso a todos los modulos.
-                  </div>
-                )}
-              </div>
-              <div className="user-modal-footer">
-                <button className="btn-cancel" onClick={() => setShowCreate(false)}>Cancelar</button>
-                <button className="btn-save" onClick={handleCreate}>Crear Usuario</button>
-              </div>
+          <Modal title="Nuevo Usuario" onClose={() => setShowCreate(false)} variant="user"
+            footer={<><button className="btn-cancel" onClick={() => setShowCreate(false)}>Cancelar</button><button className="btn-save" onClick={handleCreate}>Crear Usuario</button></>}>
+            <div className="form-group">
+              <label>Username</label>
+              <input value={newUsername} onChange={e => setNewUsername(e.target.value)} placeholder="nombre de usuario" autoFocus />
             </div>
-          </div>
+            <div className="form-group">
+              <label>Password</label>
+              <input type="password" value={newPassword} onChange={e => setNewPassword(e.target.value)} placeholder="contrasena" />
+            </div>
+            <div className="form-group">
+              <label>Rol</label>
+              <select value={newRole} onChange={e => setNewRole(e.target.value)} className="form-select">
+                <option value="viewer">Solo Lectura</option>
+                <option value="editor">Editor</option>
+                <option value="admin">Administrador</option>
+              </select>
+            </div>
+            {newRole !== 'admin' && (
+              <div className="form-group">
+                <label>Modulos permitidos</label>
+                {renderPermToggles(newPerms, setNewPerms)}
+              </div>
+            )}
+            {newRole === 'admin' && (
+              <div className="config-msg" style={{ color: '#6ee7b7', marginTop: 8 }}>
+                Los administradores tienen acceso a todos los modulos.
+              </div>
+            )}
+          </Modal>
         )}
 
         {/* EDIT MODAL */}
         {editUser && (
-          <div className="modal-overlay" onClick={() => setEditUser(null)}>
-            <div className="user-modal" onClick={e => e.stopPropagation()}>
-              <div className="user-modal-header">
-                <h3>Editar: {editUser.username}</h3>
-                <button className="user-modal-close" onClick={() => setEditUser(null)}>&times;</button>
-              </div>
-              <div className="user-modal-body">
-                <div className="form-group">
-                  <label>Nueva contrasena</label>
-                  <input type="password" value={editPassword} onChange={e => setEditPassword(e.target.value)} placeholder="dejar vacio para no cambiar" />
-                </div>
-                <div className="form-group">
-                  <label>Rol</label>
-                  <select value={editRole} onChange={e => setEditRole(e.target.value)} className="form-select">
-                    <option value="viewer">Solo Lectura</option>
-                    <option value="editor">Editor</option>
-                    <option value="admin">Administrador</option>
-                  </select>
-                </div>
-                {editRole !== 'admin' && (
-                  <div className="form-group">
-                    <label>Modulos permitidos</label>
-                    {renderPermToggles(editPerms, setEditPerms)}
-                  </div>
-                )}
-                {editRole === 'admin' && (
-                  <div className="config-msg" style={{ color: '#6ee7b7', marginTop: 8 }}>
-                    Los administradores tienen acceso a todos los modulos.
-                  </div>
-                )}
-                <div className="send-toggle-row" style={{ marginTop: 16 }}>
-                  <label className="toggle-switch">
-                    <input type="checkbox" checked={editActive} onChange={() => setEditActive(!editActive)} />
-                    <span className="toggle-slider"></span>
-                  </label>
-                  <span className={`send-toggle-label ${editActive ? 'active' : 'inactive'}`}>
-                    {editActive ? 'Usuario ACTIVO' : 'Usuario INACTIVO'}
-                  </span>
-                </div>
-              </div>
-              <div className="user-modal-footer">
-                <button className="btn-cancel" onClick={() => setEditUser(null)}>Cancelar</button>
-                <button className="btn-save" onClick={handleSaveEdit}>Guardar Cambios</button>
-              </div>
+          <Modal title={`Editar: ${editUser.username}`} onClose={() => setEditUser(null)} variant="user"
+            footer={<><button className="btn-cancel" onClick={() => setEditUser(null)}>Cancelar</button><button className="btn-save" onClick={handleSaveEdit}>Guardar Cambios</button></>}>
+            <div className="form-group">
+              <label>Nueva contrasena</label>
+              <input type="password" value={editPassword} onChange={e => setEditPassword(e.target.value)} placeholder="dejar vacio para no cambiar" />
             </div>
-          </div>
+            <div className="form-group">
+              <label>Rol</label>
+              <select value={editRole} onChange={e => setEditRole(e.target.value)} className="form-select">
+                <option value="viewer">Solo Lectura</option>
+                <option value="editor">Editor</option>
+                <option value="admin">Administrador</option>
+              </select>
+            </div>
+            {editRole !== 'admin' && (
+              <div className="form-group">
+                <label>Modulos permitidos</label>
+                {renderPermToggles(editPerms, setEditPerms)}
+              </div>
+            )}
+            {editRole === 'admin' && (
+              <div className="config-msg" style={{ color: '#6ee7b7', marginTop: 8 }}>
+                Los administradores tienen acceso a todos los modulos.
+              </div>
+            )}
+            <ToggleRow checked={editActive} onChange={() => setEditActive(!editActive)}
+              activeLabel="Usuario ACTIVO" inactiveLabel="Usuario INACTIVO" style={{ marginTop: 16 }} />
+          </Modal>
         )}
       </div>
     </>

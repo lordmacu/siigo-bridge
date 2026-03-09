@@ -86,7 +86,7 @@ func parseMovimientoRecord(rec []byte, extfh bool) Movimiento {
 //	         Space(0x20) = NIT-keyed record (no comprobante type)
 //	[1:4]    codigo_comprobante - 3 digit code (001, 010, 100, etc.)
 //	[4:15]   numero_doc - 11 chars zero-padded document number (also NIT for space-type)
-//	[15:50]  nombre_tercero - 35 chars (only for types: T, E)
+//	[15:72]  nombre_tercero - 57 chars (only for types: T, E, F)
 //	[72:128] descripcion - primary description text
 //	[129:192] descripcion2 - secondary description / user initials
 //
@@ -144,11 +144,13 @@ func parseMovimientoEXTFH(rec []byte, hash [32]byte, rawPreview string) Movimien
 	}
 
 	numeroDoc := strings.TrimLeft(isam.ExtractField(rec, 4, 11), "0")
-	nombreTercero := strings.TrimSpace(isam.ExtractField(rec, 15, 35))
+	// nombreTercero: bytes 15-71 (57 chars). Previously extracted only 35 chars,
+	// truncating text like "GERENCIA Y CONTABILIDAD" → "GERENCIA".
+	nombreTercero := strings.TrimSpace(isam.ExtractField(rec, 15, 57))
 
-	// Two description areas
+	// Two description areas - extended zone 2 to byte 250 (data confirmed past 192)
 	descripcion := findDescripcion(rec, 72, 128)
-	descripcion2 := findDescripcion(rec, 129, 192)
+	descripcion2 := findDescripcion(rec, 129, 250)
 
 	return Movimiento{
 		TipoComprobante: tipoComp,
@@ -207,9 +209,9 @@ func parseMovimientoBinary(rec []byte, hash [32]byte, rawPreview string) Movimie
 	}
 
 	numeroDoc := strings.TrimLeft(isam.ExtractField(rec, 6, 11), "0")
-	nombreTercero := strings.TrimSpace(isam.ExtractField(rec, 17, 35))
+	nombreTercero := strings.TrimSpace(isam.ExtractField(rec, 17, 57))
 	descripcion := findDescripcion(rec, 74, 130)
-	descripcion2 := findDescripcion(rec, 131, 194)
+	descripcion2 := findDescripcion(rec, 131, 252)
 
 	return Movimiento{
 		TipoComprobante: tipoComp,
@@ -268,8 +270,8 @@ func findDescripcion(rec []byte, startFrom int, endAtOpt ...int) string {
 	}
 
 	if bestStart >= 0 {
-		if bestLen > 80 {
-			bestLen = 80
+		if bestLen > 120 {
+			bestLen = 120
 		}
 		return strings.TrimSpace(isam.ExtractField(rec, bestStart, bestLen))
 	}
@@ -316,6 +318,19 @@ func looksLikeAccount(s string) bool {
 	// PUC accounts: 1xxx=activos, 2xxx=pasivos, etc. up to 9xxx
 	first := s[0]
 	return first >= '1' && first <= '9'
+}
+
+// cleanPrintable strips non-printable characters from a string, keeping only
+// ASCII printable (0x20-0x7E) and extended Latin (0xC0-0xFF for accented chars).
+func cleanPrintable(s string) string {
+	clean := make([]byte, 0, len(s))
+	for i := 0; i < len(s); i++ {
+		b := s[i]
+		if (b >= 0x20 && b <= 0x7E) || (b >= 0xC0) {
+			clean = append(clean, b)
+		}
+	}
+	return strings.TrimSpace(string(clean))
 }
 
 // ToFinearomRecaudo converts a movement to a recaudo map for Finearom API

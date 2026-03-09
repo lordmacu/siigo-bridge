@@ -547,8 +547,9 @@ body {
 
   /* Main content */
   .main { flex: 1; overflow: auto; padding-top: 48px; }
-  .topbar { padding: 12px 16px; padding-left: 52px; }
-  .topbar h2 { font-size: 15px; }
+  .topbar { padding: 12px 16px; padding-left: 52px; flex-wrap: wrap; gap: 8px; }
+  .topbar h2 { font-size: 15px; flex: 1 1 100%; }
+  .topbar-actions { flex-wrap: wrap; gap: 8px; width: 100%; justify-content: flex-start; }
   .content { padding: 12px 14px; overflow: visible; }
 
   /* Stats */

@@ -2,6 +2,9 @@ import { useState, useEffect, useCallback } from 'react';
 import { api } from '../api';
 import Pagination from '../components/Pagination';
 import { showToast } from '../components/Toast';
+import EmptyState from '../components/EmptyState';
+import PageHeader from '../components/PageHeader';
+import { fmtDate } from '../utils/format';
 
 interface LogEntry {
   id: number;
@@ -9,14 +12,6 @@ interface LogEntry {
   source: string;
   message: string;
   created_at: string;
-}
-
-function fmtDate(d: string) {
-  if (!d) return '-';
-  const dt = new Date(d);
-  if (isNaN(dt.getTime())) return d;
-  return dt.toLocaleDateString('es-CO', { year: 'numeric', month: '2-digit', day: '2-digit' })
-    + ' ' + dt.toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
 export default function Logs() {
@@ -53,13 +48,10 @@ export default function Logs() {
 
   return (
     <>
-      <div className="topbar">
-        <h2>Registro de Actividad</h2>
-        <div className="topbar-actions">
+      <PageHeader title="Registro de Actividad">
           <a className="btn-sm btn-export" href={api.exportLogsURL()} target="_blank" rel="noreferrer">Exportar CSV</a>
           <button className="btn-sm btn-resend" onClick={handleClear}>Limpiar Logs</button>
-        </div>
-      </div>
+      </PageHeader>
       <div className="content">
         <div className="logs-filters">
           <select value={level} onChange={e => { setLevel(e.target.value); setPage(1); }}>
@@ -92,7 +84,7 @@ export default function Logs() {
         </div>
         <p className="result-count">{total} entradas - Pagina {page} de {totalPages}</p>
         {logs.length === 0 ? (
-          <div className="empty-state"><h3>Sin logs</h3></div>
+          <EmptyState title="Sin logs" />
         ) : (
           <div>
             {logs.map(l => (

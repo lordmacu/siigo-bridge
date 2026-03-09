@@ -109,10 +109,12 @@ func parseCondicionPagoEXTFH(rec []byte, hash [32]byte) CondicionPago {
 		tipoSecundario = strings.TrimSpace(isam.ExtractField(rec, 131, 4))
 	}
 
-	// BCD monetary value at @211 (7 bytes, 2 decimals)
+	// BCD monetary value at @208 (7 bytes, 2 decimals).
+	// Previously used @211 which always returned 0. Hex dump confirmed
+	// valid BCD data starts at byte 208.
 	var valor float64
-	if len(rec) >= 218 {
-		valor = DecodePacked(rec[211:218], 2)
+	if len(rec) >= 215 {
+		valor = DecodePacked(rec[208:215], 2)
 	}
 
 	// Date at @224 (8 chars)

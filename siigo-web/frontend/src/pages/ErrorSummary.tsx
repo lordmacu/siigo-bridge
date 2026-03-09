@@ -1,6 +1,9 @@
 import { useState, useEffect } from 'react';
 import { api } from '../api';
 import { showToast } from '../components/Toast';
+import EmptyState from '../components/EmptyState';
+import PageHeader from '../components/PageHeader';
+import { fmtDateShort as fmtDate } from '../utils/format';
 
 interface ErrorGroup {
   table: string;
@@ -33,14 +36,6 @@ const TABLE_LABELS: Record<string, string> = {
   clasificacion_cuentas: 'Clasif. Cuentas',
 };
 
-function fmtDate(d: string) {
-  if (!d) return '-';
-  const dt = new Date(d);
-  if (isNaN(dt.getTime())) return d;
-  return dt.toLocaleDateString('es-CO', { year: 'numeric', month: '2-digit', day: '2-digit' })
-    + ' ' + dt.toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' });
-}
-
 export default function ErrorSummary() {
   const [errors, setErrors] = useState<ErrorGroup[]>([]);
   const [filter, setFilter] = useState('');
@@ -65,13 +60,10 @@ export default function ErrorSummary() {
 
   return (
     <>
-      <div className="topbar"><h2>Resumen de Errores</h2></div>
+      <PageHeader title="Resumen de Errores" />
       <div className="content">
         {errors.length === 0 ? (
-          <div className="empty-state">
-            <h3>Sin errores</h3>
-            <p>No hay registros con errores de sincronizacion</p>
-          </div>
+          <EmptyState title="Sin errores" message="No hay registros con errores de sincronizacion" />
         ) : (
           <>
             <div className="error-summary-header">

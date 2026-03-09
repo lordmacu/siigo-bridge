@@ -101,7 +101,7 @@
       "get": {
         "tags": ["Clients"],
         "summary": "Listar clientes",
-        "description": "Terceros desde Z17. Campos: nit, nombre, tipo_doc, tipo_clave, empresa, codigo, fecha_creacion, tipo_cta_pref.",
+        "description": "Terceros ampliados desde Z08A. Campos: nit, nombre, tipo_persona (NO=natural, NP=juridica), empresa, direccion, email, rep_legal.",
         "security": [{"bearerAuth": []}],
         "parameters": [
           {"$ref": "#/components/parameters/page"},

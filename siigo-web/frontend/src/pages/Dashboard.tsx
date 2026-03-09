@@ -1,6 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
 import { api } from '../api';
 import { showToast } from '../components/Toast';
+import EmptyState from '../components/EmptyState';
+import Toggle from '../components/Toggle';
+import PageHeader from '../components/PageHeader';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 
 interface Stats { [key: string]: number }
@@ -175,9 +178,7 @@ export default function Dashboard() {
 
   return (
     <>
-      <div className="topbar">
-        <h2>Dashboard</h2>
-        <div className="topbar-actions">
+      <PageHeader title="Dashboard">
           <button className="btn-sm btn-outline" onClick={() => setShowConfig(!showConfig)}>
             {showConfig ? 'Cerrar' : 'Personalizar'}
           </button>
@@ -185,8 +186,7 @@ export default function Dashboard() {
             {syncing ? 'Sincronizando...' : 'En espera'}
           </span>
           <span className="last-refresh">Actualizado: {lastRefresh}</span>
-        </div>
-      </div>
+      </PageHeader>
       <div className="content">
         {/* Customization Panel */}
         {showConfig && (
@@ -197,10 +197,7 @@ export default function Dashboard() {
               <div className="dash-config-grid">
                 {ALL_TABLES.map(t => (
                   <label key={t.key} className="dash-config-toggle">
-                    <label className="toggle-switch">
-                      <input type="checkbox" checked={prefs.visibleCards.includes(t.key)} onChange={() => toggleCard(t.key)} />
-                      <span className="toggle-slider"></span>
-                    </label>
+                    <Toggle checked={prefs.visibleCards.includes(t.key)} onChange={() => toggleCard(t.key)} />
                     <span style={{ color: t.color }}>{t.label}</span>
                   </label>
                 ))}
@@ -216,10 +213,7 @@ export default function Dashboard() {
               <h4>Grafica de tendencia</h4>
               <div className="dash-config-row">
                 <label className="dash-config-toggle">
-                  <label className="toggle-switch">
-                    <input type="checkbox" checked={prefs.showChart} onChange={() => updatePrefs({ showChart: !prefs.showChart })} />
-                    <span className="toggle-slider"></span>
-                  </label>
+                  <Toggle checked={prefs.showChart} onChange={() => updatePrefs({ showChart: !prefs.showChart })} />
                   <span>Mostrar grafica</span>
                 </label>
                 <select value={prefs.chartMetric} onChange={e => updatePrefs({ chartMetric: e.target.value as DashPrefs['chartMetric'] })}>
@@ -232,10 +226,7 @@ export default function Dashboard() {
                 <div className="dash-config-grid">
                   {ALL_TABLES.map(t => (
                     <label key={t.key} className="dash-config-toggle">
-                      <label className="toggle-switch">
-                        <input type="checkbox" checked={prefs.chartTables.includes(t.key)} onChange={() => toggleChartTable(t.key)} />
-                        <span className="toggle-slider"></span>
-                      </label>
+                      <Toggle checked={prefs.chartTables.includes(t.key)} onChange={() => toggleChartTable(t.key)} />
                       <span style={{ color: t.color }}>{t.label}</span>
                     </label>
                   ))}
@@ -246,10 +237,7 @@ export default function Dashboard() {
             <div className="dash-config-section">
               <h4>Secciones</h4>
               <label className="dash-config-toggle">
-                <label className="toggle-switch">
-                  <input type="checkbox" checked={prefs.showISAM} onChange={() => updatePrefs({ showISAM: !prefs.showISAM })} />
-                  <span className="toggle-slider"></span>
-                </label>
+                <Toggle checked={prefs.showISAM} onChange={() => updatePrefs({ showISAM: !prefs.showISAM })} />
                 <span>Archivos ISAM</span>
               </label>
             </div>
@@ -308,10 +296,7 @@ export default function Dashboard() {
         )}
 
         {cards.length === 0 && !showConfig && (
-          <div className="empty-state" style={{ margin: '40px 0' }}>
-            <h3>Dashboard vacio</h3>
-            <p>Presiona "Personalizar" para elegir que tablas mostrar</p>
-          </div>
+          <EmptyState title="Dashboard vacio" message="Presiona &quot;Personalizar&quot; para elegir que tablas mostrar" style={{ margin: '40px 0' }} />
         )}
 
         {/* Chart */}

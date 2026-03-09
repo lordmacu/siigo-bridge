@@ -1053,9 +1053,9 @@ func (s *Server) handleSetupComplete(w http.ResponseWriter, r *http.Request) {
 // ==================== DIFF ====================
 
 func (s *Server) diffClientes() {
-	clientes, err := parsers.ParseTercerosClientes(s.cfg.Siigo.DataPath)
+	clientes, _, err := parsers.ParseTercerosAmpliados(s.cfg.Siigo.DataPath)
 	if err != nil {
-		s.db.AddLog("error", "Z17", "Error parseando: "+err.Error())
+		s.db.AddLog("error", "Z08A", "Error parseando: "+err.Error())
 		return
 	}
 
@@ -1063,12 +1063,12 @@ func (s *Server) diffClientes() {
 	currentKeys := make(map[string]bool, len(clientes))
 
 	for _, t := range clientes {
-		nit := strings.TrimLeft(t.NumeroDoc, "0")
+		nit := strings.TrimSpace(t.Nit)
 		if nit == "" {
 			continue
 		}
 		currentKeys[nit] = true
-		action := s.db.UpsertClient(nit, t.Nombre, t.TipoDoc, t.TipoClave, t.Empresa, t.Codigo, t.FechaCreacion, t.TipoCtaPref, t.Hash)
+		action := s.db.UpsertClient(nit, t.Nombre, t.TipoPersona, t.Empresa, t.Direccion, t.Email, t.RepresentanteLegal, t.Hash)
 		switch action {
 		case "add":
 			adds++
@@ -1078,7 +1078,7 @@ func (s *Server) diffClientes() {
 	}
 
 	deletes := s.db.MarkDeletedClients(currentKeys)
-	s.db.AddLog("info", "Z17", fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(clientes)))
+	s.db.AddLog("info", "Z08A", fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(clientes)))
 	s.bot.NotifyChangesDetected("Clientes", adds, edits, deletes)
 }
 
@@ -1778,7 +1778,7 @@ func (s *Server) retryFailedRecords() {
 // ==================== ISAM CACHE ====================
 
 var (
-	cachedClientes    []parsers.Tercero
+	cachedClientes    []parsers.TerceroAmpliado
 	cachedProductos   []parsers.Inventario
 	cachedMovimientos []parsers.Movimiento
 	cachedCartera     []parsers.Cartera
@@ -1787,7 +1787,7 @@ var (
 func (s *Server) refreshCache(which string) {
 	switch which {
 	case "clients":
-		c, err := parsers.ParseTercerosClientes(s.cfg.Siigo.DataPath)
+		c, _, err := parsers.ParseTercerosAmpliados(s.cfg.Siigo.DataPath)
 		if err == nil {
 			cachedClientes = c
 		}

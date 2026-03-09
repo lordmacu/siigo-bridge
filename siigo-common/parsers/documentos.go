@@ -100,12 +100,11 @@ func parseDocumentoRecord(rec []byte, extfh bool) Documento {
 //	[0:1]     tipo_comprobante (letter: F/G/L/P)
 //	[1:4]     codigo_comp (3 chars)
 //	[10:15]   secuencia (5 chars, line number)
-//	[21:26]   nit_tercero (5+ chars)
-//	[29:42]   cuenta_contable (13 chars)
-//	[42:49]   producto_ref (7 chars)
-//	[49:52]   bodega (3 chars)
-//	[52:55]   centro_costo (3 chars)
-//	[55:63]   fecha (YYYYMMDD) — offset adjusted from exploration
+//	[15:26]   BCD/control data + reference number
+//	[26:27]   tipo_doc marker ('N')
+//	[27:40]   nit_tercero (13 chars, zero-padded left)
+//	[40:53]   cuenta_contable (13 chars)
+//	[53:61]   fecha (YYYYMMDD) — confirmed at offset 53 via hex scan
 //	[93:143]  descripcion (50 chars)
 //	[143:144] tipo_mov (D/C)
 //	[167:174] referencia (7 chars)
@@ -118,31 +117,27 @@ func parseDocumentoEXTFH(rec []byte, hash [32]byte) Documento {
 	codigo := strings.TrimSpace(isam.ExtractField(rec, 1, 3))
 	seq := strings.TrimSpace(isam.ExtractField(rec, 10, 5))
 
-	// NIT at offset 21, variable length (up to 13 chars to offset 34)
-	nitRaw := strings.TrimSpace(isam.ExtractField(rec, 21, 13))
-	nit := strings.TrimLeft(nitRaw, "0")
-	// Clean non-numeric from NIT
-	cleanNit := ""
-	for _, c := range nit {
-		if c >= '0' && c <= '9' {
-			cleanNit += string(c)
-		}
-	}
+	// NIT at offset 27 (after tipo_doc 'N' marker at byte 26).
+	// Previously extracted @21(13) which mixed in reference numbers and the 'N' marker.
+	nit := strings.TrimLeft(strings.TrimSpace(isam.ExtractField(rec, 27, 13)), "0")
 
-	cuenta := strings.TrimSpace(isam.ExtractField(rec, 29, 13))
-	producto := strings.TrimSpace(isam.ExtractField(rec, 42, 7))
-	bodega := strings.TrimSpace(isam.ExtractField(rec, 49, 3))
-	centroCosto := strings.TrimSpace(isam.ExtractField(rec, 52, 3))
+	// Cuenta contable at offset 40 (immediately after NIT field).
+	// Previously extracted @29(13) which overlapped with NIT data.
+	cuenta := strings.TrimSpace(isam.ExtractField(rec, 40, 13))
 
-	// Date: try offset 55 first, then 53
+	// Product, bodega, cc are embedded in BCD/control area (bytes 15-26),
+	// not at the previously documented ASCII offsets
+	producto := ""
+	bodega := ""
+	centroCosto := ""
+
+	// Fecha at offset 53 — confirmed by hex dump scan across all records.
+	// Previously tried {55, 53} but offset 55 always produced invalid dates.
 	fecha := ""
-	for _, off := range []int{55, 53} {
-		if off+8 <= len(rec) {
-			f := isam.ExtractField(rec, off, 8)
-			if looksLikeDate(f) {
-				fecha = f
-				break
-			}
+	if len(rec) >= 61 {
+		f := isam.ExtractField(rec, 53, 8)
+		if looksLikeDate(f) {
+			fecha = f
 		}
 	}
 
@@ -171,7 +166,7 @@ func parseDocumentoEXTFH(rec []byte, hash [32]byte) Documento {
 		TipoComprobante: tipo,
 		CodigoComp:      codigo,
 		Secuencia:       seq,
-		NitTercero:      cleanNit,
+		NitTercero:      nit,
 		CuentaContable:  cuenta,
 		ProductoRef:     producto,
 		Bodega:          bodega,

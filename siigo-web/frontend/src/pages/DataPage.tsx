@@ -2,6 +2,13 @@ import { useState, useEffect, useCallback } from 'react';
 import { api } from '../api';
 import { showToast } from '../components/Toast';
 import Pagination from '../components/Pagination';
+import EmptyState from '../components/EmptyState';
+import PageHeader from '../components/PageHeader';
+import StatusBadge from '../components/StatusBadge';
+import Modal from '../components/Modal';
+import TabBar from '../components/TabBar';
+import SearchBox from '../components/SearchBox';
+import { fmtDate } from '../utils/format';
 
 interface Props {
   table: string;
@@ -9,16 +16,8 @@ interface Props {
   file: string;
 }
 
-function fmtDate(d: string) {
-  if (!d) return '-';
-  const dt = new Date(d);
-  if (isNaN(dt.getTime())) return d;
-  return dt.toLocaleDateString('es-CO', { year: 'numeric', month: '2-digit', day: '2-digit' })
-    + ' ' + dt.toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-}
-
 const EDITABLE_FIELDS: Record<string, string[]> = {
-  clients: ['nit', 'nombre', 'tipo_doc', 'tipo_clave', 'empresa', 'codigo', 'fecha_creacion', 'tipo_cta_pref'],
+  clients: ['nit', 'nombre', 'tipo_persona', 'empresa', 'direccion', 'email', 'rep_legal'],
   products: ['code', 'nombre', 'grupo', 'cuenta_contable', 'fecha', 'tipo_mov'],
   movements: ['tipo_comprobante', 'numero_doc', 'fecha', 'nit_tercero', 'cuenta_contable', 'descripcion', 'valor', 'tipo_mov'],
   cartera: ['tipo_registro', 'nit_tercero', 'cuenta_contable', 'fecha', 'descripcion', 'tipo_mov'],
@@ -241,16 +240,16 @@ export default function DataPage({ table, title, file }: Props) {
     if (table === 'clients') {
       return (
         <table className="data-table">
-          <thead><tr>{renderCheckboxHeader()}{sortTh('NIT','nit')}{sortTh('Nombre','nombre')}{sortTh('Tipo Doc','tipo_doc')}{sortTh('Empresa','empresa')}{sortTh('Codigo','codigo')}{sortTh('Estado','sync_status')}<th>Acciones</th></tr></thead>
+          <thead><tr>{renderCheckboxHeader()}{sortTh('NIT','nit')}{sortTh('Nombre','nombre')}{sortTh('Tipo','tipo_persona')}{sortTh('Empresa','empresa')}{sortTh('Email','email')}{sortTh('Estado','sync_status')}<th>Acciones</th></tr></thead>
           <tbody>{sortedData.map((r, i) => (
             <tr key={i}>
               {renderCheckbox(r)}
               <td className="col-key">{r.nit}</td>
               <td className="col-name">{r.nombre}</td>
-              <td className="col-type">{r.tipo_doc}</td>
+              <td className="col-type">{r.tipo_persona}</td>
               <td className="col-code">{r.empresa}</td>
-              <td className="col-code">{r.codigo}</td>
-              <td><span className={`status ${r.sync_status}`}>{r.sync_status}</span></td>
+              <td className="col-desc">{r.email}</td>
+              <td><StatusBadge status={r.sync_status} /></td>
               {renderActionButtons(r)}
             </tr>
           ))}</tbody>
@@ -268,7 +267,7 @@ export default function DataPage({ table, title, file }: Props) {
               <td className="col-name">{r.nombre}</td>
               <td className="col-type">{r.grupo}</td>
               <td className="col-code">{r.cuenta_contable}</td>
-              <td><span className={`status ${r.sync_status}`}>{r.sync_status}</span></td>
+              <td><StatusBadge status={r.sync_status} /></td>
               {renderActionButtons(r)}
             </tr>
           ))}</tbody>
@@ -287,7 +286,7 @@ export default function DataPage({ table, title, file }: Props) {
               <td className="col-date">{r.fecha}</td>
               <td className="col-code">{r.nit_tercero}</td>
               <td className="col-desc">{r.descripcion}</td>
-              <td><span className={`status ${r.sync_status}`}>{r.sync_status}</span></td>
+              <td><StatusBadge status={r.sync_status} /></td>
               {renderActionButtons(r)}
             </tr>
           ))}</tbody>
@@ -307,7 +306,7 @@ export default function DataPage({ table, title, file }: Props) {
               <td className="col-date">{r.fecha}</td>
               <td className="col-desc">{r.descripcion}</td>
               <td className="col-value">{r.tipo_mov}</td>
-              <td><span className={`status ${r.sync_status}`}>{r.sync_status}</span></td>
+              <td><StatusBadge status={r.sync_status} /></td>
               {renderActionButtons(r)}
             </tr>
           ))}</tbody>
@@ -327,7 +326,7 @@ export default function DataPage({ table, title, file }: Props) {
               <td className="col-type">{r.activa ? 'Si' : 'No'}</td>
               <td className="col-type">{r.auxiliar ? 'Si' : 'No'}</td>
               <td className="col-desc">{r.naturaleza}</td>
-              <td><span className={`status ${r.sync_status}`}>{r.sync_status}</span></td>
+              <td><StatusBadge status={r.sync_status} /></td>
               {renderActionButtons(r)}
             </tr>
           ))}</tbody>
@@ -346,7 +345,7 @@ export default function DataPage({ table, title, file }: Props) {
               <td className="col-code">{r.empresa}</td>
               <td className="col-code">{r.nit_responsable}</td>
               <td className="col-date">{r.fecha_adquisicion}</td>
-              <td><span className={`status ${r.sync_status}`}>{r.sync_status}</span></td>
+              <td><StatusBadge status={r.sync_status} /></td>
               {renderActionButtons(r)}
             </tr>
           ))}</tbody>
@@ -367,7 +366,7 @@ export default function DataPage({ table, title, file }: Props) {
               <td className="col-value">{r.debito?.toLocaleString('es-CO', { minimumFractionDigits: 2 })}</td>
               <td className="col-value">{r.credito?.toLocaleString('es-CO', { minimumFractionDigits: 2 })}</td>
               <td className="col-value" style={{ fontWeight: 600 }}>{r.saldo_final?.toLocaleString('es-CO', { minimumFractionDigits: 2 })}</td>
-              <td><span className={`status ${r.sync_status}`}>{r.sync_status}</span></td>
+              <td><StatusBadge status={r.sync_status} /></td>
               {renderActionButtons(r)}
             </tr>
           ))}</tbody>
@@ -387,7 +386,7 @@ export default function DataPage({ table, title, file }: Props) {
               <td className="col-value">{r.debito?.toLocaleString('es-CO', { minimumFractionDigits: 2 })}</td>
               <td className="col-value">{r.credito?.toLocaleString('es-CO', { minimumFractionDigits: 2 })}</td>
               <td className="col-value" style={{ fontWeight: 600 }}>{r.saldo_final?.toLocaleString('es-CO', { minimumFractionDigits: 2 })}</td>
-              <td><span className={`status ${r.sync_status}`}>{r.sync_status}</span></td>
+              <td><StatusBadge status={r.sync_status} /></td>
               {renderActionButtons(r)}
             </tr>
           ))}</tbody>
@@ -410,7 +409,7 @@ export default function DataPage({ table, title, file }: Props) {
               <td className="col-date">{r.fecha}</td>
               <td className="col-desc">{r.descripcion}</td>
               <td className="col-value">{r.tipo_mov}</td>
-              <td><span className={`status ${r.sync_status}`}>{r.sync_status}</span></td>
+              <td><StatusBadge status={r.sync_status} /></td>
               {renderActionButtons(r)}
             </tr>
           ))}</tbody>
@@ -431,7 +430,7 @@ export default function DataPage({ table, title, file }: Props) {
             <td className="col-name">{r.representante_legal || '-'}</td>
             <td className="col-desc">{r.direccion || '-'}</td>
             <td className="col-desc">{r.email || '-'}</td>
-            <td><span className={`status ${r.sync_status}`}>{r.sync_status}</span></td>
+            <td><StatusBadge status={r.sync_status} /></td>
             {renderActionButtons(r)}
           </tr>
         ))}</tbody>
@@ -441,57 +440,38 @@ export default function DataPage({ table, title, file }: Props) {
 
   return (
     <>
-      <div className="topbar"><h2>{title}</h2></div>
+      <PageHeader title={title} />
       <div className="content">
-        <div className="subtabs">
-          <div className={`subtab ${subTab === 'data' ? 'active' : ''}`} onClick={() => setSubTab('data')}>
-            Datos SQLite ({file})
-          </div>
-          <div className={`subtab ${subTab === 'history' ? 'active' : ''}`} onClick={() => setSubTab('history')}>
-            Historial de Envios
-          </div>
+        <TabBar
+          tabs={[{ key: 'data', label: `Datos SQLite (${file})` }, { key: 'history', label: 'Historial de Envios' }]}
+          activeTab={subTab}
+          onTabChange={t => setSubTab(t as 'data' | 'history')}
+          variant="sub"
+        >
           {subTab === 'history' && (
             <a className="btn-sm btn-export subtab-export" href={api.exportHistoryURL(table)} target="_blank" rel="noreferrer">Exportar CSV</a>
           )}
-        </div>
+        </TabBar>
 
         {subTab === 'data' ? (
           <>
-            <div className="search-box">
-              <input
-                placeholder="Buscar..."
-                value={searchInput}
-                onChange={e => setSearchInput(e.target.value)}
-                onKeyUp={e => e.key === 'Enter' && doSearch()}
-              />
-              <button onClick={doSearch}>Buscar</button>
-              {search && <button className="btn-clear" onClick={clearSearch}>X</button>}
-            </div>
+            <SearchBox value={searchInput} onChange={setSearchInput} onSearch={doSearch} onClear={clearSearch} showClear={!!search} />
             <p className="result-count">{total} registros{search ? ' encontrados' : ''} - Pagina {page} de {totalPages}</p>
             {data.length === 0 ? (
-              <div className="empty-state"><h3>Sin datos</h3><p>No se encontraron registros</p></div>
+              <EmptyState title="Sin datos" message="No se encontraron registros" />
             ) : <div className="table-wrapper">{renderDataTable()}</div>}
             <Pagination page={page} totalPages={totalPages} onPageChange={setPage} />
           </>
         ) : (
           <>
-            <div className="search-box">
-              <input
-                placeholder="Buscar por key, error..."
-                value={histSearchInput}
-                onChange={e => setHistSearchInput(e.target.value)}
-                onKeyUp={e => e.key === 'Enter' && doHistSearch()}
-              />
+            <SearchBox value={histSearchInput} onChange={setHistSearchInput} onSearch={doHistSearch} onClear={clearHistSearch}
+              placeholder="Buscar por key, error..." showClear={!!(histSearch || histStatus || histDateFrom || histDateTo)}>
               <select value={histStatus} onChange={e => { setHistStatus(e.target.value); setHistPage(1); }}>
                 <option value="">Todos</option>
                 <option value="sent">Enviados</option>
                 <option value="error">Con Error</option>
               </select>
-              <button onClick={doHistSearch}>Buscar</button>
-              {(histSearch || histStatus || histDateFrom || histDateTo) && (
-                <button className="btn-clear" onClick={clearHistSearch}>X</button>
-              )}
-            </div>
+            </SearchBox>
             <div className="search-box" style={{ marginTop: -4 }}>
               <label className="date-label">Desde</label>
               <input type="date" value={histDateFrom} onChange={e => { setHistDateFrom(e.target.value); setHistPage(1); }} />
@@ -500,7 +480,7 @@ export default function DataPage({ table, title, file }: Props) {
             </div>
             <p className="result-count">{histTotal} registros - Pagina {histPage} de {histTotalPages}</p>
             {histRecords.length === 0 ? (
-              <div className="empty-state"><h3>Sin historial</h3><p>Aun no se han enviado registros</p></div>
+              <EmptyState title="Sin historial" message="Aun no se han enviado registros" />
             ) : (
               <div className="table-wrapper"><table className="data-table">
                 <thead><tr><th>Key</th><th>Accion</th><th>Estado</th><th>Fecha</th><th>Error</th><th>Acciones</th></tr></thead>
@@ -508,7 +488,7 @@ export default function DataPage({ table, title, file }: Props) {
                   <tr key={i}>
                     <td className="col-key">{r.key}</td>
                     <td className="col-type">{r.sync_action}</td>
-                    <td><span className={`status ${r.sync_status}`}>{r.sync_status}</span></td>
+                    <td><StatusBadge status={r.sync_status} /></td>
                     <td className="col-date">{fmtDate(r.updated_at)}</td>
                     <td style={{ maxWidth: 200 }}>{r.sync_error ? (
                       <span className="error-link" onClick={() => setDetail(r)}>{r.sync_error.substring(0, 50)}{r.sync_error.length > 50 ? '...' : ''}</span>
@@ -539,125 +519,84 @@ export default function DataPage({ table, title, file }: Props) {
 
         {/* Change history modal */}
         {changeHistory !== null && (
-          <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) setChangeHistory(null); }}>
-            <div className="modal" style={{ maxWidth: 700 }}>
-              <div className="modal-header">
-                <h3>Historial de Cambios — {changeHistoryKey}</h3>
-                <button className="btn-clear" onClick={() => setChangeHistory(null)}>X</button>
+          <Modal title={`Historial de Cambios — ${changeHistoryKey}`} onClose={() => setChangeHistory(null)} maxWidth={700}
+            bodyStyle={{ maxHeight: 500, overflowY: 'auto' }}
+            footer={<button className="btn-clear" onClick={() => setChangeHistory(null)}>Cerrar</button>}>
+            {changeHistory.length === 0 ? (
+              <p style={{ color: '#94a3b8' }}>No hay cambios registrados para este registro.</p>
+            ) : changeHistory.map((ch, i) => (
+              <div key={i} className="change-diff">
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <span style={{ color: '#94a3b8', fontSize: 12 }}>{fmtDate(ch.changed_at)}</span>
+                  <span className={`status ${ch.action}`}>{ch.action}</span>
+                </div>
+                {ch.changes && (() => {
+                  try {
+                    const changes = typeof ch.changes === 'string' ? JSON.parse(ch.changes) : ch.changes;
+                    return Object.entries(changes).map(([field, vals]: [string, any]) => (
+                      <div key={field} className="change-field">
+                        <span className="change-label">{field}</span>
+                        <span className="change-old">{vals.old ?? '-'}</span>
+                        <span className="change-arrow">&rarr;</span>
+                        <span className="change-new">{vals.new ?? '-'}</span>
+                      </div>
+                    ));
+                  } catch { return <pre style={{ fontSize: 11, color: '#94a3b8' }}>{ch.changes}</pre>; }
+                })()}
               </div>
-              <div className="modal-body" style={{ maxHeight: 500, overflowY: 'auto' }}>
-                {changeHistory.length === 0 ? (
-                  <p style={{ color: '#94a3b8' }}>No hay cambios registrados para este registro.</p>
-                ) : changeHistory.map((ch, i) => (
-                  <div key={i} className="change-diff">
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-                      <span style={{ color: '#94a3b8', fontSize: 12 }}>{fmtDate(ch.changed_at)}</span>
-                      <span className={`status ${ch.action}`}>{ch.action}</span>
-                    </div>
-                    {ch.changes && (() => {
-                      try {
-                        const changes = typeof ch.changes === 'string' ? JSON.parse(ch.changes) : ch.changes;
-                        return Object.entries(changes).map(([field, vals]: [string, any]) => (
-                          <div key={field} className="change-field">
-                            <span className="change-label">{field}</span>
-                            <span className="change-old">{vals.old ?? '-'}</span>
-                            <span className="change-arrow">&rarr;</span>
-                            <span className="change-new">{vals.new ?? '-'}</span>
-                          </div>
-                        ));
-                      } catch { return <pre style={{ fontSize: 11, color: '#94a3b8' }}>{ch.changes}</pre>; }
-                    })()}
-                  </div>
-                ))}
-              </div>
-              <div className="modal-footer">
-                <button className="btn-clear" onClick={() => setChangeHistory(null)}>Cerrar</button>
-              </div>
-            </div>
-          </div>
+            ))}
+          </Modal>
         )}
 
         {/* Detail modal (history) */}
         {detail && (
-          <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) setDetail(null); }}>
-            <div className="modal">
-              <div className="modal-header">
-                <h3>Detalle del Registro</h3>
-                <button className="btn-clear" onClick={() => setDetail(null)}>X</button>
+          <Modal title="Detalle del Registro" onClose={() => setDetail(null)}
+            footer={<button className="btn-clear" onClick={() => setDetail(null)}>Cerrar</button>}>
+            <div className="detail-row"><span className="label">Tabla:</span><span>{detail.table}</span></div>
+            <div className="detail-row"><span className="label">Key:</span><span>{detail.key}</span></div>
+            <div className="detail-row"><span className="label">Accion:</span><span>{detail.sync_action}</span></div>
+            <div className="detail-row"><span className="label">Estado:</span><span className={`status ${detail.sync_status}`}>{detail.sync_status}</span></div>
+            <div className="detail-row"><span className="label">Fecha:</span><span>{fmtDate(detail.updated_at)}</span></div>
+            {detail.sync_error && (
+              <div className="detail-section">
+                <span className="label">Error:</span>
+                <div className="detail-error">{detail.sync_error}</div>
               </div>
-              <div className="modal-body">
-                <div className="detail-row"><span className="label">Tabla:</span><span>{detail.table}</span></div>
-                <div className="detail-row"><span className="label">Key:</span><span>{detail.key}</span></div>
-                <div className="detail-row"><span className="label">Accion:</span><span>{detail.sync_action}</span></div>
-                <div className="detail-row"><span className="label">Estado:</span><span className={`status ${detail.sync_status}`}>{detail.sync_status}</span></div>
-                <div className="detail-row"><span className="label">Fecha:</span><span>{fmtDate(detail.updated_at)}</span></div>
-                {detail.sync_error && (
-                  <div className="detail-section">
-                    <span className="label">Error:</span>
-                    <div className="detail-error">{detail.sync_error}</div>
-                  </div>
-                )}
-                {detail.data && (
-                  <div className="detail-section">
-                    <span className="label">Data:</span>
-                    <pre className="detail-data">{(() => { try { return JSON.stringify(JSON.parse(detail.data), null, 2); } catch { return detail.data; } })()}</pre>
-                  </div>
-                )}
+            )}
+            {detail.data && (
+              <div className="detail-section">
+                <span className="label">Data:</span>
+                <pre className="detail-data">{(() => { try { return JSON.stringify(JSON.parse(detail.data), null, 2); } catch { return detail.data; } })()}</pre>
               </div>
-              <div className="modal-footer">
-                <button className="btn-clear" onClick={() => setDetail(null)}>Cerrar</button>
-              </div>
-            </div>
-          </div>
+            )}
+          </Modal>
         )}
 
         {/* Edit modal */}
         {editRecord && (
-          <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) setEditRecord(null); }}>
-            <div className="modal">
-              <div className="modal-header">
-                <h3>Editar Registro</h3>
-                <button className="btn-clear" onClick={() => setEditRecord(null)}>X</button>
+          <Modal title="Editar Registro" onClose={() => setEditRecord(null)}
+            footer={<><button className="btn-clear" onClick={() => setEditRecord(null)}>Cancelar</button><button className="btn-save" onClick={handleSaveEdit}>Guardar Cambios</button></>}>
+            <p style={{ color: '#94a3b8', fontSize: 13, marginBottom: 12 }}>ID: {editRecord.id} | {getRecordLabel(editRecord)}</p>
+            {Object.keys(editFields).map(field => (
+              <div className="form-group" key={field} style={{ marginBottom: 10 }}>
+                <label style={{ fontSize: 12, color: '#cbd5e1', marginBottom: 2, display: 'block' }}>{field}</label>
+                <input
+                  value={editFields[field]}
+                  onChange={e => setEditFields({ ...editFields, [field]: e.target.value })}
+                  style={{ width: '100%', padding: '6px 10px', background: '#0f172a', border: '1px solid #334155', borderRadius: 4, color: '#e2e8f0', fontSize: 13 }}
+                />
               </div>
-              <div className="modal-body">
-                <p style={{ color: '#94a3b8', fontSize: 13, marginBottom: 12 }}>ID: {editRecord.id} | {getRecordLabel(editRecord)}</p>
-                {Object.keys(editFields).map(field => (
-                  <div className="form-group" key={field} style={{ marginBottom: 10 }}>
-                    <label style={{ fontSize: 12, color: '#cbd5e1', marginBottom: 2, display: 'block' }}>{field}</label>
-                    <input
-                      value={editFields[field]}
-                      onChange={e => setEditFields({ ...editFields, [field]: e.target.value })}
-                      style={{ width: '100%', padding: '6px 10px', background: '#0f172a', border: '1px solid #334155', borderRadius: 4, color: '#e2e8f0', fontSize: 13 }}
-                    />
-                  </div>
-                ))}
-              </div>
-              <div className="modal-footer">
-                <button className="btn-clear" onClick={() => setEditRecord(null)}>Cancelar</button>
-                <button className="btn-save" onClick={handleSaveEdit}>Guardar Cambios</button>
-              </div>
-            </div>
-          </div>
+            ))}
+          </Modal>
         )}
 
         {/* Delete confirmation modal */}
         {deleteConfirm && (
-          <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) setDeleteConfirm(null); }}>
-            <div className="modal">
-              <div className="modal-header">
-                <h3>Confirmar Eliminacion</h3>
-                <button className="btn-clear" onClick={() => setDeleteConfirm(null)}>X</button>
-              </div>
-              <div className="modal-body">
-                <p style={{ color: '#f87171', marginBottom: 8 }}>Esta accion no se puede deshacer.</p>
-                <p style={{ color: '#e2e8f0' }}>Eliminar el registro <strong>{getRecordLabel(deleteConfirm)}</strong> de <strong>{table}</strong>?</p>
-              </div>
-              <div className="modal-footer">
-                <button className="btn-clear" onClick={() => setDeleteConfirm(null)}>Cancelar</button>
-                <button className="btn-danger" onClick={handleDelete}>Eliminar</button>
-              </div>
-            </div>
-          </div>
+          <Modal title="Confirmar Eliminacion" onClose={() => setDeleteConfirm(null)}
+            footer={<><button className="btn-clear" onClick={() => setDeleteConfirm(null)}>Cancelar</button><button className="btn-danger" onClick={handleDelete}>Eliminar</button></>}>
+            <p style={{ color: '#f87171', marginBottom: 8 }}>Esta accion no se puede deshacer.</p>
+            <p style={{ color: '#e2e8f0' }}>Eliminar el registro <strong>{getRecordLabel(deleteConfirm)}</strong> de <strong>{table}</strong>?</p>
+          </Modal>
         )}
       </div>
     </>

@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { api } from '../api';
+import EmptyState from '../components/EmptyState';
+import PageHeader from '../components/PageHeader';
 
 const QUICK_QUERIES = [
   { label: 'Historial envios', query: 'SELECT * FROM sync_history ORDER BY id DESC' },
@@ -528,7 +530,7 @@ export default function Explorer() {
 
   return (
     <>
-      <div className="topbar"><h2>SQL Explorer</h2></div>
+      <PageHeader title="SQL Explorer" />
       <div className="content">
         <div className="explorer-toolbar">
           <div className="explorer-table-select">
@@ -729,9 +731,7 @@ export default function Explorer() {
         )}
 
         {!loading && columns.length === 0 && !error && (
-          <div className="empty-state">
-            <h3>SQL Explorer</h3>
-            <p>Selecciona una tabla o escribe una consulta SELECT. Solo lectura.</p>
+          <EmptyState title="SQL Explorer" message="Selecciona una tabla o escribe una consulta SELECT. Solo lectura.">
             <div className="explorer-tips">
               <p><strong>Tips:</strong></p>
               <p>Autocomplete: escribe y aparecen sugerencias (Tab/Enter para aceptar)</p>
@@ -740,7 +740,7 @@ export default function Explorer() {
               <p>Click en columna del schema = ver valores unicos</p>
               <p>Ctrl+Enter = ejecutar consulta</p>
             </div>
-          </div>
+          </EmptyState>
         )}
       </div>
     </>

@@ -94,13 +94,15 @@ func parseTerceroAmpliadoRecord(rec []byte, extfh bool) TerceroAmpliado {
 //	[5:13]    nit (8 digits, zero-padded left)
 //	[16:18]   tipo_persona (NO=natural, NP=juridica)
 //	[18:78]   nombre (60 chars)
-//	[96:156]  representante_legal (60 chars)
+//	[94:154]  representante_legal (60 chars)
 //	[194:250] direccion (56 chars)
 //	[323:393] email (~70 chars)
 func parseTerceroAmpliadoEXTFH(rec []byte, hash [32]byte) TerceroAmpliado {
 	empresa := strings.TrimSpace(isam.ExtractField(rec, 0, 3))
 
-	nitRaw := strings.TrimSpace(isam.ExtractField(rec, 5, 8))
+	// NIT field: bytes 3-12 (10 chars, zero-padded left).
+	// Previously used @5(8) which truncated 9+ digit NITs (e.g. "800777999" → "777999").
+	nitRaw := strings.TrimSpace(isam.ExtractField(rec, 3, 10))
 	nit := strings.TrimLeft(nitRaw, "0")
 	if nit == "" {
 		return TerceroAmpliado{}
@@ -114,8 +116,8 @@ func parseTerceroAmpliadoEXTFH(rec []byte, hash [32]byte) TerceroAmpliado {
 	}
 
 	repLegal := ""
-	if len(rec) >= 156 {
-		repLegal = strings.TrimSpace(isam.ExtractField(rec, 96, 60))
+	if len(rec) >= 154 {
+		repLegal = strings.TrimSpace(isam.ExtractField(rec, 94, 60))
 		// If same as nombre, it's not a separate representative
 		if repLegal == nombre {
 			repLegal = ""
