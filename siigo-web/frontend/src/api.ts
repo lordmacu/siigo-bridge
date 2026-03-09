@@ -78,6 +78,16 @@ export const api = {
   getSaldosInventario: (page: number, search: string) => get(`/saldos-inventario?page=${page}&search=${encodeURIComponent(search)}`),
   getActivosFijosDetalle: (page: number, search: string) => get(`/activos-fijos-detalle?page=${page}&search=${encodeURIComponent(search)}`),
   getAuditTrailTerceros: (page: number, search: string) => get(`/audit-trail-terceros?page=${page}&search=${encodeURIComponent(search)}`),
+  getTransaccionesDetalle: (page: number, search: string) => get(`/transacciones-detalle?page=${page}&search=${encodeURIComponent(search)}`),
+  getPeriodosContables: (page: number, search: string) => get(`/periodos-contables?page=${page}&search=${encodeURIComponent(search)}`),
+  getCondicionesPago: (page: number, search: string) => get(`/condiciones-pago?page=${page}&search=${encodeURIComponent(search)}`),
+  getLibrosAuxiliares: (page: number, search: string) => get(`/libros-auxiliares?page=${page}&search=${encodeURIComponent(search)}`),
+  getCodigosDane: (page: number, search: string) => get(`/codigos-dane?page=${page}&search=${encodeURIComponent(search)}`),
+  getActividadesIca: (page: number, search: string) => get(`/actividades-ica?page=${page}&search=${encodeURIComponent(search)}`),
+  getConceptosPila: (page: number, search: string) => get(`/conceptos-pila?page=${page}&search=${encodeURIComponent(search)}`),
+  getClasificacionCuentas: (page: number, search: string) => get(`/clasificacion-cuentas?page=${page}&search=${encodeURIComponent(search)}`),
+  getHistorial: (page: number, search: string) => get(`/historial?page=${page}&search=${encodeURIComponent(search)}`),
+  getMaestros: (page: number, search: string) => get(`/maestros?page=${page}&search=${encodeURIComponent(search)}`),
   getSyncHistory: (table: string, page: number, search?: string, dateFrom?: string, dateTo?: string, status?: string) => {
     const params = new URLSearchParams({ table, page: String(page) });
     if (search) params.set('search', search);

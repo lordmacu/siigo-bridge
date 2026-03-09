@@ -390,6 +390,14 @@ var apiPathToModule = map[string]string{
 	"/api/saldos-inventario":       "saldos_inventario",
 	"/api/activos-fijos-detalle":   "activos_fijos_detalle",
 	"/api/audit-trail-terceros":    "audit_trail_terceros",
+	"/api/transacciones-detalle":    "transacciones_detalle",
+	"/api/periodos-contables":       "periodos_contables",
+	"/api/condiciones-pago":         "condiciones_pago",
+	"/api/libros-auxiliares":        "libros_auxiliares",
+	"/api/codigos-dane":             "codigos_dane",
+	"/api/actividades-ica":          "actividades_ica",
+	"/api/conceptos-pila":           "conceptos_pila",
+	"/api/clasificacion-cuentas":    "clasificacion_cuentas",
 	"/api/historial":               "historial",
 	"/api/maestros":                "maestros",
 	"/api/field-mappings":          "field-mappings",
@@ -583,8 +591,16 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/saldos-inventario", s.permMiddleware(s.handleSaldosInventario))
 	mux.HandleFunc("/api/activos-fijos-detalle", s.permMiddleware(s.handleActivosFijosDetalle))
 	mux.HandleFunc("/api/audit-trail-terceros", s.permMiddleware(s.handleAuditTrailTerceros))
-	mux.HandleFunc("/api/historial", s.authMiddleware(s.handleGenericTable("historial")))
-	mux.HandleFunc("/api/maestros", s.authMiddleware(s.handleGenericTable("maestros")))
+	mux.HandleFunc("/api/transacciones-detalle", s.permMiddleware(s.handleGenericTable("transacciones_detalle")))
+	mux.HandleFunc("/api/periodos-contables", s.permMiddleware(s.handleGenericTable("periodos_contables")))
+	mux.HandleFunc("/api/condiciones-pago", s.permMiddleware(s.handleGenericTable("condiciones_pago")))
+	mux.HandleFunc("/api/libros-auxiliares", s.permMiddleware(s.handleGenericTable("libros_auxiliares")))
+	mux.HandleFunc("/api/codigos-dane", s.permMiddleware(s.handleGenericTable("codigos_dane")))
+	mux.HandleFunc("/api/actividades-ica", s.permMiddleware(s.handleGenericTable("actividades_ica")))
+	mux.HandleFunc("/api/conceptos-pila", s.permMiddleware(s.handleGenericTable("conceptos_pila")))
+	mux.HandleFunc("/api/clasificacion-cuentas", s.permMiddleware(s.handleGenericTable("clasificacion_cuentas")))
+	mux.HandleFunc("/api/historial", s.permMiddleware(s.handleGenericTable("historial")))
+	mux.HandleFunc("/api/maestros", s.permMiddleware(s.handleGenericTable("maestros")))
 	mux.HandleFunc("/api/sync-history", s.authMiddleware(s.handleSyncHistory))
 	mux.HandleFunc("/api/logs", s.permMiddleware(s.handleLogs))
 	mux.HandleFunc("/api/sync-now", s.authMiddleware(s.handleSyncNow))
