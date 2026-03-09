@@ -9,21 +9,43 @@
 # Build artifacts
 SiigoExplorer/bin/
 SiigoExplorer/obj/
-siigo-app/frontend/node_modules/
+
+# Node modules (all projects)
+**/node_modules/
+
+# Frontend build output
+**/frontend/dist/
+
+# Go caches
+**/.gocache/
+**/.gomodcache/
+
+# Temp directories
+**/.tmp/
+**/tmp/
 
 # Config with credentials
 siigo-sync/config.json
 siigo-app/config.json
 siigo-web/config.json
+isam-admin/config.json
 
-# Environment variables (secrets)
+# Secrets and keys
 .env
+ghakey.txt
+*.key
+*.pem
 
 # Logs and temp
 *.log
 sync_state.json
 sync_output.log
 z17_dump.seq
+
+# Analysis/comparison output (generated data)
+siigo-sync/compare_*.json
+siigo-sync/compare_*.csv
+siigo-sync/compare_readers_baseline.txt
 
 # IDE
 .claude/
