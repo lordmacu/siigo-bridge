@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/sha256"
 	"database/sql"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
@@ -27,6 +28,25 @@ const (
 	defaultGroupSampleCap   = 1200
 	defaultMaxAnalyzedBytes = 4096
 	defaultMaxFields        = 180
+	defaultReadMode         = "auto"
+)
+
+const (
+	readModeAuto     = "auto"
+	readModeBinary   = "binary"
+	readModePhysical = "physical"
+)
+
+const (
+	recTypeNull             = 0
+	recTypeSystem           = 1
+	recTypePointer          = 2
+	recTypeDeleted          = 3
+	recTypeNormal           = 4
+	recTypeReduced          = 5
+	recTypePointerRefer     = 6
+	recTypeReferenced       = 7
+	recTypeReducedReference = 8
 )
 
 type byteClass int
@@ -64,16 +84,18 @@ type FieldDef struct {
 }
 
 type FileReport struct {
-	FileName       string     `json:"file_name"`
-	TableName      string     `json:"table_name"`
-	GroupKey       string     `json:"group_key"`
-	RecordSize     int        `json:"record_size"`
-	TotalRecords   int        `json:"total_records"`
-	UsableRecords  int        `json:"usable_records"`
-	ExportedRows   int        `json:"exported_rows"`
-	AnalyzedFields int        `json:"analyzed_fields"`
-	ExportedFields int        `json:"exported_fields"`
-	Fields         []FieldDef `json:"fields"`
+	FileName       string              `json:"file_name"`
+	TableName      string              `json:"table_name"`
+	GroupKey       string              `json:"group_key"`
+	ReadMode       string              `json:"read_mode"`
+	RecordSize     int                 `json:"record_size"`
+	TotalRecords   int                 `json:"total_records"`
+	UsableRecords  int                 `json:"usable_records"`
+	ExportedRows   int                 `json:"exported_rows"`
+	AnalyzedFields int                 `json:"analyzed_fields"`
+	ExportedFields int                 `json:"exported_fields"`
+	Physical       *PhysicalInfoReport `json:"physical,omitempty"`
+	Fields         []FieldDef          `json:"fields"`
 }
 
 type RunReport struct {
@@ -89,15 +111,66 @@ type fileMeta struct {
 	Name         string
 	Path         string
 	GroupKey     string
+	ReadMode     string
 	RecordSize   int
 	TotalRecords int
 	Usable       int
+	Physical     *physicalInfo
 }
 
 type groupBucket struct {
 	Key     string
 	RecSize int
 	Samples [][]byte
+}
+
+type loadOptions struct {
+	mode              string
+	includeDeleted    bool
+	includeReduced    bool
+	includeSystem     bool
+	includePointer    bool
+	recoveryScan      bool
+	maxRecoveryShifts int
+}
+
+type loadResult struct {
+	ModeUsed   string
+	RecordSize int
+	Records    []isam.Record
+	Physical   *physicalInfo
+}
+
+type physicalInfo struct {
+	Format        string
+	LongRecords   bool
+	Organization  int
+	RecordingMode int
+	IndexType     int
+	Alignment     int
+	HeaderSize    int
+	RecordHdrSize int
+	ParsedBlocks  int
+	Included      int
+	Recoveries    int
+	Skipped       int
+	TypeCounts    map[int]int
+}
+
+type PhysicalInfoReport struct {
+	Format        string         `json:"format"`
+	LongRecords   bool           `json:"long_records"`
+	Organization  int            `json:"organization"`
+	RecordingMode int            `json:"recording_mode"`
+	IndexType     int            `json:"index_type"`
+	Alignment     int            `json:"alignment"`
+	HeaderSize    int            `json:"header_size"`
+	RecordHdrSize int            `json:"record_header_size"`
+	ParsedBlocks  int            `json:"parsed_blocks"`
+	Included      int            `json:"included_blocks"`
+	Recoveries    int            `json:"recoveries"`
+	Skipped       int            `json:"skipped_blocks"`
+	TypeCounts    map[string]int `json:"type_counts"`
 }
 
 func main() {
@@ -109,6 +182,12 @@ func main() {
 		maxFiles      int
 		samplePerFile int
 		maxFields     int
+		readMode      string
+		incDeleted    bool
+		incReduced    bool
+		incSystem     bool
+		incPointer    bool
+		noRecovery    bool
 	)
 
 	flag.StringVar(&dataPath, "data", defaultDataPath, "Directorio de archivos ISAM")
@@ -118,6 +197,12 @@ func main() {
 	flag.IntVar(&maxFiles, "max-files", 0, "Maximo de archivos a procesar (0 = todos)")
 	flag.IntVar(&samplePerFile, "sample", defaultSamplePerFile, "Muestras maximas por archivo para inferencia")
 	flag.IntVar(&maxFields, "max-fields", defaultMaxFields, "Maximo de campos inferidos por esquema")
+	flag.StringVar(&readMode, "mode", defaultReadMode, "Modo de lectura: auto|binary|physical")
+	flag.BoolVar(&incDeleted, "physical-include-deleted", false, "Incluir bloques deleted (tipo 3) en modo physical")
+	flag.BoolVar(&incReduced, "physical-include-reduced", false, "Incluir bloques reduced/reduced_referenced (tipos 5/8) en modo physical")
+	flag.BoolVar(&incSystem, "physical-include-system", false, "Incluir bloques system (tipo 1) en modo physical")
+	flag.BoolVar(&incPointer, "physical-include-pointer", false, "Incluir bloques pointer/pointer_referenced (tipos 2/6) en modo physical")
+	flag.BoolVar(&noRecovery, "physical-no-recovery", false, "Desactivar re-sincronizacion por desplazamiento en modo physical")
 	flag.Parse()
 
 	if samplePerFile < 50 {
@@ -125,6 +210,20 @@ func main() {
 	}
 	if maxFields < 20 {
 		maxFields = 20
+	}
+	readMode = strings.ToLower(strings.TrimSpace(readMode))
+	if readMode != readModeAuto && readMode != readModeBinary && readMode != readModePhysical {
+		log.Fatalf("modo invalido %q (usa auto|binary|physical)", readMode)
+	}
+
+	loadCfg := loadOptions{
+		mode:              readMode,
+		includeDeleted:    incDeleted,
+		includeReduced:    incReduced,
+		includeSystem:     incSystem,
+		includePointer:    incPointer,
+		recoveryScan:      !noRecovery,
+		maxRecoveryShifts: 16,
 	}
 
 	patterns := parsePatterns(include)
@@ -143,42 +242,44 @@ func main() {
 
 	for idx, p := range files {
 		name := filepath.Base(p)
-		info, err := isam.ReadFile(p) // binary-only: evita dependencia de licencia EXTFH
+		loaded, err := loadRecords(p, loadCfg)
 		if err != nil {
 			log.Printf("[v2] [%d/%d] %s: skip (%v)", idx+1, len(files), name, err)
 			continue
 		}
-		if len(info.Records) == 0 || info.RecordSize <= 0 {
+		if len(loaded.Records) == 0 || loaded.RecordSize <= 0 {
 			log.Printf("[v2] [%d/%d] %s: skip (sin registros)", idx+1, len(files), name)
 			continue
 		}
 
-		usable := filterUsableRecords(info.Records, info.RecordSize)
+		usable := filterUsableRecords(loaded.Records, loaded.RecordSize)
 		if len(usable) == 0 {
 			log.Printf("[v2] [%d/%d] %s: skip (registros no usables)", idx+1, len(files), name)
 			continue
 		}
 
-		groupKey := schemaGroupKey(name, info.RecordSize)
+		groupKey := schemaGroupKey(name, loaded.RecordSize)
 		meta := fileMeta{
 			Name:         name,
 			Path:         p,
 			GroupKey:     groupKey,
-			RecordSize:   info.RecordSize,
-			TotalRecords: len(info.Records),
+			ReadMode:     loaded.ModeUsed,
+			RecordSize:   loaded.RecordSize,
+			TotalRecords: len(loaded.Records),
 			Usable:       len(usable),
+			Physical:     loaded.Physical,
 		}
 		metas = append(metas, meta)
 
 		b := groups[groupKey]
 		if b == nil {
-			b = &groupBucket{Key: groupKey, RecSize: info.RecordSize}
+			b = &groupBucket{Key: groupKey, RecSize: loaded.RecordSize}
 			groups[groupKey] = b
 		}
 		addSampleRecords(&b.Samples, usable, samplePerFile, defaultGroupSampleCap)
 
-		log.Printf("[v2] [%d/%d] %s: recSize=%d usable=%d/%d group=%s",
-			idx+1, len(files), name, info.RecordSize, len(usable), len(info.Records), groupKey)
+		log.Printf("[v2] [%d/%d] %s: mode=%s recSize=%d usable=%d/%d group=%s",
+			idx+1, len(files), name, loaded.ModeUsed, loaded.RecordSize, len(usable), len(loaded.Records), groupKey)
 	}
 
 	if len(metas) == 0 {
@@ -205,12 +306,12 @@ func main() {
 		fields := cloneFields(groupSchemas[meta.GroupKey])
 		exportedFields := chooseExportFields(fields)
 
-		info, err := isam.ReadFile(meta.Path)
+		loaded, err := loadRecords(meta.Path, loadCfg)
 		if err != nil {
 			log.Printf("[v2] [%d/%d] %s: error releyendo (%v)", idx+1, len(metas), meta.Name, err)
 			continue
 		}
-		usable := filterUsableRecords(info.Records, info.RecordSize)
+		usable := filterUsableRecords(loaded.Records, loaded.RecordSize)
 		tableName := sqliteTableName(meta.Name)
 		inserted, err := exportFileToSQLite(db, tableName, usable, exportedFields)
 		if err != nil {
@@ -226,12 +327,14 @@ func main() {
 			FileName:       meta.Name,
 			TableName:      tableName,
 			GroupKey:       meta.GroupKey,
+			ReadMode:       loaded.ModeUsed,
 			RecordSize:     meta.RecordSize,
 			TotalRecords:   meta.TotalRecords,
 			UsableRecords:  len(usable),
 			ExportedRows:   inserted,
 			AnalyzedFields: len(fields),
 			ExportedFields: len(exportedFields),
+			Physical:       toPhysicalInfoReport(loaded.Physical),
 			Fields:         fields,
 		})
 
@@ -306,6 +409,478 @@ func listIsamFiles(dataPath string, patterns []string, maxFiles int) ([]string, 
 		out = out[:maxFiles]
 	}
 	return out, nil
+}
+
+func loadRecords(path string, opts loadOptions) (*loadResult, error) {
+	switch opts.mode {
+	case readModeBinary:
+		return loadBinary(path)
+	case readModePhysical:
+		return loadPhysical(path, opts)
+	case readModeAuto:
+		p, err := loadPhysical(path, opts)
+		if err == nil && len(p.Records) > 0 {
+			return p, nil
+		}
+		b, berr := loadBinary(path)
+		if berr == nil {
+			return b, nil
+		}
+		if err != nil {
+			return nil, fmt.Errorf("physical: %v | binary: %v", err, berr)
+		}
+		return nil, berr
+	default:
+		return nil, fmt.Errorf("modo no soportado: %s", opts.mode)
+	}
+}
+
+func loadBinary(path string) (*loadResult, error) {
+	info, err := isam.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return &loadResult{
+		ModeUsed:   readModeBinary,
+		RecordSize: info.RecordSize,
+		Records:    info.Records,
+	}, nil
+}
+
+func loadPhysical(path string, opts loadOptions) (*loadResult, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("cannot open %s: %w", path, err)
+	}
+	if len(data) < 128 {
+		return nil, fmt.Errorf("file too small for physical parse (%d bytes)", len(data))
+	}
+
+	if hasMFDataSignature(data) {
+		return loadPhysicalMF(data, opts)
+	}
+	if hasIndexedHeaderSignature(data) {
+		return loadPhysicalIndexed(data, opts)
+	}
+	return nil, fmt.Errorf("firma de cabecera no reconocida para modo physical")
+}
+
+func hasMFDataSignature(data []byte) bool {
+	if len(data) < 4 {
+		return false
+	}
+	if data[0] == 0x30 && data[1] == 0x7E && data[2] == 0x00 && data[3] == 0x00 {
+		return true
+	}
+	if data[0] == 0x30 && data[1] == 0x00 && data[2] == 0x00 && data[3] == 0x7C {
+		return true
+	}
+	return false
+}
+
+func hasIndexedHeaderSignature(data []byte) bool {
+	if len(data) < 2 {
+		return false
+	}
+	magic := binary.BigEndian.Uint16(data[:2])
+	if magic == 0x33FE {
+		return true
+	}
+	return (magic & 0xFF00) == 0x3000
+}
+
+func loadPhysicalMF(data []byte, opts loadOptions) (*loadResult, error) {
+
+	info, err := parsePhysicalHeader(data[:128])
+	if err != nil {
+		return nil, err
+	}
+
+	includeTypes := map[int]bool{
+		recTypeNormal:     true,
+		recTypeReferenced: true,
+	}
+	if opts.includeDeleted {
+		includeTypes[recTypeDeleted] = true
+	}
+	if opts.includeReduced {
+		includeTypes[recTypeReduced] = true
+		includeTypes[recTypeReducedReference] = true
+	}
+	if opts.includeSystem {
+		includeTypes[recTypeSystem] = true
+	}
+	if opts.includePointer {
+		includeTypes[recTypePointer] = true
+		includeTypes[recTypePointerRefer] = true
+	}
+
+	pos := info.HeaderSize
+	records := make([]isam.Record, 0, 1024)
+	typeCounts := map[int]int{}
+	parsed := 0
+	recoveries := 0
+	skipped := 0
+	consecutiveInvalid := 0
+
+	for pos+info.RecordHdrSize <= len(data) {
+		recType, dataLen, ok := decodePhysicalRecordHeader(data[pos:], info.RecordHdrSize, info.LongRecords)
+		if !ok || recType < 0 || recType > recTypeReducedReference {
+			if opts.recoveryScan && opts.maxRecoveryShifts > 0 && consecutiveInvalid < opts.maxRecoveryShifts {
+				pos++
+				recoveries++
+				consecutiveInvalid++
+				continue
+			}
+			break
+		}
+
+		payloadStart := pos + info.RecordHdrSize
+		payloadEnd := payloadStart + dataLen
+		if dataLen < 0 || payloadEnd > len(data) {
+			if opts.recoveryScan && opts.maxRecoveryShifts > 0 && consecutiveInvalid < opts.maxRecoveryShifts {
+				pos++
+				recoveries++
+				consecutiveInvalid++
+				continue
+			}
+			break
+		}
+		consecutiveInvalid = 0
+
+		typeCounts[recType]++
+		parsed++
+
+		if includeTypes[recType] {
+			recData := make([]byte, dataLen)
+			copy(recData, data[payloadStart:payloadEnd])
+			records = append(records, isam.Record{
+				Data:   recData,
+				Offset: pos,
+			})
+		} else {
+			skipped++
+		}
+
+		pos = payloadEnd
+		if info.Alignment > 1 {
+			pad := (info.Alignment - ((dataLen + info.RecordHdrSize) % info.Alignment)) % info.Alignment
+			pos += pad
+		}
+	}
+
+	if len(records) == 0 {
+		return nil, fmt.Errorf("physical parser no encontró registros de datos incluidos")
+	}
+
+	recSize := info.MaxRecordLength
+	if recSize <= 0 {
+		recSize = maxObservedLength(records)
+	}
+	if recSize <= 0 {
+		recSize = maxObservedLength(records)
+	}
+
+	return &loadResult{
+		ModeUsed:   readModePhysical,
+		RecordSize: recSize,
+		Records:    records,
+		Physical: &physicalInfo{
+			Format:        "mf_stream",
+			LongRecords:   info.LongRecords,
+			Organization:  info.Organization,
+			RecordingMode: info.RecordingMode,
+			IndexType:     info.IndexType,
+			Alignment:     info.Alignment,
+			HeaderSize:    info.HeaderSize,
+			RecordHdrSize: info.RecordHdrSize,
+			ParsedBlocks:  parsed,
+			Included:      len(records),
+			Recoveries:    recoveries,
+			Skipped:       skipped,
+			TypeCounts:    typeCounts,
+		},
+	}, nil
+}
+
+func loadPhysicalIndexed(data []byte, opts loadOptions) (*loadResult, error) {
+	if len(data) < 0x44 {
+		return nil, fmt.Errorf("header indexado incompleto")
+	}
+
+	recSize := int(binary.BigEndian.Uint16(data[0x38:0x3A]))
+	if recSize <= 0 || recSize > 65535 {
+		return nil, fmt.Errorf("record_size invalido en header indexado: %d", recSize)
+	}
+	if recSize < 8 {
+		return nil, fmt.Errorf("record_size demasiado pequeno para parseo indexado: %d", recSize)
+	}
+	organization := int(binary.BigEndian.Uint16(data[0x26:0x28]))
+	indexType := int(data[0x2B])
+	start := 0x800
+	if len(data) <= start+2 {
+		return nil, fmt.Errorf("archivo indexado sin zona de datos (len=%d)", len(data))
+	}
+
+	validStatus := map[int]bool{0: true, 1: true, 2: true, 4: true, 6: true, 8: true, 10: true, 12: true, 14: true}
+	pos := start
+	records := make([]isam.Record, 0, 1024)
+	typeCounts := map[int]int{}
+	parsed := 0
+	recoveries := 0
+	skipped := 0
+
+	for pos+2 <= len(data) {
+		b0 := data[pos]
+		b1 := data[pos+1]
+		status := int((b0 & 0xF0) >> 4)
+		length := int((int(b0&0x0F) << 8) | int(b1))
+
+		if !validStatus[status] || length <= 0 {
+			pos++
+			recoveries++
+			continue
+		}
+		if !opts.includeReduced && length != recSize {
+			pos++
+			recoveries++
+			continue
+		}
+		if opts.includeReduced && length > recSize {
+			pos++
+			recoveries++
+			continue
+		}
+
+		payloadStart := pos + 2
+		payloadEnd := payloadStart + length
+		if payloadEnd > len(data) {
+			pos++
+			recoveries++
+			continue
+		}
+
+		typeCounts[status]++
+		parsed++
+
+		include := true
+		if status == 1 && !opts.includeDeleted {
+			include = false
+		}
+		if status == 0 && !opts.includeSystem && !opts.includePointer {
+			include = false
+		}
+
+		if include {
+			recData := make([]byte, length)
+			copy(recData, data[payloadStart:payloadEnd])
+			records = append(records, isam.Record{
+				Data:   recData,
+				Offset: pos,
+			})
+		} else {
+			skipped++
+		}
+
+		pos = payloadEnd
+	}
+
+	if len(records) == 0 {
+		return nil, fmt.Errorf("physical/indexed no produjo registros incluidos")
+	}
+
+	return &loadResult{
+		ModeUsed:   readModePhysical,
+		RecordSize: recSize,
+		Records:    records,
+		Physical: &physicalInfo{
+			Format:        "indexed_marker",
+			LongRecords:   false,
+			Organization:  organization,
+			RecordingMode: 0,
+			IndexType:     indexType,
+			Alignment:     0,
+			HeaderSize:    start,
+			RecordHdrSize: 2,
+			ParsedBlocks:  parsed,
+			Included:      len(records),
+			Recoveries:    recoveries,
+			Skipped:       skipped,
+			TypeCounts:    typeCounts,
+		},
+	}, nil
+}
+
+type physicalHeader struct {
+	LongRecords     bool
+	Organization    int
+	RecordingMode   int
+	IndexType       int
+	MaxRecordLength int
+	MinRecordLength int
+	Alignment       int
+	HeaderSize      int
+	RecordHdrSize   int
+}
+
+func parsePhysicalHeader(hdr []byte) (*physicalHeader, error) {
+	if len(hdr) < 128 {
+		return nil, fmt.Errorf("header menor a 128 bytes")
+	}
+
+	ph := &physicalHeader{
+		HeaderSize: 128,
+	}
+
+	switch {
+	case hdr[0] == 0x30 && hdr[1] == 0x7E && hdr[2] == 0x00 && hdr[3] == 0x00:
+		ph.LongRecords = false
+	case hdr[0] == 0x30 && hdr[1] == 0x00 && hdr[2] == 0x00 && hdr[3] == 0x7C:
+		ph.LongRecords = true
+	default:
+		return nil, fmt.Errorf("header no coincide con firma esperada de indexed data file")
+	}
+
+	ph.Organization = int(hdr[39])
+	ph.IndexType = int(hdr[43])
+	ph.RecordingMode = int(hdr[48])
+	ph.MaxRecordLength = int(binary.BigEndian.Uint32(hdr[54:58]))
+	ph.MinRecordLength = int(binary.BigEndian.Uint32(hdr[58:62]))
+	ph.RecordHdrSize = 2
+	if ph.LongRecords {
+		ph.RecordHdrSize = 4
+	}
+
+	switch ph.Organization {
+	case 1:
+		if ph.RecordingMode == 1 {
+			ph.Alignment = 4
+		}
+	case 2:
+		switch ph.IndexType {
+		case 1, 2:
+			ph.Alignment = 1
+		case 3, 4:
+			ph.Alignment = 4
+		case 8:
+			ph.Alignment = 8
+		default:
+			ph.Alignment = 4
+		}
+	}
+
+	return ph, nil
+}
+
+func decodePhysicalRecordHeader(data []byte, hdrSize int, longRecords bool) (recType int, dataLen int, ok bool) {
+	if hdrSize == 4 {
+		if len(data) < 4 {
+			return 0, 0, false
+		}
+		h := binary.BigEndian.Uint32(data[:4])
+		recType = int((h >> 28) & 0x0F)
+		dataLen = int(h & 0x0FFFFFFF)
+		if dataLen < 0 || dataLen > 1<<24 {
+			return 0, 0, false
+		}
+		return recType, dataLen, true
+	}
+
+	if len(data) < 2 {
+		return 0, 0, false
+	}
+	h := binary.BigEndian.Uint16(data[:2])
+	recType = int((h >> 12) & 0x0F)
+	dataLen = int(h & 0x0FFF)
+	if !longRecords && dataLen > 4095 {
+		return 0, 0, false
+	}
+	return recType, dataLen, true
+}
+
+func maxObservedLength(records []isam.Record) int {
+	maxLen := 0
+	for _, r := range records {
+		if len(r.Data) > maxLen {
+			maxLen = len(r.Data)
+		}
+	}
+	return maxLen
+}
+
+func toPhysicalInfoReport(p *physicalInfo) *PhysicalInfoReport {
+	if p == nil {
+		return nil
+	}
+	counts := map[string]int{}
+	for t, n := range p.TypeCounts {
+		counts[physicalTypeName(p.Format, t)] = n
+	}
+	return &PhysicalInfoReport{
+		Format:        p.Format,
+		LongRecords:   p.LongRecords,
+		Organization:  p.Organization,
+		RecordingMode: p.RecordingMode,
+		IndexType:     p.IndexType,
+		Alignment:     p.Alignment,
+		HeaderSize:    p.HeaderSize,
+		RecordHdrSize: p.RecordHdrSize,
+		ParsedBlocks:  p.ParsedBlocks,
+		Included:      p.Included,
+		Recoveries:    p.Recoveries,
+		Skipped:       p.Skipped,
+		TypeCounts:    counts,
+	}
+}
+
+func physicalTypeName(format string, t int) string {
+	if format == "indexed_marker" {
+		switch t {
+		case 0:
+			return "status_0"
+		case 1:
+			return "status_1_deleted"
+		case 2:
+			return "status_2"
+		case 4:
+			return "status_4_active"
+		case 6:
+			return "status_6"
+		case 8:
+			return "status_8"
+		case 10:
+			return "status_a"
+		case 12:
+			return "status_c"
+		case 14:
+			return "status_e"
+		default:
+			return fmt.Sprintf("status_%X", t)
+		}
+	}
+
+	switch t {
+	case recTypeNull:
+		return "null"
+	case recTypeSystem:
+		return "system"
+	case recTypePointer:
+		return "pointer"
+	case recTypeDeleted:
+		return "deleted"
+	case recTypeNormal:
+		return "normal"
+	case recTypeReduced:
+		return "reduced"
+	case recTypePointerRefer:
+		return "pointer_referenced"
+	case recTypeReferenced:
+		return "referenced"
+	case recTypeReducedReference:
+		return "reduced_referenced"
+	default:
+		return fmt.Sprintf("type_%d", t)
+	}
 }
 
 func looksLikeIsamName(name string) bool {

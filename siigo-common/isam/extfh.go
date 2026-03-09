@@ -1091,16 +1091,12 @@ func ReadIsamFile(path string) ([][]byte, int, error) {
 		return records, f.RecSize, err
 	}
 
-	// Fallback: binary reader
-	info, err := ReadFile(path)
+	// Fallback: spec-based binary reader (v2)
+	records, recSize, err := ReadFileV2All(path)
 	if err != nil {
 		return nil, 0, err
 	}
-	records := make([][]byte, len(info.Records))
-	for i, r := range info.Records {
-		records[i] = r.Data
-	}
-	return records, info.RecordSize, nil
+	return records, recSize, nil
 }
 
 // ReadIsamFileWithMeta reads all records and returns detailed metadata.
@@ -1129,8 +1125,8 @@ func ReadIsamFileWithMeta(path string) ([][]byte, *IsamFileMeta, error) {
 		return records, meta, err
 	}
 
-	// Fallback: binary reader
-	info, err := ReadFile(path)
+	// Fallback: spec-based binary reader (v2)
+	info, v2hdr, err := ReadFileV2(path)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1140,8 +1136,10 @@ func ReadIsamFileWithMeta(path string) ([][]byte, *IsamFileMeta, error) {
 	}
 	meta.RecSize = info.RecordSize
 	meta.RecordCount = len(records)
-	meta.ExpectedRecords = info.Header.ExpectedRecords
-	meta.HasIndex = info.Header.HasIndex
+	if v2hdr != nil {
+		meta.ExpectedRecords = int(v2hdr.MaxRecordLen)
+		meta.HasIndex = v2hdr.Organization == 2
+	}
 	meta.UsedEXTFH = false
 	return records, meta, nil
 }
