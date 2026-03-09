@@ -21,9 +21,9 @@ func main() {
 				break
 			}
 			fmt.Printf("  [%d] key=%s\n", i+1, m.RecordKey)
-			fmt.Printf("      empresa=%s grupo=%s producto=%s\n", m.Empresa, m.Grupo, m.CodigoProducto)
-			fmt.Printf("      tipo=%s comp=%s seq=%s tipoDoc=%s\n", m.TipoComprobante, m.CodigoComp, m.Secuencia, m.TipoDoc)
-			fmt.Printf("      fecha=%s cant=%s valor=%s D/C=%s\n\n", m.Fecha, m.Cantidad, m.Valor, m.TipoMov)
+			fmt.Printf("      empresa=%s grupo=%s producto=%s\n", m.Company, m.Group, m.ProductCode)
+			fmt.Printf("      tipo=%s comp=%s seq=%s tipoDoc=%s\n", m.VoucherType, m.VoucherCode, m.Sequence, m.DocType)
+			fmt.Printf("      fecha=%s cant=%s valor=%s D/C=%s\n\n", m.Date, m.Quantity, m.Amount, m.MovType)
 		}
 	}
 
@@ -40,8 +40,8 @@ func main() {
 				break
 			}
 			fmt.Printf("  [%d] key=%s\n", i+1, s.RecordKey)
-			fmt.Printf("      empresa=%s grupo=%s producto=%s\n", s.Empresa, s.Grupo, s.CodigoProducto)
-			fmt.Printf("      saldoIni=%.2f entradas=%.2f salidas=%.2f saldoFin=%.2f\n\n", s.SaldoInicial, s.Entradas, s.Salidas, s.SaldoFinal)
+			fmt.Printf("      empresa=%s grupo=%s producto=%s\n", s.Company, s.Group, s.ProductCode)
+			fmt.Printf("      saldoIni=%.2f entradas=%.2f salidas=%.2f saldoFin=%.2f\n\n", s.InitBalance, s.Entries, s.Withdrawals, s.FinalBalance)
 		}
 	}
 }

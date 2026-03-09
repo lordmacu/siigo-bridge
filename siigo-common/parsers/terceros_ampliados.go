@@ -11,17 +11,17 @@ import (
 )
 
 // TerceroAmpliado represents an extended third-party record from Z08YYYYA.
-// Complements Z17 with additional data: tipo persona, representante legal,
-// dirección, email.
+// Complements Z17 with additional data: person type, legal representative,
+// address, email.
 type TerceroAmpliado struct {
-	Empresa          string `json:"empresa"`           // company code (3 chars)
-	Nit              string `json:"nit"`               // NIT (8+ chars at offset 5)
-	TipoPersona      string `json:"tipo_persona"`      // NO=natural, NP=juridica
-	Nombre           string `json:"nombre"`            // full name (60 chars)
-	RepresentanteLegal string `json:"representante_legal"` // legal representative name (60 chars)
-	Direccion        string `json:"direccion"`         // address (56 chars)
-	Email            string `json:"email"`             // email (~70 chars at offset ~323)
-	Hash             string `json:"hash"`
+	Company    string `json:"empresa"`           // company code (3 chars)
+	Nit        string `json:"nit"`               // NIT (8+ chars at offset 5)
+	PersonType string `json:"tipo_persona"`      // NO=natural, NP=juridica
+	Name       string `json:"nombre"`            // full name (60 chars)
+	LegalRep   string `json:"representante_legal"` // legal representative name (60 chars)
+	Address    string `json:"direccion"`         // address (56 chars)
+	Email      string `json:"email"`             // email (~70 chars at offset ~323)
+	Hash       string `json:"hash"`
 }
 
 // FindLatestZ08A finds the most recent Z08YYYYA file.
@@ -64,16 +64,16 @@ func ParseTercerosAmpliadosFile(path, year string) ([]TerceroAmpliado, string, e
 	}
 
 	extfh := isam.ExtfhAvailable()
-	var terceros []TerceroAmpliado
+	var thirdParties []TerceroAmpliado
 	for _, rec := range records {
 		t := parseTerceroAmpliadoRecord(rec, extfh)
-		if t.Nit == "" || t.Nombre == "" {
+		if t.Nit == "" || t.Name == "" {
 			continue
 		}
-		terceros = append(terceros, t)
+		thirdParties = append(thirdParties, t)
 	}
 
-	return terceros, year, nil
+	return thirdParties, year, nil
 }
 
 func parseTerceroAmpliadoRecord(rec []byte, extfh bool) TerceroAmpliado {
@@ -98,35 +98,35 @@ func parseTerceroAmpliadoRecord(rec []byte, extfh bool) TerceroAmpliado {
 //	[194:250] direccion (56 chars)
 //	[323:393] email (~70 chars)
 func parseTerceroAmpliadoEXTFH(rec []byte, hash [32]byte) TerceroAmpliado {
-	empresa := strings.TrimSpace(isam.ExtractField(rec, 0, 3))
+	company := strings.TrimSpace(isam.ExtractField(rec, 0, 3))
 
 	// NIT field: bytes 3-12 (10 chars, zero-padded left).
-	// Previously used @5(8) which truncated 9+ digit NITs (e.g. "800777999" → "777999").
+	// Previously used @5(8) which truncated 9+ digit NITs (e.g. "800777999" -> "777999").
 	nitRaw := strings.TrimSpace(isam.ExtractField(rec, 3, 10))
 	nit := strings.TrimLeft(nitRaw, "0")
 	if nit == "" {
 		return TerceroAmpliado{}
 	}
 
-	tipoPersona := strings.TrimSpace(isam.ExtractField(rec, 16, 2))
-	nombre := strings.TrimSpace(isam.ExtractField(rec, 18, 60))
+	personType := strings.TrimSpace(isam.ExtractField(rec, 16, 2))
+	name := strings.TrimSpace(isam.ExtractField(rec, 18, 60))
 
-	if nombre == "" {
+	if name == "" {
 		return TerceroAmpliado{}
 	}
 
-	repLegal := ""
+	legalRep := ""
 	if len(rec) >= 154 {
-		repLegal = strings.TrimSpace(isam.ExtractField(rec, 94, 60))
-		// If same as nombre, it's not a separate representative
-		if repLegal == nombre {
-			repLegal = ""
+		legalRep = strings.TrimSpace(isam.ExtractField(rec, 94, 60))
+		// If same as name, it's not a separate representative
+		if legalRep == name {
+			legalRep = ""
 		}
 	}
 
-	direccion := ""
+	address := ""
 	if len(rec) >= 250 {
-		direccion = strings.TrimSpace(isam.ExtractField(rec, 194, 56))
+		address = strings.TrimSpace(isam.ExtractField(rec, 194, 56))
 	}
 
 	email := ""
@@ -139,24 +139,24 @@ func parseTerceroAmpliadoEXTFH(rec []byte, hash [32]byte) TerceroAmpliado {
 	}
 
 	return TerceroAmpliado{
-		Empresa:            empresa,
-		Nit:                nit,
-		TipoPersona:        tipoPersona,
-		Nombre:             nombre,
-		RepresentanteLegal: repLegal,
-		Direccion:          direccion,
-		Email:              email,
-		Hash:               fmt.Sprintf("%x", hash[:8]),
+		Company:    company,
+		Nit:        nit,
+		PersonType: personType,
+		Name:       name,
+		LegalRep:   legalRep,
+		Address:    address,
+		Email:      email,
+		Hash:       fmt.Sprintf("%x", hash[:8]),
 	}
 }
 
 func parseTerceroAmpliadoHeuristic(rec []byte, hash [32]byte) TerceroAmpliado {
-	nombre := findDescripcion(rec, 18)
-	if nombre == "" {
+	name := findDescripcion(rec, 18)
+	if name == "" {
 		return TerceroAmpliado{}
 	}
 	return TerceroAmpliado{
-		Nombre: nombre,
-		Hash:   fmt.Sprintf("%x", hash[:8]),
+		Name: name,
+		Hash: fmt.Sprintf("%x", hash[:8]),
 	}
 }

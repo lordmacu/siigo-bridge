@@ -75,7 +75,7 @@ func main() {
 		for off := 0; off < len(rec)-8; off++ {
 			s := string(rec[off : off+8])
 			if looksLikeDate(s) {
-				fmt.Printf("  FECHA@%d: %s\n", off, s)
+				fmt.Printf("  DATE@%d: %s\n", off, s)
 			}
 		}
 

@@ -35,45 +35,45 @@ func validateTerceros(dataPath string) {
 		fmt.Printf("  ERROR: %v\n", err)
 		return
 	}
-	fmt.Printf("  Total: %d registros\n", len(all))
+	fmt.Printf("  Total: %d records\n", len(all))
 
 	problems := 0
 	for i, t := range all {
 		issues := []string{}
-		if t.TipoClave == "" {
+		if t.KeyType == "" {
 			issues = append(issues, "tipo_clave vacio")
 		}
-		if t.Empresa == "" {
+		if t.Company == "" {
 			issues = append(issues, "empresa vacia")
 		}
-		if t.Nombre == "" {
+		if t.Name == "" {
 			issues = append(issues, "nombre vacio")
 		}
-		if len(t.FechaCreacion) != 8 {
-			issues = append(issues, fmt.Sprintf("fecha invalida '%s'", t.FechaCreacion))
+		if len(t.CreationDate) != 8 {
+			issues = append(issues, fmt.Sprintf("fecha invalida '%s'", t.CreationDate))
 		} else {
-			y := t.FechaCreacion[:4]
+			y := t.CreationDate[:4]
 			if y < "1990" || y > "2030" {
 				issues = append(issues, fmt.Sprintf("year fuera de rango: %s", y))
 			}
 		}
-		if t.TipoDoc == "" {
+		if t.DocType == "" {
 			issues = append(issues, "tipo_doc vacio")
 		}
 		if len(issues) > 0 {
 			problems++
 			if problems <= 5 {
-				fmt.Printf("  PROBLEMA reg[%d]: %s | nombre='%s' fecha='%s'\n", i, strings.Join(issues, ", "), t.Nombre, t.FechaCreacion)
+				fmt.Printf("  PROBLEMA reg[%d]: %s | nombre='%s' fecha='%s'\n", i, strings.Join(issues, ", "), t.Name, t.CreationDate)
 			}
 		}
 	}
 	if problems == 0 {
-		fmt.Println("  OK: Todos los campos parseados correctamente")
+		fmt.Println("  OK: All campos parsed correctamente")
 	} else {
-		fmt.Printf("  FALLO: %d registros con problemas\n", problems)
+		fmt.Printf("  FAILED: %d records with issues\n", problems)
 	}
 
-	fmt.Println("\n  Muestra (5 registros distribuidos):")
+	fmt.Println("\n  Sample (5 records distributed):")
 	step := len(all) / 5
 	if step < 1 {
 		step = 1
@@ -81,7 +81,7 @@ func validateTerceros(dataPath string) {
 	for i := 0; i < len(all) && i/step < 5; i += step {
 		t := all[i]
 		fmt.Printf("    [%3d] clave:%-1s emp:%-3s tipoDoc:%-2s doc:%-14s fecha:%-8s ctaPref:%-1s | %s\n",
-			i, t.TipoClave, t.Empresa, t.TipoDoc, t.NumeroDoc, t.FechaCreacion, t.TipoCtaPref, t.Nombre)
+			i, t.KeyType, t.Company, t.DocType, t.DocNumber, t.CreationDate, t.PreferredAcctType, t.Name)
 	}
 	fmt.Println()
 }
@@ -97,38 +97,38 @@ func validateInventario(dataPath string) {
 		fmt.Printf("  ERROR: %v\n", err)
 		return
 	}
-	fmt.Printf("  Archivo: Z04%s, Total: %d registros\n", year, len(prods))
+	fmt.Printf("  File: Z04%s, Total: %d records\n", year, len(prods))
 
 	problems := 0
 	emptyNombre, emptyCode, emptyEmp := 0, 0, 0
 	for i, p := range prods {
 		issues := []string{}
-		if p.Nombre == "" {
+		if p.Name == "" {
 			emptyNombre++
 			issues = append(issues, "nombre vacio")
 		}
-		if p.Codigo == "" {
+		if p.Code == "" {
 			emptyCode++
 			issues = append(issues, "codigo vacio")
 		}
-		if p.Empresa == "" {
+		if p.Company == "" {
 			emptyEmp++
 			issues = append(issues, "empresa vacia")
 		}
 		if len(issues) > 0 {
 			problems++
 			if problems <= 3 {
-				fmt.Printf("  PROBLEMA reg[%d]: %s | cod='%s' nombre='%s'\n", i, strings.Join(issues, ", "), p.Codigo, p.Nombre)
+				fmt.Printf("  PROBLEMA reg[%d]: %s | cod='%s' nombre='%s'\n", i, strings.Join(issues, ", "), p.Code, p.Name)
 			}
 		}
 	}
 	if problems == 0 {
-		fmt.Println("  OK: Todos los campos parseados correctamente")
+		fmt.Println("  OK: All campos parsed correctamente")
 	} else {
-		fmt.Printf("  FALLO: %d problemas (nombre=%d, cod=%d, emp=%d)\n", problems, emptyNombre, emptyCode, emptyEmp)
+		fmt.Printf("  FAILED: %d problemas (nombre=%d, cod=%d, emp=%d)\n", problems, emptyNombre, emptyCode, emptyEmp)
 	}
 
-	fmt.Println("\n  Muestra (5 registros distribuidos):")
+	fmt.Println("\n  Sample (5 records distributed):")
 	step := len(prods) / 5
 	if step < 1 {
 		step = 1
@@ -136,7 +136,7 @@ func validateInventario(dataPath string) {
 	for i := 0; i < len(prods) && i/step < 5; i += step {
 		p := prods[i]
 		fmt.Printf("    [%3d] emp:%-5s grupo:%-3s cod:%-8s corto:%-20s ref:%-10s | %s\n",
-			i, p.Empresa, p.Grupo, p.Codigo, p.NombreCorto, p.Referencia, p.Nombre)
+			i, p.Company, p.Group, p.Code, p.ShortName, p.Reference, p.Name)
 	}
 	fmt.Println()
 }
@@ -153,28 +153,28 @@ func validateMovimientos(dataPath string) {
 		fmt.Printf("  ERROR: %v\n", err)
 		return
 	}
-	fmt.Printf("  Total: %d registros\n", len(movs))
+	fmt.Printf("  Total: %d records\n", len(movs))
 
 	emptyTipo, emptyDoc, emptyDesc, emptyNombre, withDesc2 := 0, 0, 0, 0, 0
 	tiposComp := map[string]int{}
 	for _, m := range movs {
-		if m.TipoComprobante == "" {
+		if m.VoucherType == "" {
 			emptyTipo++
 		}
-		if m.NumeroDoc == "" {
+		if m.DocNumber == "" {
 			emptyDoc++
 		}
-		if m.Descripcion == "" && m.Descripcion2 == "" {
+		if m.Description == "" && m.Description2 == "" {
 			emptyDesc++
 		}
-		if m.NombreTercero == "" {
+		if m.ThirdPartyName == "" {
 			emptyNombre++
 		}
-		if m.Descripcion2 != "" {
+		if m.Description2 != "" {
 			withDesc2++
 		}
-		if len(m.TipoComprobante) >= 2 {
-			tiposComp[m.TipoComprobante[:2]]++
+		if len(m.VoucherType) >= 2 {
+			tiposComp[m.VoucherType[:2]]++
 		}
 	}
 	fmt.Printf("  Vacios: tipo=%d, doc=%d, desc=%d, nombre=%d\n", emptyTipo, emptyDoc, emptyDesc, emptyNombre)
@@ -182,18 +182,18 @@ func validateMovimientos(dataPath string) {
 	fmt.Printf("  Tipos: %v\n", tiposComp)
 
 	if emptyTipo <= 30 && emptyDoc == 0 {
-		fmt.Println("  OK: Campos clave parseados correctamente")
+		fmt.Println("  OK: Campos clave parsed correctamente")
 	} else {
-		fmt.Println("  FALLO: Revisar campos vacios")
+		fmt.Println("  FAILED: Revisar campos vacios")
 	}
 
-	fmt.Println("\n  Muestra por tipo de comprobante:")
+	fmt.Println("\n  Sample por tipo de comprobante:")
 	shownTypes := map[string]bool{}
 	for _, m := range movs {
-		if m.TipoComprobante == "" {
+		if m.VoucherType == "" {
 			continue
 		}
-		k := m.TipoComprobante
+		k := m.VoucherType
 		if len(k) >= 2 {
 			k = k[:2]
 		}
@@ -201,15 +201,15 @@ func validateMovimientos(dataPath string) {
 			continue
 		}
 		shownTypes[k] = true
-		desc := m.Descripcion
-		if m.Descripcion2 != "" {
+		desc := m.Description
+		if m.Description2 != "" {
 			if desc != "" {
-				desc += " | " + m.Descripcion2
+				desc += " | " + m.Description2
 			} else {
-				desc = m.Descripcion2
+				desc = m.Description2
 			}
 		}
-		fmt.Printf("    %-6s doc:%-11s nombre:%-30s | %s\n", m.TipoComprobante, m.NumeroDoc, m.NombreTercero, desc)
+		fmt.Printf("    %-6s doc:%-11s nombre:%-30s | %s\n", m.VoucherType, m.DocNumber, m.ThirdPartyName, desc)
 		if len(shownTypes) >= 10 {
 			break
 		}
@@ -228,43 +228,43 @@ func validateCartera(dataPath string, anio string) {
 		fmt.Printf("  ERROR: %v\n", err)
 		return
 	}
-	fmt.Printf("  Total: %d registros\n", len(cart))
+	fmt.Printf("  Total: %d records\n", len(cart))
 
 	emptyTipo, emptyEmp, emptySec, emptyNit, emptyFecha, emptyDC, emptyCuenta := 0, 0, 0, 0, 0, 0, 0
 	badDates := 0
 	tipos := map[string]int{}
 	dc := map[string]int{}
 	for _, c := range cart {
-		if c.TipoRegistro == "" {
+		if c.RecordType == "" {
 			emptyTipo++
 		}
-		if c.Empresa == "" {
+		if c.Company == "" {
 			emptyEmp++
 		}
-		if c.Secuencia == "" {
+		if c.Sequence == "" {
 			emptySec++
 		}
-		if c.NitTercero == "" {
+		if c.ThirdPartyNit == "" {
 			emptyNit++
 		}
-		if c.Fecha == "" {
+		if c.Date == "" {
 			emptyFecha++
 		}
-		if c.TipoMov == "" {
+		if c.MovType == "" {
 			emptyDC++
 		}
-		if c.CuentaContable == "" {
+		if c.LedgerAccount == "" {
 			emptyCuenta++
 		}
-		tipos[c.TipoRegistro]++
-		dc[c.TipoMov]++
+		tipos[c.RecordType]++
+		dc[c.MovType]++
 
-		if c.Fecha != "" && len(c.Fecha) == 8 {
-			y := c.Fecha[:4]
+		if c.Date != "" && len(c.Date) == 8 {
+			y := c.Date[:4]
 			if y < "1990" || y > "2030" {
 				badDates++
 			}
-		} else if c.Fecha != "" {
+		} else if c.Date != "" {
 			badDates++
 		}
 	}
@@ -275,14 +275,14 @@ func validateCartera(dataPath string, anio string) {
 	fmt.Printf("  Tipos D/C: %v\n", dc)
 
 	if emptyTipo == 0 && emptyEmp == 0 && emptyFecha == 0 && badDates == 0 && emptyDC == 0 {
-		fmt.Println("  OK: Todos los campos clave parseados correctamente")
+		fmt.Println("  OK: All campos clave parsed correctamente")
 	} else if emptyTipo == 0 && emptyEmp == 0 {
 		fmt.Printf("  PARCIAL: Campos clave OK, algunos secundarios vacios (nit=%d)\n", emptyNit)
 	} else {
-		fmt.Println("  FALLO: Revisar campos vacios")
+		fmt.Println("  FAILED: Revisar campos vacios")
 	}
 
-	fmt.Println("\n  Muestra (5 registros distribuidos):")
+	fmt.Println("\n  Sample (5 records distributed):")
 	step := len(cart) / 5
 	if step < 1 {
 		step = 1
@@ -290,7 +290,7 @@ func validateCartera(dataPath string, anio string) {
 	for i := 0; i < len(cart) && i/step < 5; i += step {
 		c := cart[i]
 		fmt.Printf("    [%3d] tipo:%-1s emp:%-3s seq:%-5s nit:%-13s fecha:%-8s D/C:%-1s cuenta:%-13s | %s\n",
-			i, c.TipoRegistro, c.Empresa, c.Secuencia, c.NitTercero, c.Fecha, c.TipoMov, c.CuentaContable, c.Descripcion)
+			i, c.RecordType, c.Company, c.Sequence, c.ThirdPartyNit, c.Date, c.MovType, c.LedgerAccount, c.Description)
 	}
 	fmt.Println()
 }

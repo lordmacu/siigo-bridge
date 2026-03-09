@@ -10,13 +10,13 @@ import (
 // ConceptoPILA represents a social security (PILA) configuration concept.
 // PILA = Planilla Integrada de Liquidación de Aportes (Colombian social security).
 type ConceptoPILA struct {
-	Tipo         string `json:"tipo"`          // action type (e.g. "Afecta")
-	Fondo        string `json:"fondo"`         // fund type: AFP, ARP, CAJA, EPS, ICBF, SENA
-	Concepto     string `json:"concepto"`      // concept code: COS, IGE, ING, IRP, LMA, RET, SLN, VAC
-	Flags        string `json:"flags"`         // NN, SS, NS flags
-	TipoBase     string `json:"tipo_base"`     // base type (IBC)
-	BaseCalculo  string `json:"base_calculo"`  // calculation basis: SUEL, IBC, NOAP, IBA
-	Hash         string `json:"hash"`
+	RecType  string `json:"tipo"`          // action type (e.g. "Afecta")
+	Fund     string `json:"fondo"`         // fund type: AFP, ARP, CAJA, EPS, ICBF, SENA
+	Concept  string `json:"concepto"`      // concept code: COS, IGE, ING, IRP, LMA, RET, SLN, VAC
+	Flags    string `json:"flags"`         // NN, SS, NS flags
+	BaseType string `json:"tipo_base"`     // base type (IBC)
+	CalcBase string `json:"base_calculo"`  // calculation basis: SUEL, IBC, NOAP, IBA
+	Hash     string `json:"hash"`
 }
 
 // ParsePILA reads the ZPILA file and returns PILA social security concepts.
@@ -28,34 +28,34 @@ func ParsePILA(dataPath string) ([]ConceptoPILA, error) {
 		return nil, err
 	}
 
-	var conceptos []ConceptoPILA
+	var concepts []ConceptoPILA
 	for _, rec := range records {
 		if len(rec) < 40 {
 			continue
 		}
 
-		tipo := strings.TrimSpace(isam.ExtractField(rec, 0, 8))
-		fondo := strings.TrimSpace(isam.ExtractField(rec, 8, 4))
-		concepto := strings.TrimSpace(isam.ExtractField(rec, 12, 3))
+		recType := strings.TrimSpace(isam.ExtractField(rec, 0, 8))
+		fund := strings.TrimSpace(isam.ExtractField(rec, 8, 4))
+		concept := strings.TrimSpace(isam.ExtractField(rec, 12, 3))
 		flags := strings.TrimSpace(isam.ExtractField(rec, 30, 2))
-		tipoBase := strings.TrimSpace(isam.ExtractField(rec, 32, 4))
-		baseCalculo := strings.TrimSpace(isam.ExtractField(rec, 36, 4))
+		baseType := strings.TrimSpace(isam.ExtractField(rec, 32, 4))
+		calcBase := strings.TrimSpace(isam.ExtractField(rec, 36, 4))
 
-		if tipo == "" || fondo == "" || concepto == "" {
+		if recType == "" || fund == "" || concept == "" {
 			continue
 		}
 
 		hash := sha256.Sum256(rec)
-		conceptos = append(conceptos, ConceptoPILA{
-			Tipo:        tipo,
-			Fondo:       fondo,
-			Concepto:    concepto,
-			Flags:       flags,
-			TipoBase:    tipoBase,
-			BaseCalculo: baseCalculo,
-			Hash:        fmt.Sprintf("%x", hash[:8]),
+		concepts = append(concepts, ConceptoPILA{
+			RecType:  recType,
+			Fund:     fund,
+			Concept:  concept,
+			Flags:    flags,
+			BaseType: baseType,
+			CalcBase: calcBase,
+			Hash:     fmt.Sprintf("%x", hash[:8]),
 		})
 	}
 
-	return conceptos, nil
+	return concepts, nil
 }

@@ -13,14 +13,14 @@ import (
 // HistorialDoc represents a document history entry from Z18YYYY.
 // Z18 contains document transaction history with company names and dates.
 type HistorialDoc struct {
-	TipoRegistro string `json:"tipo_registro"` // record type flag
-	SubTipo      string `json:"sub_tipo"`       // SF, PRE, etc.
-	Empresa      string `json:"empresa"`        // company code
-	Fecha        string `json:"fecha"`          // YYYYMMDD
-	NombreOrigen string `json:"nombre_origen"`  // originator company name
-	NombreDestin string `json:"nombre_destin"`  // destination company name
-	NitOrigen    string `json:"nit_origen"`      // originator NIT
-	Hash         string `json:"hash"`
+	RecordType string `json:"tipo_registro"` // record type flag
+	SubType    string `json:"sub_tipo"`       // SF, PRE, etc.
+	Company    string `json:"empresa"`        // company code
+	Date       string `json:"fecha"`          // YYYYMMDD
+	OriginName string `json:"nombre_origen"`  // originator company name
+	DestName   string `json:"nombre_destin"`  // destination company name
+	OriginNit  string `json:"nit_origen"`      // originator NIT
+	Hash       string `json:"hash"`
 }
 
 // FindLatestZ18 finds the most recent Z18YYYY file.
@@ -69,7 +69,7 @@ func ParseHistorialFile(path, year string) ([]HistorialDoc, string, error) {
 	var docs []HistorialDoc
 	for _, rec := range records {
 		d := parseHistorialRecord(rec, extfh)
-		if d.NombreOrigen == "" && d.NombreDestin == "" {
+		if d.OriginName == "" && d.DestName == "" {
 			continue
 		}
 		docs = append(docs, d)
@@ -150,14 +150,14 @@ func parseHistorialEXTFH(rec []byte, hash [32]byte) HistorialDoc {
 	}
 
 	return HistorialDoc{
-		TipoRegistro: tipo,
-		SubTipo:      subTipo,
-		Empresa:      empresa,
-		Fecha:        fecha,
-		NombreOrigen: nombre1,
-		NombreDestin: nombre2,
-		NitOrigen:    nit,
-		Hash:         fmt.Sprintf("%x", hash[:8]),
+		RecordType: tipo,
+		SubType:    subTipo,
+		Company:    empresa,
+		Date:       fecha,
+		OriginName: nombre1,
+		DestName:   nombre2,
+		OriginNit:  nit,
+		Hash:       fmt.Sprintf("%x", hash[:8]),
 	}
 }
 
@@ -167,7 +167,7 @@ func parseHistorialHeuristic(rec []byte, hash [32]byte) HistorialDoc {
 		return HistorialDoc{}
 	}
 	return HistorialDoc{
-		NombreOrigen: nombre,
-		Hash:         fmt.Sprintf("%x", hash[:8]),
+		OriginName: nombre,
+		Hash:       fmt.Sprintf("%x", hash[:8]),
 	}
 }

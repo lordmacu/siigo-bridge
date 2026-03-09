@@ -9,15 +9,15 @@ import (
 
 // Maestro represents a configuration/master record from Siigo Z06 file.
 // Z06 is Siigo's master configuration file containing multiple record types:
-// A=sucursales, B=bodegas, C=conceptos nomina, I=grupos inventario,
-// V=vendedores, X=actividades economicas, Z=zonas, L=lineas activos,
-// g=ciudades, k=paises, d=calificaciones, p=formas de pago, etc.
+// A=branches, B=warehouses, C=payroll concepts, I=inventory groups,
+// V=salespeople, X=economic activities, Z=zones, L=fixed asset lines,
+// g=cities, k=countries, d=ratings, p=payment methods, etc.
 type Maestro struct {
-	Tipo        string `json:"tipo"`                  // Record type letter
-	Codigo      string `json:"codigo"`
-	Nombre      string `json:"nombre"`
-	Responsable string `json:"responsable,omitempty"` // A/B types
-	Direccion   string `json:"direccion,omitempty"`   // A/B types
+	RecType     string `json:"tipo"`                  // Record type letter
+	Code        string `json:"codigo"`
+	Name        string `json:"nombre"`
+	Responsible string `json:"responsable,omitempty"` // A/B types
+	Address     string `json:"direccion,omitempty"`   // A/B types
 	Email       string `json:"email,omitempty"`       // A/B types
 	Hash        string `json:"hash"`
 }
@@ -31,27 +31,27 @@ func ParseMaestros(dataPath string) ([]Maestro, error) {
 	}
 
 	extfh := isam.ExtfhAvailable()
-	var maestros []Maestro
+	var masters []Maestro
 	for _, rec := range records {
 		m := parseMaestroRecord(rec, extfh)
-		if m.Nombre == "" {
+		if m.Name == "" {
 			continue
 		}
-		maestros = append(maestros, m)
+		masters = append(masters, m)
 	}
 
-	return maestros, nil
+	return masters, nil
 }
 
 // ParseMaestrosPorTipo returns only Z06 records of a specific type
-func ParseMaestrosPorTipo(dataPath string, tipo byte) ([]Maestro, error) {
+func ParseMaestrosPorTipo(dataPath string, recType byte) ([]Maestro, error) {
 	all, err := ParseMaestros(dataPath)
 	if err != nil {
 		return nil, err
 	}
 	var filtered []Maestro
 	for _, m := range all {
-		if len(m.Tipo) > 0 && m.Tipo[0] == tipo {
+		if len(m.RecType) > 0 && m.RecType[0] == recType {
 			filtered = append(filtered, m)
 		}
 	}
@@ -85,48 +85,48 @@ func parseMaestroEXTFH(rec []byte, hash [32]byte) Maestro {
 		return Maestro{}
 	}
 
-	tipo := rec[0]
+	recType := rec[0]
 
 	validTypes := map[byte]bool{
-		'A': true, // Sucursales/centros de costo
-		'B': true, // Bodegas
-		'C': true, // Conceptos nomina
-		'I': true, // Grupos de inventario
-		'V': true, // Vendedores
-		'X': true, // Actividades economicas
-		'Z': true, // Zonas
-		'L': true, // Lineas de activos fijos
-		'g': true, // Ciudades
-		'k': true, // Paises
-		'd': true, // Calificaciones
-		'p': true, // Formas de pago
-		'M': true, // Motivos de cobro
-		'O': true, // Monedas
-		'T': true, // Tipos de empresa
-		'Y': true, // Seguros
+		'A': true, // Branches / cost centers
+		'B': true, // Warehouses
+		'C': true, // Payroll concepts
+		'I': true, // Inventory groups
+		'V': true, // Salespeople
+		'X': true, // Economic activities
+		'Z': true, // Zones
+		'L': true, // Fixed asset lines
+		'g': true, // Cities
+		'k': true, // Countries
+		'd': true, // Ratings
+		'p': true, // Payment methods
+		'M': true, // Billing reasons
+		'O': true, // Currencies
+		'T': true, // Company types
+		'Y': true, // Insurance
 	}
 
-	if !validTypes[tipo] {
+	if !validTypes[recType] {
 		return Maestro{}
 	}
 
-	codigo := strings.TrimSpace(isam.ExtractField(rec, 2, 7))
-	nombre := strings.TrimSpace(isam.ExtractField(rec, 31, 20))
+	code := strings.TrimSpace(isam.ExtractField(rec, 2, 7))
+	name := strings.TrimSpace(isam.ExtractField(rec, 31, 20))
 
-	if nombre == "" {
-		nombre = findDescripcion(rec, 30)
+	if name == "" {
+		name = findDescripcion(rec, 30)
 	}
 
 	m := Maestro{
-		Tipo:   string(tipo),
-		Codigo: codigo,
-		Nombre: nombre,
-		Hash:   fmt.Sprintf("%x", hash[:8]),
+		RecType: string(recType),
+		Code:    code,
+		Name:    name,
+		Hash:    fmt.Sprintf("%x", hash[:8]),
 	}
 
-	if tipo == 'A' || tipo == 'B' {
-		m.Responsable = strings.TrimSpace(isam.ExtractField(rec, 70, 20))
-		m.Direccion = strings.TrimSpace(isam.ExtractField(rec, 90, 30))
+	if recType == 'A' || recType == 'B' {
+		m.Responsible = strings.TrimSpace(isam.ExtractField(rec, 70, 20))
+		m.Address = strings.TrimSpace(isam.ExtractField(rec, 90, 30))
 		emailField := isam.ExtractField(rec, 200, 50)
 		if idx := strings.Index(emailField, "@"); idx > 0 {
 			start := idx
@@ -145,8 +145,8 @@ func parseMaestroEXTFH(rec []byte, hash [32]byte) Maestro {
 }
 
 func parseMaestroHeuristic(rec []byte, hash [32]byte) Maestro {
-	codigo := ""
-	nombre := ""
+	code := ""
+	name := ""
 
 	for i := 0; i < len(rec) && i < 50; i++ {
 		if rec[i] >= '0' && rec[i] <= 'Z' && rec[i] != ' ' {
@@ -155,21 +155,21 @@ func parseMaestroHeuristic(rec []byte, hash [32]byte) Maestro {
 				end++
 			}
 			if end-i >= 2 {
-				codigo = isam.ExtractField(rec, i, end-i)
+				code = isam.ExtractField(rec, i, end-i)
 				break
 			}
 		}
 	}
 
-	nombre = findDescripcion(rec, len(codigo))
+	name = findDescripcion(rec, len(code))
 
-	if nombre == "" {
+	if name == "" {
 		return Maestro{}
 	}
 
 	return Maestro{
-		Codigo: codigo,
-		Nombre: nombre,
-		Hash:   fmt.Sprintf("%x", hash[:8]),
+		Code: code,
+		Name: name,
+		Hash: fmt.Sprintf("%x", hash[:8]),
 	}
 }

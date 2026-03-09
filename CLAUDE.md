@@ -311,6 +311,79 @@ Both detection and sending are controlled **per-table** from Config → Sincroni
   - Keys (amber), Names (cyan), Dates (violet), Codes (emerald), Types (orange), Descriptions (gray italic), Values (green)
 - CSS classes: `col-key`, `col-name`, `col-date`, `col-code`, `col-type`, `col-desc`, `col-value`
 
+## ISAM CRUD Engine (Pure Go, zero DLL)
+
+Complete read/write operations for Micro Focus ISAM IDXFORMAT 8 files, implemented in pure Go.
+
+### Architecture
+```
+siigo-common/isam/
+├── reader_v2.go    # Read: parse header, extract data records
+├── writer_v2.go    # Write: REWRITE, DELETE, INSERT with B-tree updates
+├── btree_v2.go     # B-tree reader/writer (node split, key propagation)
+├── orm.go          # ORM layer: Table, Row, fluent schema builder
+├── model.go        # Eloquent-style Model with ConnectAll()
+├── models.go       # All 24 tables as self-describing package vars
+├── tables.go       # Registry pattern (backward compatible)
+└── safemode.go     # Write protection (Siigo process + file locks)
+```
+
+### CRUD Operations (writer_v2.go)
+| Operation | Function | What it does |
+|-----------|----------|-------------|
+| REWRITE | `RewriteRecord()` | Update existing record in-place, update B-tree key if changed |
+| DELETE | `DeleteRecord()` | Mark record as deleted (type nibble 0→8), remove from B-tree |
+| INSERT | `InsertRecord()` | Append new data record, insert key into B-tree leaf |
+
+- **B-tree node splitting**: When a leaf is full (92 entries), splits into left+right and promotes median key to parent. Cascades up to root if needed.
+- **Backup**: Every write creates a `.bak` file first
+- **Tested**: 57 low-level tests across 5 file formats (2-byte/4-byte markers, various record sizes)
+
+### Eloquent-Style ORM (model.go + models.go)
+
+Each table is a self-describing package-level variable:
+
+```go
+// Connect all 24 models at once
+isam.ConnectAll(`C:\DEMOS01`, "2016")
+
+// Use like Laravel Eloquent
+all, _ := isam.Clients.All()                    // Client::all()
+rec, _ := isam.Clients.Find("00000000002001")   // Client::find()
+rec.Set("nombre", "NUEVO NOMBRE")               // $rec->nombre = "..."
+rec.Save()                                       // $rec->save()
+
+newRec := isam.Clients.New()                     // new Client()
+newRec.Set("codigo", "99999999999999")
+newRec.Save()                                    // INSERT
+
+rec.Delete()                                     // $rec->delete()
+```
+
+**24 model vars**: `isam.Clients`, `isam.Products`, `isam.Movements`, `isam.Cartera`, `isam.Maestros`, `isam.PlanCuentas`, `isam.ActivosFijos`, `isam.Documentos`, `isam.TercerosAmpliados`, `isam.SaldosTerceros`, `isam.SaldosConsolidados`, `isam.CodigosDane`, `isam.Historial`, `isam.ActividadesICA`, `isam.ConceptosPILA`, `isam.LibrosAuxiliares`, `isam.TransaccionesDetalle`, `isam.PeriodosContables`, `isam.CondicionesPago`, `isam.MovimientosInventario`, `isam.SaldosInventario`, `isam.ClasificacionCuentas`, `isam.ActivosFijosDetalle`, `isam.AuditTrailTerceros`
+
+**Extending models** (like Laravel):
+```go
+type ClientModel struct { *isam.Model }
+var Client = &ClientModel{isam.Clients}
+func (c *ClientModel) Activos() ([]*isam.Row, error) { /* custom scope */ }
+func (c *ClientModel) FindByNIT(nit string) (*isam.Row, error) { /* business logic */ }
+```
+
+### SafeMode (safemode.go)
+
+Write protection enabled by default on all tables:
+- **Siigo process detection**: Checks if `cblrtsm.exe` / `siigo.exe` is running (cached 2s)
+- **Windows file locks**: Tries exclusive `LockFileEx` before writing
+- If either check fails → write is rejected with clear error message
+- Disable per-table: `table.SafeMode = false` (e.g. for test copies)
+
+### ORM Test
+```bash
+cd siigo-sync && go run ./cmd/test_orm/    # 18 Eloquent-style CRUD tests
+cd siigo-sync && go run ./cmd/test_writer/  # 57 low-level CRUD tests
+```
+
 ## Key Documentation
 - `docs/09-PARSING-PROCESS.md` — Complete parsing methodology with verified offsets
 - `docs/07-SYNC-MAP-FINEAROM.md` — Siigo↔Finearom field mapping

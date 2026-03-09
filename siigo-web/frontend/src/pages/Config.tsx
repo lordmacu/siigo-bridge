@@ -70,6 +70,7 @@ export default function Config() {
   const [apiEnabled, setApiEnabled] = useState(true);
   const [jwtRequired, setJwtRequired] = useState(true);
   const [apiKey, setApiKey] = useState('');
+  const [globalSend, setGlobalSend] = useState(false);
 
   // --- Telegram ---
   const [tgEnabled, setTgEnabled] = useState(false);
@@ -133,6 +134,7 @@ export default function Config() {
       });
     }).catch(() => {});
     api.getAllowEditDelete().then(r => setAllowEditDelete(r.enabled === true)).catch(() => {});
+    fetch('/api/global-send').then(r => r.json()).then(r => setGlobalSend(r.enabled === true)).catch(() => {});
     api.getDetectEnabled().then(setDetectEnabled).catch(() => {});
     api.getSendEnabled().then(setSendEnabled).catch(() => {});
     api.getWebhookConfig().then(cfg => {
@@ -281,6 +283,11 @@ export default function Config() {
           {activeTab === 'api' && (
             <>
               <SectionTitle>Conexion a Finearom</SectionTitle>
+              <ToggleRow checked={globalSend} onChange={async () => {
+                    const val = !globalSend;
+                    await fetch('/api/global-send', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` }, body: JSON.stringify({ enabled: val }) });
+                    setGlobalSend(val);
+                  }} activeLabel="Envio a Finearom ACTIVO" inactiveLabel="Envio a Finearom DESACTIVADO" />
               <FormGroup label="Base URL">
                 <input value={baseURL} onChange={e => setBaseURL(e.target.value)} placeholder="https://ordenes.finearom.co/api" />
               </FormGroup>

@@ -116,23 +116,23 @@ func validateZ17(dataPath string) {
 	issues := 0
 	for i := 0; i < len(terceros); i++ {
 		t := terceros[i]
-		if hasGarbage(t.Nombre) {
-			fmt.Printf("  ISSUE: rec[%d] nombre garbage: %q\n", i, t.Nombre)
+		if hasGarbage(t.Name) {
+			fmt.Printf("  ISSUE: rec[%d] nombre garbage: %q\n", i, t.Name)
 			issues++
 		}
-		for _, c := range t.NumeroDoc {
+		for _, c := range t.DocNumber {
 			if (c < '0' || c > '9') && c != '-' {
-				fmt.Printf("  ISSUE: rec[%d] numDoc non-numeric: %q nombre:%s\n", i, t.NumeroDoc, t.Nombre)
+				fmt.Printf("  ISSUE: rec[%d] numDoc non-numeric: %q nombre:%s\n", i, t.DocNumber, t.Name)
 				issues++
 				break
 			}
 		}
-		if t.FechaCreacion != "" && len(t.FechaCreacion) != 8 {
-			fmt.Printf("  ISSUE: rec[%d] fecha bad length: %q\n", i, t.FechaCreacion)
+		if t.CreationDate != "" && len(t.CreationDate) != 8 {
+			fmt.Printf("  ISSUE: rec[%d] fecha bad length: %q\n", i, t.CreationDate)
 			issues++
 		}
-		if len(t.Nombre) < 3 && t.Nombre != "" {
-			fmt.Printf("  WARN: rec[%d] nombre very short: %q\n", i, t.Nombre)
+		if len(t.Name) < 3 && t.Name != "" {
+			fmt.Printf("  WARN: rec[%d] nombre very short: %q\n", i, t.Name)
 		}
 	}
 
@@ -140,7 +140,7 @@ func validateZ17(dataPath string) {
 		idx := i * len(terceros) / 5
 		t := terceros[idx]
 		fmt.Printf("  [%3d] tipo:%s emp:%s cod:%s doc:%s fecha:%s | %s\n",
-			idx, t.TipoClave, t.Empresa, t.Codigo, t.NumeroDoc, t.FechaCreacion, t.Nombre)
+			idx, t.KeyType, t.Company, t.Code, t.DocNumber, t.CreationDate, t.Name)
 	}
 
 	if len(records) > 0 {
@@ -180,12 +180,12 @@ func validateZ04(dataPath string) {
 	issues := 0
 	for i := 0; i < len(productos); i++ {
 		p := productos[i]
-		if hasGarbage(p.Nombre) {
-			fmt.Printf("  ISSUE: rec[%d] nombre garbage: %q\n", i, p.Nombre)
+		if hasGarbage(p.Name) {
+			fmt.Printf("  ISSUE: rec[%d] nombre garbage: %q\n", i, p.Name)
 			issues++
 		}
-		if hasGarbage(p.Codigo) {
-			fmt.Printf("  ISSUE: rec[%d] codigo garbage: %q\n", i, p.Codigo)
+		if hasGarbage(p.Code) {
+			fmt.Printf("  ISSUE: rec[%d] codigo garbage: %q\n", i, p.Code)
 			issues++
 		}
 	}
@@ -193,7 +193,7 @@ func validateZ04(dataPath string) {
 	for i := 0; i < 5 && i < len(productos); i++ {
 		idx := i * len(productos) / 5
 		p := productos[idx]
-		fmt.Printf("  [%3d] cod:%s grp:%s ref:%s corto:%s | %s\n", idx, p.Codigo, p.Grupo, p.Referencia, p.NombreCorto, p.Nombre)
+		fmt.Printf("  [%3d] cod:%s grp:%s ref:%s corto:%s | %s\n", idx, p.Code, p.Group, p.Reference, p.ShortName, p.Name)
 	}
 
 	if len(records) > 0 {
@@ -233,22 +233,22 @@ func validateZ49(dataPath string) {
 	emptyDescs := 0
 
 	for _, m := range movs {
-		if hasGarbage(m.NombreTercero) {
+		if hasGarbage(m.ThirdPartyName) {
 			garbageCount++
 			if garbageCount <= 3 {
-				fmt.Printf("  ISSUE: nombreTercero garbage: %q (tipo:%s)\n", m.NombreTercero, m.TipoComprobante)
+				fmt.Printf("  ISSUE: nombreTercero garbage: %q (tipo:%s)\n", m.ThirdPartyName, m.VoucherType)
 			}
 		}
-		if hasGarbage(m.Descripcion) {
+		if hasGarbage(m.Description) {
 			garbageCount++
 			if garbageCount <= 3 {
-				fmt.Printf("  ISSUE: desc garbage: %q\n", m.Descripcion)
+				fmt.Printf("  ISSUE: desc garbage: %q\n", m.Description)
 			}
 		}
-		if len(m.NombreTercero) > 0 && len(m.NombreTercero) < 5 {
+		if len(m.ThirdPartyName) > 0 && len(m.ThirdPartyName) < 5 {
 			shortNames++
 		}
-		if m.Descripcion == "" && m.Descripcion2 == "" {
+		if m.Description == "" && m.Description2 == "" {
 			emptyDescs++
 		}
 	}
@@ -262,10 +262,10 @@ func validateZ49(dataPath string) {
 		idx := i * len(movs) / 5
 		m := movs[idx]
 		fmt.Printf("  [%4d] tipo:%-6s num:%-8s nombre:%-40s | d1:%s | d2:%s\n",
-			idx, m.TipoComprobante, m.NumeroDoc,
-			truncStr(m.NombreTercero, 40),
-			truncStr(m.Descripcion, 50),
-			truncStr(m.Descripcion2, 30))
+			idx, m.VoucherType, m.DocNumber,
+			truncStr(m.ThirdPartyName, 40),
+			truncStr(m.Description, 50),
+			truncStr(m.Description2, 30))
 	}
 
 	for i := 0; i < 3 && i < len(records); i++ {
@@ -320,29 +320,29 @@ func validateZ09(dataPath string) {
 	truncDescs := 0
 
 	for i, c := range cartera {
-		for _, ch := range c.NitTercero {
+		for _, ch := range c.ThirdPartyNit {
 			if ch < '0' || ch > '9' {
 				badNits++
 				if badNits <= 3 {
-					fmt.Printf("  ISSUE: NIT non-numeric: %q (tipo:%s desc:%s)\n", c.NitTercero, c.TipoRegistro, c.Descripcion)
+					fmt.Printf("  ISSUE: NIT non-numeric: %q (tipo:%s desc:%s)\n", c.ThirdPartyNit, c.RecordType, c.Description)
 				}
 				break
 			}
 		}
-		if c.CuentaContable != "" && len(c.CuentaContable) >= 4 && (c.CuentaContable[0] < '0' || c.CuentaContable[0] > '9') {
+		if c.LedgerAccount != "" && len(c.LedgerAccount) >= 4 && (c.LedgerAccount[0] < '0' || c.LedgerAccount[0] > '9') {
 			badCuentas++
 			if badCuentas <= 3 {
-				fmt.Printf("  ISSUE: rec[%d] cuenta invalid: %q\n", i, c.CuentaContable)
+				fmt.Printf("  ISSUE: rec[%d] cuenta invalid: %q\n", i, c.LedgerAccount)
 			}
 		}
-		if c.Fecha != "" && len(c.Fecha) != 8 {
+		if c.Date != "" && len(c.Date) != 8 {
 			badFechas++
 		}
-		if hasGarbage(c.Descripcion) {
+		if hasGarbage(c.Description) {
 			badDescs++
 		}
-		if len(c.Descripcion) == 50 {
-			last := c.Descripcion[len(c.Descripcion)-1]
+		if len(c.Description) == 50 {
+			last := c.Description[len(c.Description)-1]
 			if (last >= 'A' && last <= 'Z') || (last >= 'a' && last <= 'z') {
 				truncDescs++
 			}
@@ -357,7 +357,7 @@ func validateZ09(dataPath string) {
 		idx := i * len(cartera) / 5
 		c := cartera[idx]
 		fmt.Printf("  [%4d] tipo:%s nit:%-13s cuenta:%-13s fecha:%s D/C:%s | %s\n",
-			idx, c.TipoRegistro, c.NitTercero, c.CuentaContable, c.Fecha, c.TipoMov, c.Descripcion)
+			idx, c.RecordType, c.ThirdPartyNit, c.LedgerAccount, c.Date, c.MovType, c.Description)
 	}
 
 	for i := 0; i < 3 && i < len(records); i++ {
@@ -401,23 +401,23 @@ func validateZ11(dataPath string) {
 
 	issues := 0
 	for i, d := range docs {
-		for _, ch := range d.NitTercero {
+		for _, ch := range d.ThirdPartyNit {
 			if ch < '0' || ch > '9' {
-				fmt.Printf("  ISSUE: doc[%d] NIT non-numeric: %q desc:%s\n", i, d.NitTercero, d.Descripcion)
+				fmt.Printf("  ISSUE: doc[%d] NIT non-numeric: %q desc:%s\n", i, d.ThirdPartyNit, d.Description)
 				issues++
 				break
 			}
 		}
-		if d.CuentaContable != "" && len(d.CuentaContable) >= 4 && (d.CuentaContable[0] < '0' || d.CuentaContable[0] > '9') {
-			fmt.Printf("  ISSUE: doc[%d] cuenta invalid: %q\n", i, d.CuentaContable)
+		if d.LedgerAccount != "" && len(d.LedgerAccount) >= 4 && (d.LedgerAccount[0] < '0' || d.LedgerAccount[0] > '9') {
+			fmt.Printf("  ISSUE: doc[%d] cuenta invalid: %q\n", i, d.LedgerAccount)
 			issues++
 		}
-		if hasGarbage(d.Descripcion) {
-			fmt.Printf("  ISSUE: doc[%d] desc garbage: %q\n", i, d.Descripcion)
+		if hasGarbage(d.Description) {
+			fmt.Printf("  ISSUE: doc[%d] desc garbage: %q\n", i, d.Description)
 			issues++
 		}
-		if d.TipoMov != "D" && d.TipoMov != "C" && d.TipoMov != "" {
-			fmt.Printf("  ISSUE: doc[%d] D/C invalid: %q\n", i, d.TipoMov)
+		if d.MovType != "D" && d.MovType != "C" && d.MovType != "" {
+			fmt.Printf("  ISSUE: doc[%d] D/C invalid: %q\n", i, d.MovType)
 			issues++
 		}
 	}
@@ -427,7 +427,7 @@ func validateZ11(dataPath string) {
 			break
 		}
 		fmt.Printf("  [%2d] tipo:%s cod:%s seq:%s nit:%-13s cuenta:%-13s fecha:%s D/C:%s | %s\n",
-			i, d.TipoComprobante, d.CodigoComp, d.Secuencia, d.NitTercero, d.CuentaContable, d.Fecha, d.TipoMov, d.Descripcion)
+			i, d.VoucherType, d.VoucherCode, d.Sequence, d.ThirdPartyNit, d.LedgerAccount, d.Date, d.MovType, d.Description)
 	}
 
 	for i := 0; i < 3 && i < len(records); i++ {
@@ -477,24 +477,24 @@ func validateZ08A(dataPath string) {
 	for i, a := range ampliados {
 		for _, ch := range a.Nit {
 			if ch < '0' || ch > '9' {
-				fmt.Printf("  ISSUE: rec[%d] NIT non-numeric: %q nombre:%s\n", i, a.Nit, a.Nombre)
+				fmt.Printf("  ISSUE: rec[%d] NIT non-numeric: %q nombre:%s\n", i, a.Nit, a.Name)
 				issues++
 				break
 			}
 		}
-		if hasGarbage(a.Nombre) {
-			fmt.Printf("  ISSUE: rec[%d] nombre garbage: %q\n", i, a.Nombre)
+		if hasGarbage(a.Name) {
+			fmt.Printf("  ISSUE: rec[%d] nombre garbage: %q\n", i, a.Name)
 			issues++
 		}
 		if a.Email != "" && !strings.Contains(a.Email, "@") && len(a.Email) > 3 {
-			fmt.Printf("  WARN: rec[%d] email no @: %q nombre:%s\n", i, a.Email, a.Nombre)
+			fmt.Printf("  WARN: rec[%d] email no @: %q nombre:%s\n", i, a.Email, a.Name)
 		}
-		if hasGarbage(a.Direccion) {
-			fmt.Printf("  ISSUE: rec[%d] dir garbage: %q\n", i, a.Direccion)
+		if hasGarbage(a.Address) {
+			fmt.Printf("  ISSUE: rec[%d] dir garbage: %q\n", i, a.Address)
 			issues++
 		}
-		if len(a.Nombre) < 3 && a.Nombre != "" {
-			fmt.Printf("  WARN: rec[%d] nombre very short: %q nit:%s\n", i, a.Nombre, a.Nit)
+		if len(a.Name) < 3 && a.Name != "" {
+			fmt.Printf("  WARN: rec[%d] nombre very short: %q nit:%s\n", i, a.Name, a.Nit)
 		}
 	}
 
@@ -502,8 +502,8 @@ func validateZ08A(dataPath string) {
 		idx := i * len(ampliados) / 5
 		a := ampliados[idx]
 		fmt.Printf("  [%2d] emp:%s nit:%-12s tipo:%s dir:%-30s email:%-30s | %s\n",
-			idx, a.Empresa, a.Nit, a.TipoPersona,
-			truncStr(a.Direccion, 30), truncStr(a.Email, 30), a.Nombre)
+			idx, a.Company, a.Nit, a.PersonType,
+			truncStr(a.Address, 30), truncStr(a.Email, 30), a.Name)
 	}
 
 	for i := 0; i < 3 && i < len(records); i++ {
@@ -551,22 +551,22 @@ func validateZ18(dataPath string) {
 
 	issues := 0
 	for i, d := range docs {
-		if hasGarbage(d.NombreOrigen) {
-			fmt.Printf("  ISSUE: rec[%d] nombre1 garbage: %q\n", i, d.NombreOrigen)
+		if hasGarbage(d.OriginName) {
+			fmt.Printf("  ISSUE: rec[%d] nombre1 garbage: %q\n", i, d.OriginName)
 			issues++
 		}
-		if hasGarbage(d.NombreDestin) {
-			fmt.Printf("  ISSUE: rec[%d] nombre2 garbage: %q\n", i, d.NombreDestin)
+		if hasGarbage(d.DestName) {
+			fmt.Printf("  ISSUE: rec[%d] nombre2 garbage: %q\n", i, d.DestName)
 			issues++
 		}
-		if len(d.NombreDestin) > 0 && d.NombreDestin[0] >= '0' && d.NombreDestin[0] <= '9' {
-			fmt.Printf("  WARN: rec[%d] nombre2 starts with digit: %q (posible offset mal)\n", i, d.NombreDestin)
+		if len(d.DestName) > 0 && d.DestName[0] >= '0' && d.DestName[0] <= '9' {
+			fmt.Printf("  WARN: rec[%d] nombre2 starts with digit: %q (posible offset mal)\n", i, d.DestName)
 		}
 	}
 
 	for i, d := range docs {
 		fmt.Printf("  [%2d] tipo:%s sub:%s emp:%s fecha:%s nit:%s | %s / %s\n",
-			i, d.TipoRegistro, d.SubTipo, d.Empresa, d.Fecha, d.NitOrigen, d.NombreOrigen, d.NombreDestin)
+			i, d.RecordType, d.SubType, d.Company, d.Date, d.OriginNit, d.OriginName, d.DestName)
 	}
 
 	for i := 0; i < 3 && i < len(records); i++ {
@@ -616,7 +616,7 @@ func validateZ05(dataPath string) {
 		}
 	}
 
-	fmt.Printf("  Registros parseados: %d (año: %s), raw: %d\n", len(conds), year, len(records))
+	fmt.Printf("  Registros parsed: %d (year: %s), raw: %d\n", len(conds), year, len(records))
 
 	issues := 0
 	valoresPositivos := 0
@@ -630,16 +630,16 @@ func validateZ05(dataPath string) {
 				break
 			}
 		}
-		if c.Valor > 0 {
+		if c.Amount > 0 {
 			valoresPositivos++
 		}
-		if math.Abs(c.Valor) > 1e12 {
+		if math.Abs(c.Amount) > 1e12 {
 			valoresAbsurdos++
-			fmt.Printf("  ISSUE: rec[%d] valor absurdo: %.2f\n", i, c.Valor)
+			fmt.Printf("  ISSUE: rec[%d] valor absurdo: %.2f\n", i, c.Amount)
 			issues++
 		}
-		if c.Fecha != "" && len(c.Fecha) != 8 {
-			fmt.Printf("  ISSUE: rec[%d] fecha bad: %q\n", i, c.Fecha)
+		if c.Date != "" && len(c.Date) != 8 {
+			fmt.Printf("  ISSUE: rec[%d] fecha bad: %q\n", i, c.Date)
 			issues++
 		}
 	}
@@ -649,7 +649,7 @@ func validateZ05(dataPath string) {
 	for i := 0; i < len(conds) && i < 8; i++ {
 		c := conds[i]
 		fmt.Printf("  [%d] tipo:%s nit:%-13s seq:%s fecha:%s valor:%15.2f flag:%s tipoSec:%s fechaReg:%s\n",
-			i, c.Tipo, c.NIT, c.Secuencia, c.Fecha, c.Valor, c.FlagByte, c.TipoSecundario, c.FechaRegistro)
+			i, c.RecType, c.NIT, c.Sequence, c.Date, c.Amount, c.FlagByte, c.SecondaryType, c.RegDate)
 	}
 
 	for i := 0; i < 3 && i < len(records); i++ {
@@ -676,17 +676,17 @@ func validateZ03(dataPath string) {
 	fmt.Println("Z03 (PLAN DE CUENTAS)")
 	fmt.Println("--------------------------------------------------")
 	cuentas, _, _ := parsers.ParsePlanCuentas(dataPath)
-	fmt.Printf("  Registros parseados: %d\n", len(cuentas))
+	fmt.Printf("  Registros parsed: %d\n", len(cuentas))
 
 	issues := 0
 	for i, c := range cuentas {
-		if hasGarbage(c.Nombre) {
-			fmt.Printf("  ISSUE: rec[%d] nombre garbage: %q\n", i, c.Nombre)
+		if hasGarbage(c.Name) {
+			fmt.Printf("  ISSUE: rec[%d] nombre garbage: %q\n", i, c.Name)
 			issues++
 		}
-		for _, ch := range c.CodigoCuenta {
+		for _, ch := range c.AccountCode {
 			if ch < '0' || ch > '9' {
-				fmt.Printf("  ISSUE: rec[%d] cuenta non-numeric: %q nombre:%s\n", i, c.CodigoCuenta, c.Nombre)
+				fmt.Printf("  ISSUE: rec[%d] cuenta non-numeric: %q nombre:%s\n", i, c.AccountCode, c.Name)
 				issues++
 				break
 			}
@@ -697,7 +697,7 @@ func validateZ03(dataPath string) {
 		idx := i * len(cuentas) / 5
 		c := cuentas[idx]
 		fmt.Printf("  [%4d] emp:%s cuenta:%s act:%v aux:%v nat:%s | %s\n",
-			idx, c.Empresa, c.CodigoCuenta, c.Activa, c.Auxiliar, c.Naturaleza, c.Nombre)
+			idx, c.Company, c.AccountCode, c.Active, c.Auxiliary, c.Nature, c.Name)
 	}
 
 	if issues == 0 {
@@ -712,17 +712,17 @@ func validateZ27(dataPath string) {
 	fmt.Println("Z27 (ACTIVOS FIJOS)")
 	fmt.Println("--------------------------------------------------")
 	activos, _, _ := parsers.ParseActivosFijos(dataPath)
-	fmt.Printf("  Registros parseados: %d\n", len(activos))
+	fmt.Printf("  Registros parsed: %d\n", len(activos))
 
 	issues := 0
 	for i, a := range activos {
-		if hasGarbage(a.Nombre) {
-			fmt.Printf("  ISSUE: rec[%d] nombre garbage: %q\n", i, a.Nombre)
+		if hasGarbage(a.Name) {
+			fmt.Printf("  ISSUE: rec[%d] nombre garbage: %q\n", i, a.Name)
 			issues++
 		}
-		for _, ch := range a.NitResponsable {
+		for _, ch := range a.ResponsibleNit {
 			if ch < '0' || ch > '9' {
-				fmt.Printf("  ISSUE: rec[%d] NIT non-numeric: %q\n", i, a.NitResponsable)
+				fmt.Printf("  ISSUE: rec[%d] NIT non-numeric: %q\n", i, a.ResponsibleNit)
 				issues++
 				break
 			}
@@ -734,7 +734,7 @@ func validateZ27(dataPath string) {
 			break
 		}
 		fmt.Printf("  [%d] emp:%s cod:%s nit:%s fecha:%s | %s\n",
-			i, a.Empresa, a.Codigo, a.NitResponsable, a.FechaAdquisicion, a.Nombre)
+			i, a.Company, a.Code, a.ResponsibleNit, a.AcquisitionDate, a.Name)
 	}
 
 	if issues == 0 {
@@ -758,7 +758,7 @@ func validateZ25(dataPath string) {
 	}
 
 	saldos, _, _ := parsers.ParseSaldosTerceros(dataPath)
-	fmt.Printf("  Registros parseados: %d\n", len(saldos))
+	fmt.Printf("  Registros parsed: %d\n", len(saldos))
 
 	var records [][]byte
 	if rawPath != "" {
@@ -768,18 +768,18 @@ func validateZ25(dataPath string) {
 	issues := 0
 	absurdValues := 0
 	for i, s := range saldos {
-		for _, ch := range s.NitTercero {
+		for _, ch := range s.ThirdPartyNit {
 			if ch < '0' || ch > '9' {
-				fmt.Printf("  ISSUE: rec[%d] NIT non-numeric: %q cuenta:%s\n", i, s.NitTercero, s.CuentaContable)
+				fmt.Printf("  ISSUE: rec[%d] NIT non-numeric: %q cuenta:%s\n", i, s.ThirdPartyNit, s.LedgerAccount)
 				issues++
 				break
 			}
 		}
-		if math.Abs(s.SaldoAnterior) > 1e12 || math.Abs(s.Debito) > 1e12 || math.Abs(s.Credito) > 1e12 {
+		if math.Abs(s.PrevBalance) > 1e12 || math.Abs(s.Debit) > 1e12 || math.Abs(s.Credit) > 1e12 {
 			absurdValues++
 			if absurdValues <= 3 {
 				fmt.Printf("  ISSUE: rec[%d] absurd BCD: ant=%.2f deb=%.2f cred=%.2f\n",
-					i, s.SaldoAnterior, s.Debito, s.Credito)
+					i, s.PrevBalance, s.Debit, s.Credit)
 			}
 			issues++
 		}
@@ -791,7 +791,7 @@ func validateZ25(dataPath string) {
 		idx := i * len(saldos) / 5
 		s := saldos[idx]
 		fmt.Printf("  [%3d] emp:%s cuenta:%s nit:%-13s ant:%15.2f deb:%15.2f cred:%15.2f final:%15.2f\n",
-			idx, s.Empresa, s.CuentaContable, s.NitTercero, s.SaldoAnterior, s.Debito, s.Credito, s.SaldoFinal)
+			idx, s.Company, s.LedgerAccount, s.ThirdPartyNit, s.PrevBalance, s.Debit, s.Credit, s.FinalBalance)
 	}
 
 	if len(records) > 0 {
@@ -831,7 +831,7 @@ func validateZ28(dataPath string) {
 	}
 
 	saldos, _, _ := parsers.ParseSaldosConsolidados(dataPath)
-	fmt.Printf("  Registros parseados: %d\n", len(saldos))
+	fmt.Printf("  Registros parsed: %d\n", len(saldos))
 
 	var records [][]byte
 	if rawPath != "" {
@@ -841,11 +841,11 @@ func validateZ28(dataPath string) {
 	issues := 0
 	absurdValues := 0
 	for i, s := range saldos {
-		if math.Abs(s.SaldoAnterior) > 1e12 || math.Abs(s.Debito) > 1e12 || math.Abs(s.Credito) > 1e12 {
+		if math.Abs(s.PrevBalance) > 1e12 || math.Abs(s.Debit) > 1e12 || math.Abs(s.Credit) > 1e12 {
 			absurdValues++
 			if absurdValues <= 3 {
 				fmt.Printf("  ISSUE: rec[%d] absurd BCD: ant=%.2f deb=%.2f cred=%.2f\n",
-					i, s.SaldoAnterior, s.Debito, s.Credito)
+					i, s.PrevBalance, s.Debit, s.Credit)
 			}
 			issues++
 		}
@@ -857,7 +857,7 @@ func validateZ28(dataPath string) {
 		idx := i * len(saldos) / 5
 		s := saldos[idx]
 		fmt.Printf("  [%3d] emp:%s cuenta:%s ant:%15.2f deb:%15.2f cred:%15.2f final:%15.2f\n",
-			idx, s.Empresa, s.CuentaContable, s.SaldoAnterior, s.Debito, s.Credito, s.SaldoFinal)
+			idx, s.Company, s.LedgerAccount, s.PrevBalance, s.Debit, s.Credit, s.FinalBalance)
 	}
 
 	if len(records) > 0 {
@@ -887,32 +887,32 @@ func validateZ07(dataPath string) {
 	fmt.Println("Z07 (LIBROS AUXILIARES)")
 	fmt.Println("--------------------------------------------------")
 	libros, _, _ := parsers.ParseLibrosAuxiliares(dataPath)
-	fmt.Printf("  Registros parseados: %d\n", len(libros))
+	fmt.Printf("  Registros parsed: %d\n", len(libros))
 
 	issues := 0
 	absurdValues := 0
 	for i, l := range libros {
-		for _, ch := range l.NitTercero {
+		for _, ch := range l.ThirdPartyNit {
 			if ch < '0' || ch > '9' {
-				fmt.Printf("  ISSUE: rec[%d] NIT non-numeric: %q\n", i, l.NitTercero)
+				fmt.Printf("  ISSUE: rec[%d] NIT non-numeric: %q\n", i, l.ThirdPartyNit)
 				issues++
 				break
 			}
 		}
-		if math.Abs(l.Saldo) > 1e12 || math.Abs(l.Debito) > 1e12 || math.Abs(l.Credito) > 1e12 {
+		if math.Abs(l.Balance) > 1e12 || math.Abs(l.Debit) > 1e12 || math.Abs(l.Credit) > 1e12 {
 			absurdValues++
 			if absurdValues <= 3 {
 				fmt.Printf("  ISSUE: rec[%d] absurd BCD: saldo=%.2f deb=%.2f cred=%.2f\n",
-					i, l.Saldo, l.Debito, l.Credito)
+					i, l.Balance, l.Debit, l.Credit)
 			}
 			issues++
 		}
-		if l.FechaDocumento != "" && len(l.FechaDocumento) != 8 {
-			fmt.Printf("  ISSUE: rec[%d] fechaDoc bad: %q\n", i, l.FechaDocumento)
+		if l.DocDate != "" && len(l.DocDate) != 8 {
+			fmt.Printf("  ISSUE: rec[%d] fechaDoc bad: %q\n", i, l.DocDate)
 			issues++
 		}
-		if l.FechaRegistro != "" && len(l.FechaRegistro) != 8 {
-			fmt.Printf("  ISSUE: rec[%d] fechaReg bad: %q\n", i, l.FechaRegistro)
+		if l.RegDate != "" && len(l.RegDate) != 8 {
+			fmt.Printf("  ISSUE: rec[%d] fechaReg bad: %q\n", i, l.RegDate)
 			issues++
 		}
 	}
@@ -923,8 +923,8 @@ func validateZ07(dataPath string) {
 		idx := i * len(libros) / 5
 		l := libros[idx]
 		fmt.Printf("  [%3d] emp:%s cuenta:%s nit:%-13s tipo:%s-%s fechaDoc:%s saldo:%12.2f deb:%12.2f cred:%12.2f\n",
-			idx, l.Empresa, l.CuentaContable, l.NitTercero,
-			l.TipoComprobante, l.CodigoComprobante, l.FechaDocumento, l.Saldo, l.Debito, l.Credito)
+			idx, l.Company, l.LedgerAccount, l.ThirdPartyNit,
+			l.VoucherType, l.VoucherCode, l.DocDate, l.Balance, l.Debit, l.Credit)
 	}
 
 	if issues == 0 {
@@ -939,29 +939,29 @@ func validateZ07T(dataPath string) {
 	fmt.Println("Z07T (TRANSACCIONES DETALLE)")
 	fmt.Println("--------------------------------------------------")
 	trans, _ := parsers.ParseTransaccionesDetalle(dataPath)
-	fmt.Printf("  Registros parseados: %d\n", len(trans))
+	fmt.Printf("  Registros parsed: %d\n", len(trans))
 
 	issues := 0
 	absurdValues := 0
 	badDC := 0
 	for i, t := range trans {
-		for _, ch := range t.NitTercero {
+		for _, ch := range t.ThirdPartyNit {
 			if ch < '0' || ch > '9' {
 				if issues < 3 {
-					fmt.Printf("  ISSUE: rec[%d] NIT non-numeric: %q\n", i, t.NitTercero)
+					fmt.Printf("  ISSUE: rec[%d] NIT non-numeric: %q\n", i, t.ThirdPartyNit)
 				}
 				issues++
 				break
 			}
 		}
-		if math.Abs(t.Valor) > 1e12 {
+		if math.Abs(t.Amount) > 1e12 {
 			absurdValues++
 			issues++
 		}
-		if t.TipoMovimiento != "D" && t.TipoMovimiento != "C" && t.TipoMovimiento != "" {
+		if t.MovType != "D" && t.MovType != "C" && t.MovType != "" {
 			badDC++
 			if badDC <= 3 {
-				fmt.Printf("  ISSUE: rec[%d] D/C invalid: %q\n", i, t.TipoMovimiento)
+				fmt.Printf("  ISSUE: rec[%d] D/C invalid: %q\n", i, t.MovType)
 			}
 			issues++
 		}
@@ -973,7 +973,7 @@ func validateZ07T(dataPath string) {
 		idx := i * len(trans) / 5
 		t := trans[idx]
 		fmt.Printf("  [%3d] tipo:%s nit:%-14s cuenta:%s fecha:%s D/C:%s valor:%15.2f\n",
-			idx, t.TipoComprobante, t.NitTercero, t.CuentaContable, t.FechaDocumento, t.TipoMovimiento, t.Valor)
+			idx, t.VoucherType, t.ThirdPartyNit, t.LedgerAccount, t.DocDate, t.MovType, t.Amount)
 	}
 
 	if issues == 0 {
@@ -988,20 +988,20 @@ func validateZ26(dataPath string) {
 	fmt.Println("Z26 (PERIODOS)")
 	fmt.Println("--------------------------------------------------")
 	periodos, _, _ := parsers.ParsePeriodos(dataPath)
-	fmt.Printf("  Registros parseados: %d\n", len(periodos))
+	fmt.Printf("  Registros parsed: %d\n", len(periodos))
 
 	issues := 0
 	for i, p := range periodos {
-		if p.FechaInicio != "" && len(p.FechaInicio) != 8 {
-			fmt.Printf("  ISSUE: rec[%d] fechaInicio bad: %q\n", i, p.FechaInicio)
+		if p.StartDate != "" && len(p.StartDate) != 8 {
+			fmt.Printf("  ISSUE: rec[%d] fechaInicio bad: %q\n", i, p.StartDate)
 			issues++
 		}
-		if p.FechaFin != "" && len(p.FechaFin) != 8 {
-			fmt.Printf("  ISSUE: rec[%d] fechaFin bad: %q\n", i, p.FechaFin)
+		if p.EndDate != "" && len(p.EndDate) != 8 {
+			fmt.Printf("  ISSUE: rec[%d] fechaFin bad: %q\n", i, p.EndDate)
 			issues++
 		}
-		if math.Abs(p.Saldo1) > 1e12 {
-			fmt.Printf("  ISSUE: rec[%d] saldo1 absurd: %.2f\n", i, p.Saldo1)
+		if math.Abs(p.Balance1) > 1e12 {
+			fmt.Printf("  ISSUE: rec[%d] saldo1 absurd: %.2f\n", i, p.Balance1)
 			issues++
 		}
 	}
@@ -1009,7 +1009,7 @@ func validateZ26(dataPath string) {
 	for i := 0; i < len(periodos) && i < 10; i++ {
 		p := periodos[i]
 		fmt.Printf("  [%2d] emp:%s num:%s ini:%s fin:%s est:%s saldo1:%15.2f saldo2:%15.2f saldo3:%15.2f\n",
-			i, p.Empresa, p.NumeroPeriodo, p.FechaInicio, p.FechaFin, p.Estado, p.Saldo1, p.Saldo2, p.Saldo3)
+			i, p.Company, p.PeriodNumber, p.StartDate, p.EndDate, p.Status, p.Balance1, p.Balance2, p.Balance3)
 	}
 
 	if issues == 0 {
@@ -1024,23 +1024,23 @@ func validateZDANE(dataPath string) {
 	fmt.Println("ZDANE (MUNICIPIOS)")
 	fmt.Println("--------------------------------------------------")
 	munis, _ := parsers.ParseDane(dataPath)
-	fmt.Printf("  Registros parseados: %d\n", len(munis))
+	fmt.Printf("  Registros parsed: %d\n", len(munis))
 
 	issues := 0
 	for i, m := range munis {
-		if hasGarbage(m.Nombre) {
-			fmt.Printf("  ISSUE: rec[%d] nombre garbage: %q\n", i, m.Nombre)
+		if hasGarbage(m.Name) {
+			fmt.Printf("  ISSUE: rec[%d] nombre garbage: %q\n", i, m.Name)
 			issues++
 		}
-		if len(m.Codigo) != 5 {
-			fmt.Printf("  ISSUE: rec[%d] codigo bad length %d: %q\n", i, len(m.Codigo), m.Codigo)
+		if len(m.Code) != 5 {
+			fmt.Printf("  ISSUE: rec[%d] codigo bad length %d: %q\n", i, len(m.Code), m.Code)
 			issues++
 		}
 	}
 
 	for i := 0; i < 5 && i < len(munis); i++ {
 		idx := i * len(munis) / 5
-		fmt.Printf("  [%4d] cod:%s | %s\n", idx, munis[idx].Codigo, munis[idx].Nombre)
+		fmt.Printf("  [%4d] cod:%s | %s\n", idx, munis[idx].Code, munis[idx].Name)
 	}
 
 	if issues == 0 {
@@ -1055,16 +1055,16 @@ func validateZICA(dataPath string) {
 	fmt.Println("ZICA (ACTIVIDADES ICA)")
 	fmt.Println("--------------------------------------------------")
 	acts, _ := parsers.ParseICA(dataPath)
-	fmt.Printf("  Registros parseados: %d\n", len(acts))
+	fmt.Printf("  Registros parsed: %d\n", len(acts))
 
 	issues := 0
 	truncated := 0
 	for i, a := range acts {
-		if hasGarbage(a.Nombre) {
-			fmt.Printf("  ISSUE: rec[%d] nombre garbage: %q\n", i, a.Nombre)
+		if hasGarbage(a.Name) {
+			fmt.Printf("  ISSUE: rec[%d] nombre garbage: %q\n", i, a.Name)
 			issues++
 		}
-		if len(a.Nombre) == 50 {
+		if len(a.Name) == 50 {
 			truncated++
 		}
 	}
@@ -1073,7 +1073,7 @@ func validateZICA(dataPath string) {
 
 	for i := 0; i < 5 && i < len(acts); i++ {
 		idx := i * len(acts) / 5
-		fmt.Printf("  [%3d] cod:%s tarifa:%s | %s\n", idx, acts[idx].Codigo, acts[idx].Tarifa, acts[idx].Nombre)
+		fmt.Printf("  [%3d] cod:%s tarifa:%s | %s\n", idx, acts[idx].Code, acts[idx].Rate, acts[idx].Name)
 	}
 
 	if issues == 0 {
@@ -1088,16 +1088,16 @@ func validateZPILA(dataPath string) {
 	fmt.Println("ZPILA (SEGURIDAD SOCIAL)")
 	fmt.Println("--------------------------------------------------")
 	items, _ := parsers.ParsePILA(dataPath)
-	fmt.Printf("  Registros parseados: %d\n", len(items))
+	fmt.Printf("  Registros parsed: %d\n", len(items))
 
 	issues := 0
 	for i, p := range items {
-		if hasGarbage(p.Tipo) {
-			fmt.Printf("  ISSUE: rec[%d] tipo garbage: %q\n", i, p.Tipo)
+		if hasGarbage(p.RecType) {
+			fmt.Printf("  ISSUE: rec[%d] tipo garbage: %q\n", i, p.RecType)
 			issues++
 		}
-		if hasGarbage(p.Fondo) {
-			fmt.Printf("  ISSUE: rec[%d] fondo garbage: %q\n", i, p.Fondo)
+		if hasGarbage(p.Fund) {
+			fmt.Printf("  ISSUE: rec[%d] fondo garbage: %q\n", i, p.Fund)
 			issues++
 		}
 	}
@@ -1105,8 +1105,8 @@ func validateZPILA(dataPath string) {
 	fondos := map[string]int{}
 	tipos := map[string]int{}
 	for _, p := range items {
-		fondos[p.Fondo]++
-		tipos[p.Tipo]++
+		fondos[p.Fund]++
+		tipos[p.RecType]++
 	}
 	fmt.Printf("  Fondos: %v\n", fondos)
 	fmt.Printf("  Tipos: %v\n", tipos)
@@ -1114,7 +1114,7 @@ func validateZPILA(dataPath string) {
 	for i := 0; i < 5 && i < len(items); i++ {
 		p := items[i]
 		fmt.Printf("  [%d] tipo:%-10s fondo:%-4s conc:%-3s flags:%s base:%s calc:%s\n",
-			i, p.Tipo, p.Fondo, p.Concepto, p.Flags, p.TipoBase, p.BaseCalculo)
+			i, p.RecType, p.Fund, p.Concept, p.Flags, p.BaseType, p.CalcBase)
 	}
 
 	if issues == 0 {

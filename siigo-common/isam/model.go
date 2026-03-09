@@ -85,6 +85,11 @@ func (m *Model) FileName() string {
 	return m.file
 }
 
+// GetTable implements Relatable interface, allowing Models to be used in HasMany/BelongsTo.
+func (m *Model) GetTable() *Table {
+	return m.Table
+}
+
 // AllModels returns all registered model names.
 func AllModels() []string {
 	names := make([]string, 0, len(registeredModels))

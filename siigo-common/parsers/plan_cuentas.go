@@ -13,13 +13,13 @@ import (
 // CuentaContable represents an account from the PUC (Plan Unico de Cuentas) in Z03YYYY.
 // Z03YYYY files are yearly snapshots of the chart of accounts.
 type CuentaContable struct {
-	Empresa       string `json:"empresa"`         // company code (3 chars)
-	CodigoCuenta  string `json:"codigo_cuenta"`   // PUC code (up to 9 digits)
-	Nombre        string `json:"nombre"`          // account name (70 chars)
-	Activa        bool   `json:"activa"`          // S=active, N=inactive
-	Auxiliar      bool   `json:"auxiliar"`         // S=has sub-accounts
-	Naturaleza    string `json:"naturaleza"`      // account nature flags
-	Hash          string `json:"hash"`
+	Company     string `json:"empresa"`         // company code (3 chars)
+	AccountCode string `json:"codigo_cuenta"`   // PUC code (up to 9 digits)
+	Name        string `json:"nombre"`          // account name (70 chars)
+	Active      bool   `json:"activa"`          // S=active, N=inactive
+	Auxiliary   bool   `json:"auxiliar"`         // S=has sub-accounts
+	Nature      string `json:"naturaleza"`      // account nature flags
+	Hash        string `json:"hash"`
 }
 
 // FindLatestZ03 finds the most recent Z03YYYY file in the data directory.
@@ -62,16 +62,16 @@ func ParsePlanCuentasFile(path, year string) ([]CuentaContable, string, error) {
 	}
 
 	extfh := isam.ExtfhAvailable()
-	var cuentas []CuentaContable
+	var accounts []CuentaContable
 	for _, rec := range records {
 		c := parseCuentaRecord(rec, extfh)
-		if c.CodigoCuenta == "" || c.Nombre == "" {
+		if c.AccountCode == "" || c.Name == "" {
 			continue
 		}
-		cuentas = append(cuentas, c)
+		accounts = append(accounts, c)
 	}
 
-	return cuentas, year, nil
+	return accounts, year, nil
 }
 
 func parseCuentaRecord(rec []byte, extfh bool) CuentaContable {
@@ -97,51 +97,51 @@ func parseCuentaRecord(rec []byte, extfh bool) CuentaContable {
 //	[17:25]  flags naturaleza (8 x S/N)
 //	[25:95]  nombre (70 chars)
 func parseCuentaEXTFH(rec []byte, hash [32]byte) CuentaContable {
-	empresa := strings.TrimSpace(isam.ExtractField(rec, 0, 3))
-	codigoRaw := strings.TrimSpace(isam.ExtractField(rec, 3, 9))
+	company := strings.TrimSpace(isam.ExtractField(rec, 0, 3))
+	codeRaw := strings.TrimSpace(isam.ExtractField(rec, 3, 9))
 
 	// Remove trailing zeros to get clean PUC code
-	codigo := strings.TrimRight(codigoRaw, "0")
-	if codigo == "" {
+	code := strings.TrimRight(codeRaw, "0")
+	if code == "" {
 		return CuentaContable{}
 	}
 	// Keep full code for uniqueness
-	codigo = codigoRaw
+	code = codeRaw
 
-	activa := isam.ExtractField(rec, 12, 1) == "S"
-	auxiliar := isam.ExtractField(rec, 13, 1) == "S"
+	active := isam.ExtractField(rec, 12, 1) == "S"
+	auxiliary := isam.ExtractField(rec, 13, 1) == "S"
 
 	// Extract nature flags
-	naturaleza := ""
+	nature := ""
 	for j := 17; j < 25 && j < len(rec); j++ {
 		if rec[j] == 'S' || rec[j] == 'N' {
-			naturaleza += string(rec[j])
+			nature += string(rec[j])
 		}
 	}
 
-	nombre := strings.TrimSpace(isam.ExtractField(rec, 25, 70))
-	if nombre == "" {
+	name := strings.TrimSpace(isam.ExtractField(rec, 25, 70))
+	if name == "" {
 		return CuentaContable{}
 	}
 
 	return CuentaContable{
-		Empresa:      empresa,
-		CodigoCuenta: codigo,
-		Nombre:       nombre,
-		Activa:       activa,
-		Auxiliar:     auxiliar,
-		Naturaleza:   naturaleza,
-		Hash:         fmt.Sprintf("%x", hash[:8]),
+		Company:     company,
+		AccountCode: code,
+		Name:        name,
+		Active:      active,
+		Auxiliary:   auxiliary,
+		Nature:      nature,
+		Hash:        fmt.Sprintf("%x", hash[:8]),
 	}
 }
 
 func parseCuentaHeuristic(rec []byte, hash [32]byte) CuentaContable {
-	nombre := findDescripcion(rec, 25)
-	if nombre == "" {
+	name := findDescripcion(rec, 25)
+	if name == "" {
 		return CuentaContable{}
 	}
 	return CuentaContable{
-		Nombre: nombre,
-		Hash:   fmt.Sprintf("%x", hash[:8]),
+		Name: name,
+		Hash: fmt.Sprintf("%x", hash[:8]),
 	}
 }

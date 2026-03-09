@@ -12,20 +12,20 @@ import (
 // LibroAuxiliar represents an entry in the auxiliary ledger (Z07YYYY).
 // Each record is a transaction line in the auxiliary books.
 type LibroAuxiliar struct {
-	Empresa           string  `json:"empresa"`
-	CuentaContable    string  `json:"cuenta_contable"`     // PUC account (9 digits)
-	TipoComprobante   string  `json:"tipo_comprobante"`    // F=factura, P=pago, G=egreso, R=recibo, L=ajuste
-	CodigoComprobante string  `json:"codigo_comprobante"`
-	FechaDocumento    string  `json:"fecha_documento"`     // YYYYMMDD
-	NitTercero        string  `json:"nit_tercero"`
-	NumeroReferencia  string  `json:"numero_referencia"`
-	TipoCompSec      string  `json:"tipo_comp_sec"`       // secondary/counter type
-	CodigoCompSec     string  `json:"codigo_comp_sec"`
-	Saldo             float64 `json:"saldo"`
-	Debito            float64 `json:"debito"`
-	Credito           float64 `json:"credito"`
-	FechaRegistro     string  `json:"fecha_registro"`      // YYYYMMDD
-	Hash              string  `json:"hash"`
+	Company        string  `json:"empresa"`
+	LedgerAccount  string  `json:"cuenta_contable"`     // PUC account (9 digits)
+	VoucherType    string  `json:"tipo_comprobante"`    // F=invoice, P=payment, G=expense, R=receipt, L=adjustment
+	VoucherCode    string  `json:"codigo_comprobante"`
+	DocDate        string  `json:"fecha_documento"`     // YYYYMMDD
+	ThirdPartyNit  string  `json:"nit_tercero"`
+	RefNumber      string  `json:"numero_referencia"`
+	SecVoucherType string  `json:"tipo_comp_sec"`       // secondary/counter type
+	SecVoucherCode string  `json:"codigo_comp_sec"`
+	Balance        float64 `json:"saldo"`
+	Debit          float64 `json:"debito"`
+	Credit         float64 `json:"credito"`
+	RegDate        string  `json:"fecha_registro"`      // YYYYMMDD
+	Hash           string  `json:"hash"`
 }
 
 // ParseLibrosAuxiliares reads the latest Z07YYYY file and returns auxiliary ledger entries.
@@ -44,7 +44,7 @@ func ParseLibrosAuxiliares(dataPath string) ([]LibroAuxiliar, string, error) {
 	var result []LibroAuxiliar
 	for _, rec := range records {
 		r := parseLibroAuxiliar(rec, extfh)
-		if r.CuentaContable == "" {
+		if r.LedgerAccount == "" {
 			continue
 		}
 		result = append(result, r)
@@ -65,85 +65,85 @@ func parseLibroAuxiliar(rec []byte, extfh bool) LibroAuxiliar {
 }
 
 func parseLibroAuxiliarEXTFH(rec []byte, hash [32]byte) LibroAuxiliar {
-	empresa := strings.TrimSpace(isam.ExtractField(rec, 7, 3))
-	cuenta := strings.TrimSpace(isam.ExtractField(rec, 10, 9))
-	tipoComp := strings.TrimSpace(isam.ExtractField(rec, 20, 1))
-	codComp := strings.TrimSpace(isam.ExtractField(rec, 21, 3))
-	fechaDoc := strings.TrimSpace(isam.ExtractField(rec, 33, 8))
+	company := strings.TrimSpace(isam.ExtractField(rec, 7, 3))
+	account := strings.TrimSpace(isam.ExtractField(rec, 10, 9))
+	voucherType := strings.TrimSpace(isam.ExtractField(rec, 20, 1))
+	voucherCode := strings.TrimSpace(isam.ExtractField(rec, 21, 3))
+	docDate := strings.TrimSpace(isam.ExtractField(rec, 33, 8))
 	nit := strings.TrimSpace(isam.ExtractField(rec, 41, 13))
-	fechaReg := strings.TrimSpace(isam.ExtractField(rec, 133, 8))
-	numRef := strings.TrimSpace(isam.ExtractField(rec, 144, 7))
-	tipoCompSec := strings.TrimSpace(isam.ExtractField(rec, 155, 1))
-	codCompSec := strings.TrimSpace(isam.ExtractField(rec, 156, 3))
+	regDate := strings.TrimSpace(isam.ExtractField(rec, 133, 8))
+	refNum := strings.TrimSpace(isam.ExtractField(rec, 144, 7))
+	secVoucherType := strings.TrimSpace(isam.ExtractField(rec, 155, 1))
+	secVoucherCode := strings.TrimSpace(isam.ExtractField(rec, 156, 3))
 
 	// Strip leading zeros from NIT and ref
 	nit = strings.TrimLeft(nit, "0")
-	numRef = strings.TrimLeft(numRef, "0")
+	refNum = strings.TrimLeft(refNum, "0")
 
 	// BCD values
-	var saldo, debito, credito float64
+	var balance, debit, credit float64
 	if len(rec) >= 131 {
-		saldo = DecodePacked(rec[112:118], 2)
-		debito = DecodePacked(rec[118:124], 2)
-		credito = DecodePacked(rec[124:131], 2)
+		balance = DecodePacked(rec[112:118], 2)
+		debit = DecodePacked(rec[118:124], 2)
+		credit = DecodePacked(rec[124:131], 2)
 	}
 
 	return LibroAuxiliar{
-		Empresa:           empresa,
-		CuentaContable:    cuenta,
-		TipoComprobante:   tipoComp,
-		CodigoComprobante: codComp,
-		FechaDocumento:    fechaDoc,
-		NitTercero:        nit,
-		NumeroReferencia:  numRef,
-		TipoCompSec:      tipoCompSec,
-		CodigoCompSec:     codCompSec,
-		Saldo:             saldo,
-		Debito:            debito,
-		Credito:           credito,
-		FechaRegistro:     fechaReg,
-		Hash:              fmt.Sprintf("%x", hash[:8]),
+		Company:        company,
+		LedgerAccount:  account,
+		VoucherType:    voucherType,
+		VoucherCode:    voucherCode,
+		DocDate:        docDate,
+		ThirdPartyNit:  nit,
+		RefNumber:      refNum,
+		SecVoucherType: secVoucherType,
+		SecVoucherCode: secVoucherCode,
+		Balance:        balance,
+		Debit:          debit,
+		Credit:         credit,
+		RegDate:        regDate,
+		Hash:           fmt.Sprintf("%x", hash[:8]),
 	}
 }
 
 func parseLibroAuxiliarBinary(rec []byte, hash [32]byte) LibroAuxiliar {
 	// Binary fallback: offsets +2 for record markers
-	empresa := strings.TrimSpace(isam.ExtractField(rec, 9, 3))
-	cuenta := strings.TrimSpace(isam.ExtractField(rec, 12, 9))
-	tipoComp := strings.TrimSpace(isam.ExtractField(rec, 22, 1))
-	codComp := strings.TrimSpace(isam.ExtractField(rec, 23, 3))
-	fechaDoc := strings.TrimSpace(isam.ExtractField(rec, 35, 8))
+	company := strings.TrimSpace(isam.ExtractField(rec, 9, 3))
+	account := strings.TrimSpace(isam.ExtractField(rec, 12, 9))
+	voucherType := strings.TrimSpace(isam.ExtractField(rec, 22, 1))
+	voucherCode := strings.TrimSpace(isam.ExtractField(rec, 23, 3))
+	docDate := strings.TrimSpace(isam.ExtractField(rec, 35, 8))
 	nit := strings.TrimSpace(isam.ExtractField(rec, 43, 13))
-	fechaReg := strings.TrimSpace(isam.ExtractField(rec, 135, 8))
-	numRef := strings.TrimSpace(isam.ExtractField(rec, 146, 7))
-	tipoCompSec := strings.TrimSpace(isam.ExtractField(rec, 157, 1))
-	codCompSec := strings.TrimSpace(isam.ExtractField(rec, 158, 3))
+	regDate := strings.TrimSpace(isam.ExtractField(rec, 135, 8))
+	refNum := strings.TrimSpace(isam.ExtractField(rec, 146, 7))
+	secVoucherType := strings.TrimSpace(isam.ExtractField(rec, 157, 1))
+	secVoucherCode := strings.TrimSpace(isam.ExtractField(rec, 158, 3))
 
 	nit = strings.TrimLeft(nit, "0")
-	numRef = strings.TrimLeft(numRef, "0")
+	refNum = strings.TrimLeft(refNum, "0")
 
-	var saldo, debito, credito float64
+	var balance, debit, credit float64
 	if len(rec) >= 133 {
-		saldo = DecodePacked(rec[114:120], 2)
-		debito = DecodePacked(rec[120:126], 2)
-		credito = DecodePacked(rec[126:133], 2)
+		balance = DecodePacked(rec[114:120], 2)
+		debit = DecodePacked(rec[120:126], 2)
+		credit = DecodePacked(rec[126:133], 2)
 	}
 
 	return LibroAuxiliar{
-		Empresa:           empresa,
-		CuentaContable:    cuenta,
-		TipoComprobante:   tipoComp,
-		CodigoComprobante: codComp,
-		FechaDocumento:    fechaDoc,
-		NitTercero:        nit,
-		NumeroReferencia:  numRef,
-		TipoCompSec:      tipoCompSec,
-		CodigoCompSec:     codCompSec,
-		Saldo:             saldo,
-		Debito:            debito,
-		Credito:           credito,
-		FechaRegistro:     fechaReg,
-		Hash:              fmt.Sprintf("%x", hash[:8]),
+		Company:        company,
+		LedgerAccount:  account,
+		VoucherType:    voucherType,
+		VoucherCode:    voucherCode,
+		DocDate:        docDate,
+		ThirdPartyNit:  nit,
+		RefNumber:      refNum,
+		SecVoucherType: secVoucherType,
+		SecVoucherCode: secVoucherCode,
+		Balance:        balance,
+		Debit:          debit,
+		Credit:         credit,
+		RegDate:        regDate,
+		Hash:           fmt.Sprintf("%x", hash[:8]),
 	}
 }
 
@@ -153,7 +153,7 @@ func findLatestZ07(dataPath string) (string, string) {
 	if len(matches) == 0 {
 		return "", ""
 	}
-	// Filter out .idx files and special codes (7777, 9999, etc.)
+	// Filter out .idx files and special codes (7777, 9999, etc)
 	var valid []string
 	for _, m := range matches {
 		if strings.HasSuffix(m, ".idx") {

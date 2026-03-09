@@ -11,17 +11,17 @@ import (
 )
 
 // ActivoFijoDetalle represents a detailed fixed asset record from Z27YYYYA.
-// Complements Z27 with financial data: valor compra (BCD), ubicación, referencia.
+// Complements Z27 with financial data: purchase value (BCD), location, reference.
 type ActivoFijoDetalle struct {
-	Grupo          string  `json:"grupo"`
-	Secuencia      string  `json:"secuencia"`
-	Nombre         string  `json:"nombre"`
-	NitResponsable string  `json:"nit_responsable"`
-	Codigo         string  `json:"codigo"`
-	Fecha          string  `json:"fecha"`
-	ValorCompra    float64 `json:"valor_compra"`
-	Ubicacion      string  `json:"ubicacion"`
-	Referencia     string  `json:"referencia"`
+	Group          string  `json:"grupo"`
+	Sequence       string  `json:"secuencia"`
+	Name           string  `json:"nombre"`
+	ResponsibleNit string  `json:"nit_responsable"`
+	Code           string  `json:"codigo"`
+	Date           string  `json:"fecha"`
+	PurchaseValue  float64 `json:"valor_compra"`
+	Location       string  `json:"ubicacion"`
+	Reference      string  `json:"referencia"`
 	Hash           string  `json:"hash"`
 }
 
@@ -69,7 +69,7 @@ func ParseActivosFijosDetalleFile(path, year string) ([]ActivoFijoDetalle, strin
 	var items []ActivoFijoDetalle
 	for _, rec := range records {
 		a := parseActivoDetalleRecord(rec, extfh)
-		if a.Nombre == "" {
+		if a.Name == "" {
 			continue
 		}
 		items = append(items, a)
@@ -90,67 +90,67 @@ func parseActivoDetalleRecord(rec []byte, extfh bool) ActivoFijoDetalle {
 
 // parseActivoDetalleEXTFH extracts Z27YYYYA records.
 // Z27YYYYA structure (1536 bytes) verified via hex dump:
-//   [0:5]     empresa (5 chars)
-//   [5:11]    codigo (6 chars)
-//   [11:61]   nombre (50 chars)
+//   [0:5]     company (5 chars)
+//   [5:11]    code (6 chars)
+//   [11:61]   name (50 chars)
 //   [61:74]   nit_responsable (13 chars)
-//   [122:130] fecha_adquisicion (YYYYMMDD)
-//   [130:138] BCD valor_compra (8 bytes, sign in last nibble: C=pos, D=neg)
-//   [586:632] ubicacion (46 chars, e.g. "PRODUCCION")
-//   [736:744] referencia (8 chars, e.g. "SIN14545")
+//   [122:130] acquisition date (YYYYMMDD)
+//   [130:138] BCD purchase value (8 bytes, sign in last nibble: C=pos, D=neg)
+//   [586:632] location (46 chars, e.g. "PRODUCCION")
+//   [736:744] reference (8 chars, e.g. "SIN14545")
 func parseActivoDetalleEXTFH(rec []byte, hash [32]byte) ActivoFijoDetalle {
-	empresa := strings.TrimSpace(isam.ExtractField(rec, 0, 5))
-	codigo := strings.TrimSpace(isam.ExtractField(rec, 5, 6))
-	nombre := strings.TrimSpace(isam.ExtractField(rec, 11, 50))
-	if nombre == "" {
+	company := strings.TrimSpace(isam.ExtractField(rec, 0, 5))
+	code := strings.TrimSpace(isam.ExtractField(rec, 5, 6))
+	name := strings.TrimSpace(isam.ExtractField(rec, 11, 50))
+	if name == "" {
 		return ActivoFijoDetalle{}
 	}
 
 	nit := strings.TrimLeft(strings.TrimSpace(isam.ExtractField(rec, 61, 13)), "0")
 
-	fecha := ""
+	date := ""
 	if len(rec) >= 130 {
-		fechaRaw := isam.ExtractField(rec, 122, 8)
-		if looksLikeDate(fechaRaw) {
-			fecha = fechaRaw
+		dateRaw := isam.ExtractField(rec, 122, 8)
+		if looksLikeDate(dateRaw) {
+			date = dateRaw
 		}
 	}
 
-	var valorCompra float64
+	var purchaseValue float64
 	if len(rec) >= 138 {
-		valorCompra = DecodePacked(rec[130:138], 2)
+		purchaseValue = DecodePacked(rec[130:138], 2)
 	}
 
-	ubicacion := ""
+	location := ""
 	if len(rec) >= 632 {
-		ubicacion = strings.TrimSpace(isam.ExtractField(rec, 586, 46))
+		location = strings.TrimSpace(isam.ExtractField(rec, 586, 46))
 	}
-	referencia := ""
+	reference := ""
 	if len(rec) >= 744 {
-		referencia = strings.TrimSpace(isam.ExtractField(rec, 736, 8))
+		reference = strings.TrimSpace(isam.ExtractField(rec, 736, 8))
 	}
 
 	return ActivoFijoDetalle{
-		Grupo:          empresa,
-		Secuencia:      codigo,
-		Nombre:         nombre,
-		NitResponsable: nit,
-		Codigo:         codigo,
-		Fecha:          fecha,
-		ValorCompra:    valorCompra,
-		Ubicacion:      ubicacion,
-		Referencia:     referencia,
+		Group:          company,
+		Sequence:       code,
+		Name:           name,
+		ResponsibleNit: nit,
+		Code:           code,
+		Date:           date,
+		PurchaseValue:  purchaseValue,
+		Location:       location,
+		Reference:      reference,
 		Hash:           fmt.Sprintf("%x", hash[:8]),
 	}
 }
 
 func parseActivoDetalleHeuristic(rec []byte, hash [32]byte) ActivoFijoDetalle {
-	nombre := findDescripcion(rec, 11)
-	if nombre == "" {
+	name := findDescripcion(rec, 11)
+	if name == "" {
 		return ActivoFijoDetalle{}
 	}
 	return ActivoFijoDetalle{
-		Nombre: nombre,
-		Hash:   fmt.Sprintf("%x", hash[:8]),
+		Name: name,
+		Hash: fmt.Sprintf("%x", hash[:8]),
 	}
 }

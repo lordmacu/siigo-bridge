@@ -13,13 +13,13 @@ import (
 // SaldoConsolidado represents a consolidated balance per account from Z28YYYY.
 // Z28YYYY files contain per-account totals without NIT breakdown.
 type SaldoConsolidado struct {
-	Empresa        string  `json:"empresa"`          // company code (3 chars)
-	CuentaContable string  `json:"cuenta_contable"`  // PUC account code (up to 9 digits)
-	SaldoAnterior  float64 `json:"saldo_anterior"`   // previous balance (BCD)
-	Debito         float64 `json:"debito"`           // debit total (BCD)
-	Credito        float64 `json:"credito"`          // credit total (BCD)
-	SaldoFinal     float64 `json:"saldo_final"`      // calculated: anterior + debito - credito
-	Hash           string  `json:"hash"`
+	Company       string  `json:"empresa"`          // company code (3 chars)
+	LedgerAccount string  `json:"cuenta_contable"`  // PUC account code (up to 9 digits)
+	PrevBalance   float64 `json:"saldo_anterior"`   // previous balance (BCD)
+	Debit         float64 `json:"debito"`           // debit total (BCD)
+	Credit        float64 `json:"credito"`          // credit total (BCD)
+	FinalBalance  float64 `json:"saldo_final"`      // calculated: anterior + debito - credito
+	Hash          string  `json:"hash"`
 }
 
 // FindLatestZ28 finds the most recent Z28YYYY file.
@@ -62,16 +62,16 @@ func ParseSaldosConsolidadosFile(path, year string) ([]SaldoConsolidado, string,
 	}
 
 	extfh := isam.ExtfhAvailable()
-	var saldos []SaldoConsolidado
+	var balances []SaldoConsolidado
 	for _, rec := range records {
 		s := parseSaldoConsolidadoRecord(rec, extfh)
-		if s.CuentaContable == "" {
+		if s.LedgerAccount == "" {
 			continue
 		}
-		saldos = append(saldos, s)
+		balances = append(balances, s)
 	}
 
-	return saldos, year, nil
+	return balances, year, nil
 }
 
 func parseSaldoConsolidadoRecord(rec []byte, extfh bool) SaldoConsolidado {
@@ -96,16 +96,16 @@ func parseSaldoConsolidadoRecord(rec []byte, extfh bool) SaldoConsolidado {
 //	[54:62]   BCD credito (8 bytes packed decimal, 2 decimals)
 //	[62+]     monthly BCD values (12 months × debito/credito pairs)
 func parseSaldoConsolidadoEXTFH(rec []byte, hash [32]byte) SaldoConsolidado {
-	empresa := strings.TrimSpace(isam.ExtractField(rec, 0, 3))
-	cuentaRaw := strings.TrimSpace(isam.ExtractField(rec, 3, 9))
+	company := strings.TrimSpace(isam.ExtractField(rec, 0, 3))
+	accountRaw := strings.TrimSpace(isam.ExtractField(rec, 3, 9))
 
-	if cuentaRaw == "" {
+	if accountRaw == "" {
 		return SaldoConsolidado{}
 	}
 
-	// Validate cuenta is numeric
+	// Validate account is numeric
 	allZeros := true
-	for _, c := range cuentaRaw {
+	for _, c := range accountRaw {
 		if c < '0' || c > '9' {
 			return SaldoConsolidado{}
 		}
@@ -117,33 +117,33 @@ func parseSaldoConsolidadoEXTFH(rec []byte, hash [32]byte) SaldoConsolidado {
 		return SaldoConsolidado{}
 	}
 
-	var saldoAnt, debito, credito float64
+	var prevBalance, debit, credit float64
 	if len(rec) >= 62 {
-		saldoAnt = DecodePacked(rec[38:46], 2)
-		debito = DecodePacked(rec[46:54], 2)
-		credito = DecodePacked(rec[54:62], 2)
+		prevBalance = DecodePacked(rec[38:46], 2)
+		debit = DecodePacked(rec[46:54], 2)
+		credit = DecodePacked(rec[54:62], 2)
 	}
 
-	saldoFinal := saldoAnt + debito - credito
+	finalBalance := prevBalance + debit - credit
 
 	return SaldoConsolidado{
-		Empresa:        empresa,
-		CuentaContable: cuentaRaw,
-		SaldoAnterior:  saldoAnt,
-		Debito:         debito,
-		Credito:        credito,
-		SaldoFinal:     saldoFinal,
-		Hash:           fmt.Sprintf("%x", hash[:8]),
+		Company:       company,
+		LedgerAccount: accountRaw,
+		PrevBalance:   prevBalance,
+		Debit:         debit,
+		Credit:        credit,
+		FinalBalance:  finalBalance,
+		Hash:          fmt.Sprintf("%x", hash[:8]),
 	}
 }
 
 func parseSaldoConsolidadoHeuristic(rec []byte, hash [32]byte) SaldoConsolidado {
-	cuenta := findDigitSequence(rec, 3, 9)
-	if cuenta == "" {
+	account := findDigitSequence(rec, 3, 9)
+	if account == "" {
 		return SaldoConsolidado{}
 	}
 	return SaldoConsolidado{
-		CuentaContable: cuenta,
-		Hash:           fmt.Sprintf("%x", hash[:8]),
+		LedgerAccount: account,
+		Hash:          fmt.Sprintf("%x", hash[:8]),
 	}
 }

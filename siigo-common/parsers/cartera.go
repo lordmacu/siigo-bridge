@@ -10,18 +10,18 @@ import (
 )
 
 // Cartera represents a portfolio/accounting entry from Siigo Z09YYYY files.
-// Z09 files contain the full accounting detail: NIT, cuenta contable, fecha,
-// descripcion, tipo movimiento (D/C), and amounts (in packed decimal).
+// Z09 files contain the full accounting detail: NIT, ledger account, date,
+// description, movement type (D/C), and amounts (in packed decimal).
 type Cartera struct {
-	TipoRegistro   string `json:"tipo_registro"`   // F=factura, G=general, L=libro, P=pago, R=recibo
-	Empresa        string `json:"empresa"`          // 001
-	Secuencia      string `json:"secuencia"`        // sequential record number
-	TipoDoc        string `json:"tipo_doc"`         // N=NIT, etc.
-	NitTercero     string `json:"nit_tercero"`      // 13-digit NIT
-	CuentaContable string `json:"cuenta_contable"`  // 13-digit PUC account
-	Fecha          string `json:"fecha"`            // YYYYMMDD
-	Descripcion    string `json:"descripcion"`      // transaction description
-	TipoMov        string `json:"tipo_mov"`         // D=debit, C=credit
+	RecordType     string `json:"tipo_registro"`   // F=factura, G=general, L=libro, P=pago, R=recibo
+	Company        string `json:"empresa"`          // 001
+	Sequence       string `json:"secuencia"`        // sequential record number
+	DocType        string `json:"tipo_doc"`         // N=NIT, etc.
+	ThirdPartyNit  string `json:"nit_tercero"`      // 13-digit NIT
+	LedgerAccount  string `json:"cuenta_contable"`  // 13-digit PUC account
+	Date           string `json:"fecha"`            // YYYYMMDD
+	Description    string `json:"descripcion"`      // transaction description
+	MovType        string `json:"tipo_mov"`         // D=debit, C=credit
 	Hash           string `json:"hash"`
 }
 
@@ -54,35 +54,35 @@ func ParseCarteraLatest(dataPath string) ([]Cartera, string, error) {
 }
 
 // ParseCartera reads a Z09YYYY file and returns all cartera entries
-func ParseCartera(dataPath string, anio string) ([]Cartera, error) {
-	path := dataPath + "Z09" + anio
+func ParseCartera(dataPath string, year string) ([]Cartera, error) {
+	path := dataPath + "Z09" + year
 	records, _, err := isam.ReadIsamFile(path)
 	if err != nil {
 		return nil, err
 	}
 
 	extfh := isam.ExtfhAvailable()
-	var cartera []Cartera
+	var results []Cartera
 	for _, rec := range records {
 		c := parseCarteraRecord(rec, extfh)
-		if c.NitTercero == "" && c.Descripcion == "" {
+		if c.ThirdPartyNit == "" && c.Description == "" {
 			continue
 		}
-		cartera = append(cartera, c)
+		results = append(results, c)
 	}
 
-	return cartera, nil
+	return results, nil
 }
 
-// ParseCarteraByTipo returns cartera entries filtered by tipo_registro
-func ParseCarteraByTipo(dataPath string, anio string, tipo byte) ([]Cartera, error) {
-	all, err := ParseCartera(dataPath, anio)
+// ParseCarteraByTipo returns cartera entries filtered by record type
+func ParseCarteraByTipo(dataPath string, year string, recType byte) ([]Cartera, error) {
+	all, err := ParseCartera(dataPath, year)
 	if err != nil {
 		return nil, err
 	}
 	var filtered []Cartera
 	for _, c := range all {
-		if len(c.TipoRegistro) > 0 && c.TipoRegistro[0] == tipo {
+		if len(c.RecordType) > 0 && c.RecordType[0] == recType {
 			filtered = append(filtered, c)
 		}
 	}
@@ -105,60 +105,60 @@ func parseCarteraRecord(rec []byte, extfh bool) Cartera {
 // parseCarteraEXTFH extracts cartera records using verified EXTFH offsets.
 // Z09YYYY structure via EXTFH (1152 bytes):
 //
-//	[0:1]   tipo_registro - F/G/L/P/R
-//	[1:4]   empresa - 001
+//	[0:1]   record type - F/G/L/P/R
+//	[1:4]   company - 001
 //	[4:9]   padding (nulls)
 //	[9:10]  separator (0x1F)
-//	[10:15] secuencia - 00001
-//	[15:16] tipo_doc - N=NIT, etc.
-//	[16:29] nit_tercero - 13 chars, zero-padded NIT
-//	[29:42] cuenta_contable - 13 chars, PUC account code
-//	[42:50] fecha - YYYYMMDD
+//	[10:15] sequence - 00001
+//	[15:16] doc type - N=NIT, etc.
+//	[16:29] third-party NIT - 13 chars, zero-padded
+//	[29:42] ledger account - 13 chars, PUC account code
+//	[42:50] date - YYYYMMDD
 //	[50:93] packed decimal data (amounts, counts - binary, not decoded yet)
-//	[93:133] descripcion - 40 chars text
-//	[143:144] tipo_mov - D=debit, C=credit
+//	[93:143] description - 50 chars text (extra 10 bytes before D/C@143 confirmed as text)
+//	[143:144] movement type - D=debit, C=credit
 func parseCarteraEXTFH(rec []byte, hash [32]byte) Cartera {
-	tipo := rec[0]
+	recType := rec[0]
 	// Valid cartera record types
-	if tipo != 'F' && tipo != 'G' && tipo != 'L' && tipo != 'P' && tipo != 'R' {
+	if recType != 'F' && recType != 'G' && recType != 'L' && recType != 'P' && recType != 'R' {
 		return Cartera{}
 	}
 
-	empresa := isam.ExtractField(rec, 1, 3)
-	secuencia := isam.ExtractField(rec, 10, 5)
-	tipoDoc := isam.ExtractField(rec, 15, 1)
+	company := isam.ExtractField(rec, 1, 3)
+	seq := isam.ExtractField(rec, 10, 5)
+	docType := isam.ExtractField(rec, 15, 1)
 	nit := strings.TrimLeft(isam.ExtractField(rec, 16, 13), "0")
-	cuenta := isam.ExtractField(rec, 29, 13)
-	fecha := isam.ExtractField(rec, 42, 8)
+	account := isam.ExtractField(rec, 29, 13)
+	date := isam.ExtractField(rec, 42, 8)
 	// Description field: bytes 93-142 (50 chars). Previously extracted only 40 chars,
-	// truncating text like "PALACIO" → "PALACI". Extra 10 bytes before D/C@143 confirmed as text.
-	descripcion := strings.TrimSpace(isam.ExtractField(rec, 93, 50))
-	tipoMov := ""
+	// truncating text like "PALACIO" -> "PALACI". Extra 10 bytes before D/C@143 confirmed as text.
+	description := strings.TrimSpace(isam.ExtractField(rec, 93, 50))
+	movType := ""
 
-	// tipo_mov is at offset 143 (D or C)
+	// Movement type is at offset 143 (D or C)
 	if len(rec) > 143 {
 		mv := rec[143]
 		if mv == 'D' || mv == 'C' {
-			tipoMov = string(mv)
+			movType = string(mv)
 		}
 	}
 
-	// Validate fecha
-	if !looksLikeDate(fecha) {
-		fecha = ""
+	// Validate date
+	if !looksLikeDate(date) {
+		date = ""
 	}
 
 	return Cartera{
-		TipoRegistro:   string(tipo),
-		Empresa:        empresa,
-		Secuencia:      secuencia,
-		TipoDoc:        tipoDoc,
-		NitTercero:     nit,
-		CuentaContable: cuenta,
-		Fecha:          fecha,
-		Descripcion:    descripcion,
-		TipoMov:        tipoMov,
-		Hash:           fmt.Sprintf("%x", hash[:8]),
+		RecordType:    string(recType),
+		Company:       company,
+		Sequence:      seq,
+		DocType:       docType,
+		ThirdPartyNit: nit,
+		LedgerAccount: account,
+		Date:          date,
+		Description:   description,
+		MovType:       movType,
+		Hash:          fmt.Sprintf("%x", hash[:8]),
 	}
 }
 
@@ -173,16 +173,16 @@ func parseCarteraHeuristic(rec []byte, hash [32]byte) Cartera {
 		if rec[i] == '2' && rec[i+1] == '0' && isDigitRange(rec, i, 8) {
 			candidate := isam.ExtractField(rec, i, 8)
 			if looksLikeDate(candidate) {
-				c.Fecha = candidate
+				c.Date = candidate
 				break
 			}
 		}
 	}
 
-	c.Descripcion = findDescripcion(rec, 0)
+	c.Description = findDescripcion(rec, 0)
 
 	if len(rec) > 1 {
-		c.TipoRegistro = isam.ExtractField(rec, 0, 1)
+		c.RecordType = isam.ExtractField(rec, 0, 1)
 	}
 
 	return c
@@ -190,18 +190,18 @@ func parseCarteraHeuristic(rec []byte, hash [32]byte) Cartera {
 
 // ToFinearomCartera converts a Cartera entry to a map for the Finearom API
 func (c *Cartera) ToFinearomCartera() map[string]interface{} {
-	fecha := c.Fecha
-	if len(fecha) == 8 {
-		fecha = fecha[:4] + "-" + fecha[4:6] + "-" + fecha[6:8]
+	date := c.Date
+	if len(date) == 8 {
+		date = date[:4] + "-" + date[4:6] + "-" + date[6:8]
 	}
 
 	return map[string]interface{}{
-		"nit":              c.NitTercero,
-		"cuenta_contable":  c.CuentaContable,
-		"fecha":            fecha,
-		"tipo_movimiento":  c.TipoMov,
-		"descripcion":      c.Descripcion,
-		"tipo_registro":    c.TipoRegistro,
+		"nit":              c.ThirdPartyNit,
+		"cuenta_contable":  c.LedgerAccount,
+		"fecha":            date,
+		"tipo_movimiento":  c.MovType,
+		"descripcion":      c.Description,
+		"tipo_registro":    c.RecordType,
 		"siigo_sync_hash":  c.Hash,
 	}
 }

@@ -14,13 +14,13 @@ import (
 // Z04YYYY files are yearly snapshots of the product catalog.
 // The latest year file is a superset of all previous years.
 type Inventario struct {
-	Empresa      string `json:"empresa"`       // company code (5 chars)
-	Grupo        string `json:"grupo"`         // inventory group (3 chars)
-	Codigo       string `json:"codigo"`        // product code (6 chars)
-	Nombre       string `json:"nombre"`        // product name (50 chars)
-	NombreCorto  string `json:"nombre_corto"`  // short name (40 chars)
-	Referencia   string `json:"referencia"`    // reference (30 chars)
-	Hash         string `json:"hash"`
+	Company   string `json:"empresa"`       // company code (5 chars)
+	Group     string `json:"grupo"`         // inventory group (3 chars)
+	Code      string `json:"codigo"`        // product code (6 chars)
+	Name      string `json:"nombre"`        // product name (50 chars)
+	ShortName string `json:"nombre_corto"`  // short name (40 chars)
+	Reference string `json:"referencia"`    // reference (30 chars)
+	Hash      string `json:"hash"`
 }
 
 // FindLatestZ04 finds the most recent Z04YYYY file in the data directory.
@@ -72,7 +72,7 @@ func ParseInventarioFile(path, year string) ([]Inventario, string, error) {
 	var items []Inventario
 	for _, rec := range records {
 		item := parseInventarioRecord(rec, extfh)
-		if item.Codigo == "" || item.Nombre == "" {
+		if item.Code == "" || item.Name == "" {
 			continue // skip corrupt/empty records
 		}
 		items = append(items, item)
@@ -108,72 +108,72 @@ func parseInventarioEXTFH(rec []byte, hash [32]byte) Inventario {
 		return Inventario{}
 	}
 
-	empresa := strings.TrimSpace(isam.ExtractField(rec, 0, 5))
-	grupo := strings.TrimSpace(isam.ExtractField(rec, 5, 3))
-	codigo := strings.TrimSpace(isam.ExtractField(rec, 8, 6))
-	nombreRaw := strings.TrimSpace(isam.ExtractField(rec, 14, 50))
+	company := strings.TrimSpace(isam.ExtractField(rec, 0, 5))
+	group := strings.TrimSpace(isam.ExtractField(rec, 5, 3))
+	code := strings.TrimSpace(isam.ExtractField(rec, 8, 6))
+	nameRaw := strings.TrimSpace(isam.ExtractField(rec, 14, 50))
 
-	// First char of nombre may be a sub-index digit (0,1,2,3...)
+	// First char of name may be a sub-index digit (0,1,2,3...)
 	// for products with the same code but different variants
-	nombre := nombreRaw
+	name := nameRaw
 	subIndex := ""
-	if len(nombreRaw) > 1 && nombreRaw[0] >= '0' && nombreRaw[0] <= '9' {
-		subIndex = string(nombreRaw[0])
-		nombre = strings.TrimSpace(nombreRaw[1:])
+	if len(nameRaw) > 1 && nameRaw[0] >= '0' && nameRaw[0] <= '9' {
+		subIndex = string(nameRaw[0])
+		name = strings.TrimSpace(nameRaw[1:])
 	}
 
 	// If still empty after trimming sub-index, skip
-	if nombre == "" {
+	if name == "" {
 		return Inventario{}
 	}
 
-	// Use codigo + subIndex as unique key to handle variants
-	fullCodigo := codigo
+	// Use code + subIndex as unique key to handle variants
+	fullCode := code
 	if subIndex != "" {
-		fullCodigo = codigo + "-" + subIndex
+		fullCode = code + "-" + subIndex
 	}
 
-	nombreCorto := ""
+	shortName := ""
 	if len(rec) >= 104 {
-		nombreCorto = strings.TrimSpace(isam.ExtractField(rec, 64, 40))
+		shortName = strings.TrimSpace(isam.ExtractField(rec, 64, 40))
 	}
 
-	referencia := ""
+	reference := ""
 	if len(rec) >= 134 {
-		referencia = strings.TrimSpace(isam.ExtractField(rec, 104, 30))
+		reference = strings.TrimSpace(isam.ExtractField(rec, 104, 30))
 	}
 
 	return Inventario{
-		Empresa:     empresa,
-		Grupo:       grupo,
-		Codigo:      fullCodigo,
-		Nombre:      nombre,
-		NombreCorto: nombreCorto,
-		Referencia:  referencia,
-		Hash:        fmt.Sprintf("%x", hash[:8]),
+		Company:   company,
+		Group:     group,
+		Code:      fullCode,
+		Name:      name,
+		ShortName: shortName,
+		Reference: reference,
+		Hash:      fmt.Sprintf("%x", hash[:8]),
 	}
 }
 
 func parseInventarioHeuristic(rec []byte, hash [32]byte) Inventario {
 	// Binary fallback: try to find readable product name
-	nombre := findDescripcion(rec, 14)
-	if nombre == "" {
+	name := findDescripcion(rec, 14)
+	if name == "" {
 		return Inventario{}
 	}
 
 	return Inventario{
-		Nombre: nombre,
-		Hash:   fmt.Sprintf("%x", hash[:8]),
+		Name: name,
+		Hash: fmt.Sprintf("%x", hash[:8]),
 	}
 }
 
 // ToFinearomProduct converts an Inventario to a map for the Finearom API.
 func (inv *Inventario) ToFinearomProduct() map[string]interface{} {
 	return map[string]interface{}{
-		"code":            inv.Codigo,
-		"product_name":    inv.Nombre,
-		"grupo":           inv.Grupo,
-		"referencia":      inv.Referencia,
+		"code":            inv.Code,
+		"product_name":    inv.Name,
+		"grupo":           inv.Group,
+		"referencia":      inv.Reference,
 		"siigo_sync_hash": inv.Hash,
 	}
 }

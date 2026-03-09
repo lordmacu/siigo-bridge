@@ -38,28 +38,28 @@ func validatePlanCuentas(dataPath string) {
 		fmt.Printf("  ERROR: %v\n", err)
 		return
 	}
-	fmt.Printf("  Archivo: Z03%s, Total: %d registros\n", year, len(cuentas))
+	fmt.Printf("  File: Z03%s, Total: %d records\n", year, len(cuentas))
 
 	emptyEmp, emptyNombre, emptyCodigo := 0, 0, 0
 	activas, auxiliares := 0, 0
 	longNames := 0
 	for _, c := range cuentas {
-		if c.Empresa == "" {
+		if c.Company == "" {
 			emptyEmp++
 		}
-		if c.Nombre == "" {
+		if c.Name == "" {
 			emptyNombre++
 		}
-		if c.CodigoCuenta == "" {
+		if c.AccountCode == "" {
 			emptyCodigo++
 		}
-		if c.Activa {
+		if c.Active {
 			activas++
 		}
-		if c.Auxiliar {
+		if c.Auxiliary {
 			auxiliares++
 		}
-		if len(c.Nombre) > 50 {
+		if len(c.Name) > 50 {
 			longNames++
 		}
 	}
@@ -68,15 +68,15 @@ func validatePlanCuentas(dataPath string) {
 	fmt.Printf("  Nombres > 50 chars: %d\n", longNames)
 
 	if emptyNombre == 0 && emptyCodigo == 0 {
-		fmt.Println("  OK: Todos los campos clave parseados correctamente")
+		fmt.Println("  OK: All campos clave parsed correctamente")
 	} else {
-		fmt.Println("  FALLO: Revisar campos vacios")
+		fmt.Println("  FAILED: Revisar campos vacios")
 	}
 
 	showSample("Plan Cuentas", len(cuentas), func(i int) string {
 		c := cuentas[i]
 		return fmt.Sprintf("emp:%-3s cod:%-9s act:%v aux:%v nat:%-8s | %s",
-			c.Empresa, c.CodigoCuenta, c.Activa, c.Auxiliar, c.Naturaleza, c.Nombre)
+			c.Company, c.AccountCode, c.Active, c.Auxiliary, c.Nature, c.Name)
 	})
 }
 
@@ -92,27 +92,27 @@ func validateActivosFijos(dataPath string) {
 		fmt.Printf("  ERROR: %v\n", err)
 		return
 	}
-	fmt.Printf("  Archivo: Z27%s, Total: %d registros\n", year, len(activos))
+	fmt.Printf("  File: Z27%s, Total: %d records\n", year, len(activos))
 
 	emptyEmp, emptyNombre, emptyCodigo, emptyNit, emptyFecha := 0, 0, 0, 0, 0
 	badDates := 0
 	for _, a := range activos {
-		if a.Empresa == "" {
+		if a.Company == "" {
 			emptyEmp++
 		}
-		if a.Nombre == "" {
+		if a.Name == "" {
 			emptyNombre++
 		}
-		if a.Codigo == "" {
+		if a.Code == "" {
 			emptyCodigo++
 		}
-		if a.NitResponsable == "" {
+		if a.ResponsibleNit == "" {
 			emptyNit++
 		}
-		if a.FechaAdquisicion == "" {
+		if a.AcquisitionDate == "" {
 			emptyFecha++
-		} else if len(a.FechaAdquisicion) == 8 {
-			y := a.FechaAdquisicion[:4]
+		} else if len(a.AcquisitionDate) == 8 {
+			y := a.AcquisitionDate[:4]
 			if y < "1990" || y > "2030" {
 				badDates++
 			}
@@ -125,15 +125,15 @@ func validateActivosFijos(dataPath string) {
 	fmt.Printf("  Fechas invalidas: %d\n", badDates)
 
 	if emptyNombre == 0 && emptyCodigo == 0 {
-		fmt.Println("  OK: Campos clave parseados correctamente")
+		fmt.Println("  OK: Campos clave parsed correctamente")
 	} else {
-		fmt.Println("  FALLO: Revisar campos vacios")
+		fmt.Println("  FAILED: Revisar campos vacios")
 	}
 
 	showSample("Activos Fijos", len(activos), func(i int) string {
 		a := activos[i]
 		return fmt.Sprintf("emp:%-5s cod:%-6s nit:%-13s fecha:%-8s | %s",
-			a.Empresa, a.Codigo, a.NitResponsable, a.FechaAdquisicion, a.Nombre)
+			a.Company, a.Code, a.ResponsibleNit, a.AcquisitionDate, a.Name)
 	})
 }
 
@@ -150,43 +150,43 @@ func validateDocumentos(dataPath string) {
 		fmt.Printf("  ERROR: %v\n", err)
 		return
 	}
-	fmt.Printf("  Archivo: Z11%s, Total: %d registros\n", year, len(docs))
+	fmt.Printf("  File: Z11%s, Total: %d records\n", year, len(docs))
 
 	emptyTipo, emptySeq, emptyNit, emptyCuenta, emptyFecha, emptyDesc, emptyDC := 0, 0, 0, 0, 0, 0, 0
 	badDates := 0
 	tipos := map[string]int{}
 	dc := map[string]int{}
 	for _, d := range docs {
-		if d.TipoComprobante == "" {
+		if d.VoucherType == "" {
 			emptyTipo++
 		}
-		if d.Secuencia == "" {
+		if d.Sequence == "" {
 			emptySeq++
 		}
-		if d.NitTercero == "" {
+		if d.ThirdPartyNit == "" {
 			emptyNit++
 		}
-		if d.CuentaContable == "" {
+		if d.LedgerAccount == "" {
 			emptyCuenta++
 		}
-		if d.Fecha == "" {
+		if d.Date == "" {
 			emptyFecha++
-		} else if len(d.Fecha) == 8 {
-			y := d.Fecha[:4]
+		} else if len(d.Date) == 8 {
+			y := d.Date[:4]
 			if y < "1990" || y > "2030" {
 				badDates++
 			}
 		} else {
 			badDates++
 		}
-		if d.Descripcion == "" {
+		if d.Description == "" {
 			emptyDesc++
 		}
-		if d.TipoMov == "" {
+		if d.MovType == "" {
 			emptyDC++
 		}
-		tipos[d.TipoComprobante]++
-		dc[d.TipoMov]++
+		tipos[d.VoucherType]++
+		dc[d.MovType]++
 	}
 	fmt.Printf("  Vacios: tipo=%d seq=%d nit=%d cuenta=%d fecha=%d desc=%d D/C=%d\n",
 		emptyTipo, emptySeq, emptyNit, emptyCuenta, emptyFecha, emptyDesc, emptyDC)
@@ -195,18 +195,18 @@ func validateDocumentos(dataPath string) {
 	fmt.Printf("  D/C: %v\n", dc)
 
 	if emptyTipo == 0 && emptyCuenta == 0 && emptyFecha == 0 {
-		fmt.Println("  OK: Campos clave parseados correctamente")
+		fmt.Println("  OK: Campos clave parsed correctamente")
 	} else if emptyCuenta == 0 {
 		fmt.Println("  PARCIAL: Cuenta OK, otros campos parciales")
 	} else {
-		fmt.Println("  FALLO: Revisar campos vacios")
+		fmt.Println("  FAILED: Revisar campos vacios")
 	}
 
 	showSample("Documentos", len(docs), func(i int) string {
 		d := docs[i]
 		return fmt.Sprintf("tipo:%-1s cod:%-3s seq:%-5s nit:%-10s cuenta:%-13s fecha:%-8s D/C:%-1s | %s",
-			d.TipoComprobante, d.CodigoComp, d.Secuencia, d.NitTercero, d.CuentaContable,
-			d.Fecha, d.TipoMov, d.Descripcion)
+			d.VoucherType, d.VoucherCode, d.Sequence, d.ThirdPartyNit, d.LedgerAccount,
+			d.Date, d.MovType, d.Description)
 	})
 }
 
@@ -222,34 +222,34 @@ func validateTercerosAmpliados(dataPath string) {
 		fmt.Printf("  ERROR: %v\n", err)
 		return
 	}
-	fmt.Printf("  Archivo: Z08%sA, Total: %d registros\n", year, len(terceros))
+	fmt.Printf("  File: Z08%sA, Total: %d records\n", year, len(terceros))
 
 	emptyEmp, emptyNit, emptyNombre, emptyTipo, emptyDir, emptyEmail := 0, 0, 0, 0, 0, 0
 	withRepLegal := 0
 	tiposPersona := map[string]int{}
 	for _, t := range terceros {
-		if t.Empresa == "" {
+		if t.Company == "" {
 			emptyEmp++
 		}
 		if t.Nit == "" {
 			emptyNit++
 		}
-		if t.Nombre == "" {
+		if t.Name == "" {
 			emptyNombre++
 		}
-		if t.TipoPersona == "" {
+		if t.PersonType == "" {
 			emptyTipo++
 		}
-		if t.Direccion == "" {
+		if t.Address == "" {
 			emptyDir++
 		}
 		if t.Email == "" {
 			emptyEmail++
 		}
-		if t.RepresentanteLegal != "" {
+		if t.LegalRep != "" {
 			withRepLegal++
 		}
-		tiposPersona[t.TipoPersona]++
+		tiposPersona[t.PersonType]++
 	}
 	fmt.Printf("  Vacios: empresa=%d nit=%d nombre=%d tipoPersona=%d dir=%d email=%d\n",
 		emptyEmp, emptyNit, emptyNombre, emptyTipo, emptyDir, emptyEmail)
@@ -257,9 +257,9 @@ func validateTercerosAmpliados(dataPath string) {
 	fmt.Printf("  Tipos persona: %v\n", tiposPersona)
 
 	if emptyNit == 0 && emptyNombre == 0 {
-		fmt.Println("  OK: Campos clave parseados correctamente")
+		fmt.Println("  OK: Campos clave parsed correctamente")
 	} else {
-		fmt.Println("  FALLO: Revisar campos vacios")
+		fmt.Println("  FAILED: Revisar campos vacios")
 	}
 
 	showSample("Terceros Ampliados", len(terceros), func(i int) string {
@@ -269,7 +269,7 @@ func validateTercerosAmpliados(dataPath string) {
 			email = email[:25] + "..."
 		}
 		return fmt.Sprintf("emp:%-3s nit:%-10s tipo:%-2s dir:%-20s email:%-28s | %s",
-			t.Empresa, t.Nit, t.TipoPersona, truncate(t.Direccion, 20), email, t.Nombre)
+			t.Company, t.Nit, t.PersonType, truncate(t.Address, 20), email, t.Name)
 	})
 }
 
@@ -285,24 +285,24 @@ func validateSaldosTerceros(dataPath string) {
 		fmt.Printf("  ERROR: %v\n", err)
 		return
 	}
-	fmt.Printf("  Archivo: Z25%s, Total: %d registros\n", year, len(saldos))
+	fmt.Printf("  File: Z25%s, Total: %d records\n", year, len(saldos))
 
 	emptyEmp, emptyCuenta, emptyNit := 0, 0, 0
 	zeroAll, negSaldo := 0, 0
 	for _, s := range saldos {
-		if s.Empresa == "" {
+		if s.Company == "" {
 			emptyEmp++
 		}
-		if s.CuentaContable == "" {
+		if s.LedgerAccount == "" {
 			emptyCuenta++
 		}
-		if s.NitTercero == "" {
+		if s.ThirdPartyNit == "" {
 			emptyNit++
 		}
-		if s.SaldoAnterior == 0 && s.Debito == 0 && s.Credito == 0 {
+		if s.PrevBalance == 0 && s.Debit == 0 && s.Credit == 0 {
 			zeroAll++
 		}
-		if s.SaldoFinal < 0 {
+		if s.FinalBalance < 0 {
 			negSaldo++
 		}
 	}
@@ -310,16 +310,16 @@ func validateSaldosTerceros(dataPath string) {
 	fmt.Printf("  Todos montos en cero: %d, Saldo final negativo: %d\n", zeroAll, negSaldo)
 
 	if emptyCuenta == 0 && emptyNit == 0 {
-		fmt.Println("  OK: Campos clave parseados correctamente")
+		fmt.Println("  OK: Campos clave parsed correctamente")
 	} else {
-		fmt.Println("  FALLO: Revisar campos vacios")
+		fmt.Println("  FAILED: Revisar campos vacios")
 	}
 
 	showSample("Saldos Terceros", len(saldos), func(i int) string {
 		s := saldos[i]
 		return fmt.Sprintf("emp:%-3s cuenta:%-9s nit:%-10s ant:%.2f deb:%.2f cred:%.2f final:%.2f",
-			s.Empresa, s.CuentaContable, s.NitTercero,
-			s.SaldoAnterior, s.Debito, s.Credito, s.SaldoFinal)
+			s.Company, s.LedgerAccount, s.ThirdPartyNit,
+			s.PrevBalance, s.Debit, s.Credit, s.FinalBalance)
 	})
 }
 
@@ -335,21 +335,21 @@ func validateSaldosConsolidados(dataPath string) {
 		fmt.Printf("  ERROR: %v\n", err)
 		return
 	}
-	fmt.Printf("  Archivo: Z28%s, Total: %d registros\n", year, len(saldos))
+	fmt.Printf("  File: Z28%s, Total: %d records\n", year, len(saldos))
 
 	emptyEmp, emptyCuenta := 0, 0
 	zeroAll, negSaldo := 0, 0
 	for _, s := range saldos {
-		if s.Empresa == "" {
+		if s.Company == "" {
 			emptyEmp++
 		}
-		if s.CuentaContable == "" {
+		if s.LedgerAccount == "" {
 			emptyCuenta++
 		}
-		if s.SaldoAnterior == 0 && s.Debito == 0 && s.Credito == 0 {
+		if s.PrevBalance == 0 && s.Debit == 0 && s.Credit == 0 {
 			zeroAll++
 		}
-		if s.SaldoFinal < 0 {
+		if s.FinalBalance < 0 {
 			negSaldo++
 		}
 	}
@@ -357,23 +357,23 @@ func validateSaldosConsolidados(dataPath string) {
 	fmt.Printf("  Todos montos en cero: %d, Saldo final negativo: %d\n", zeroAll, negSaldo)
 
 	if emptyCuenta == 0 {
-		fmt.Println("  OK: Campos clave parseados correctamente")
+		fmt.Println("  OK: Campos clave parsed correctamente")
 	} else {
-		fmt.Println("  FALLO: Revisar campos vacios")
+		fmt.Println("  FAILED: Revisar campos vacios")
 	}
 
 	showSample("Saldos Consolidados", len(saldos), func(i int) string {
 		s := saldos[i]
 		return fmt.Sprintf("emp:%-3s cuenta:%-9s ant:%.2f deb:%.2f cred:%.2f final:%.2f",
-			s.Empresa, s.CuentaContable,
-			s.SaldoAnterior, s.Debito, s.Credito, s.SaldoFinal)
+			s.Company, s.LedgerAccount,
+			s.PrevBalance, s.Debit, s.Credit, s.FinalBalance)
 	})
 }
 
 func showSample(label string, total int, formatter func(i int) string) {
-	fmt.Printf("\n  Muestra (%s, %d total):\n", label, total)
+	fmt.Printf("\n  Sample (%s, %d total):\n", label, total)
 	if total == 0 {
-		fmt.Println("    (sin registros)")
+		fmt.Println("    (no records)")
 		return
 	}
 	step := total / 5
@@ -402,24 +402,24 @@ func validateDane(dataPath string) {
 
 	emptyCod, emptyNombre := 0, 0
 	for _, c := range codigos {
-		if c.Codigo == "" {
+		if c.Code == "" {
 			emptyCod++
 		}
-		if c.Nombre == "" {
+		if c.Name == "" {
 			emptyNombre++
 		}
 	}
 	fmt.Printf("  Vacios: codigo=%d nombre=%d\n", emptyCod, emptyNombre)
 
 	if emptyCod == 0 && emptyNombre == 0 {
-		fmt.Println("  OK: Todos los campos parseados correctamente")
+		fmt.Println("  OK: All campos parsed correctamente")
 	} else {
-		fmt.Println("  FALLO: Revisar campos vacios")
+		fmt.Println("  FAILED: Revisar campos vacios")
 	}
 
 	showSample("DANE", len(codigos), func(i int) string {
 		c := codigos[i]
-		return fmt.Sprintf("cod:%s | %s", c.Codigo, c.Nombre)
+		return fmt.Sprintf("cod:%s | %s", c.Code, c.Name)
 	})
 }
 
@@ -435,32 +435,32 @@ func validateHistorial(dataPath string) {
 		fmt.Printf("  ERROR: %v\n", err)
 		return
 	}
-	fmt.Printf("  Archivo: Z18%s, Total: %d registros\n", year, len(docs))
+	fmt.Printf("  File: Z18%s, Total: %d records\n", year, len(docs))
 
 	emptyFecha, emptyNombre1, emptyNombre2, emptyNit := 0, 0, 0, 0
 	badDates := 0
 	subTipos := map[string]int{}
 	for _, d := range docs {
-		if d.Fecha == "" {
+		if d.Date == "" {
 			emptyFecha++
-		} else if len(d.Fecha) == 8 {
-			y := d.Fecha[:4]
+		} else if len(d.Date) == 8 {
+			y := d.Date[:4]
 			if y < "1990" || y > "2030" {
 				badDates++
 			}
 		} else {
 			badDates++
 		}
-		if d.NombreOrigen == "" {
+		if d.OriginName == "" {
 			emptyNombre1++
 		}
-		if d.NombreDestin == "" {
+		if d.DestName == "" {
 			emptyNombre2++
 		}
-		if d.NitOrigen == "" {
+		if d.OriginNit == "" {
 			emptyNit++
 		}
-		subTipos[d.SubTipo]++
+		subTipos[d.SubType]++
 	}
 	fmt.Printf("  Vacios: fecha=%d nombre1=%d nombre2=%d nit=%d\n",
 		emptyFecha, emptyNombre1, emptyNombre2, emptyNit)
@@ -468,7 +468,7 @@ func validateHistorial(dataPath string) {
 	fmt.Printf("  SubTipos: %v\n", subTipos)
 
 	if emptyNombre1 == 0 {
-		fmt.Println("  OK: Campos clave parseados correctamente")
+		fmt.Println("  OK: Campos clave parsed correctamente")
 	} else {
 		fmt.Println("  PARCIAL: Algunos nombres vacios")
 	}
@@ -476,7 +476,7 @@ func validateHistorial(dataPath string) {
 	showSample("Historial", len(docs), func(i int) string {
 		d := docs[i]
 		return fmt.Sprintf("tipo:%s sub:%-3s emp:%-3s fecha:%-8s nit:%-10s | %s / %s",
-			d.TipoRegistro, d.SubTipo, d.Empresa, d.Fecha, d.NitOrigen, d.NombreOrigen, d.NombreDestin)
+			d.RecordType, d.SubType, d.Company, d.Date, d.OriginNit, d.OriginName, d.DestName)
 	})
 }
 
@@ -495,27 +495,27 @@ func validateICA(dataPath string) {
 
 	emptyCod, emptyNombre, emptyTarifa := 0, 0, 0
 	for _, a := range actividades {
-		if a.Codigo == "" {
+		if a.Code == "" {
 			emptyCod++
 		}
-		if a.Nombre == "" {
+		if a.Name == "" {
 			emptyNombre++
 		}
-		if a.Tarifa == "" {
+		if a.Rate == "" {
 			emptyTarifa++
 		}
 	}
 	fmt.Printf("  Vacios: codigo=%d nombre=%d tarifa=%d\n", emptyCod, emptyNombre, emptyTarifa)
 
 	if emptyCod == 0 && emptyNombre == 0 {
-		fmt.Println("  OK: Todos los campos parseados correctamente")
+		fmt.Println("  OK: All campos parsed correctamente")
 	} else {
-		fmt.Println("  FALLO: Revisar campos vacios")
+		fmt.Println("  FAILED: Revisar campos vacios")
 	}
 
 	showSample("ICA", len(actividades), func(i int) string {
 		a := actividades[i]
-		return fmt.Sprintf("cod:%s tarifa:%-6s | %s", a.Codigo, a.Tarifa, a.Nombre)
+		return fmt.Sprintf("cod:%s tarifa:%-6s | %s", a.Code, a.Rate, a.Name)
 	})
 }
 
@@ -538,24 +538,24 @@ func validatePILA(dataPath string) {
 	conceptoMap := map[string]int{}
 	bases := map[string]int{}
 	for _, c := range conceptos {
-		if c.Tipo == "" {
+		if c.RecType == "" {
 			emptyTipo++
 		}
-		if c.Fondo == "" {
+		if c.Fund == "" {
 			emptyFondo++
 		}
-		if c.Concepto == "" {
+		if c.Concept == "" {
 			emptyConcepto++
 		}
 		if c.Flags == "" {
 			emptyFlags++
 		}
-		if c.BaseCalculo == "" {
+		if c.CalcBase == "" {
 			emptyBase++
 		}
-		fondos[c.Fondo]++
-		conceptoMap[c.Concepto]++
-		bases[c.BaseCalculo]++
+		fondos[c.Fund]++
+		conceptoMap[c.Concept]++
+		bases[c.CalcBase]++
 	}
 	fmt.Printf("  Vacios: tipo=%d fondo=%d concepto=%d flags=%d base=%d\n",
 		emptyTipo, emptyFondo, emptyConcepto, emptyFlags, emptyBase)
@@ -564,15 +564,15 @@ func validatePILA(dataPath string) {
 	fmt.Printf("  Bases calculo: %v\n", bases)
 
 	if emptyFondo == 0 && emptyConcepto == 0 {
-		fmt.Println("  OK: Todos los campos parseados correctamente")
+		fmt.Println("  OK: All campos parsed correctamente")
 	} else {
-		fmt.Println("  FALLO: Revisar campos vacios")
+		fmt.Println("  FAILED: Revisar campos vacios")
 	}
 
 	showSample("PILA", len(conceptos), func(i int) string {
 		c := conceptos[i]
 		return fmt.Sprintf("tipo:%-8s fondo:%-4s concepto:%-3s flags:%-2s base:%-4s calc:%s",
-			c.Tipo, c.Fondo, c.Concepto, c.Flags, c.TipoBase, c.BaseCalculo)
+			c.RecType, c.Fund, c.Concept, c.Flags, c.BaseType, c.CalcBase)
 	})
 }
 
@@ -591,7 +591,7 @@ func validateLibrosAuxiliares(dataPath string) {
 		fmt.Printf("  ERROR: %v\n", err)
 		return
 	}
-	fmt.Printf("  Archivo: Z07%s, Total: %d registros\n", year, len(entries))
+	fmt.Printf("  File: Z07%s, Total: %d records\n", year, len(entries))
 
 	emptyEmp, emptyCuenta, emptyNit, emptyTipo, emptyFechaDoc, emptyFechaReg := 0, 0, 0, 0, 0, 0
 	badDatesDoc, badDatesReg := 0, 0
@@ -599,43 +599,43 @@ func validateLibrosAuxiliares(dataPath string) {
 	tipos := map[string]int{}
 	tiposSec := map[string]int{}
 	for _, e := range entries {
-		if e.Empresa == "" {
+		if e.Company == "" {
 			emptyEmp++
 		}
-		if e.CuentaContable == "" {
+		if e.LedgerAccount == "" {
 			emptyCuenta++
 		}
-		if e.NitTercero == "" {
+		if e.ThirdPartyNit == "" {
 			emptyNit++
 		}
-		if e.TipoComprobante == "" {
+		if e.VoucherType == "" {
 			emptyTipo++
 		}
-		if e.FechaDocumento == "" {
+		if e.DocDate == "" {
 			emptyFechaDoc++
-		} else if len(e.FechaDocumento) == 8 {
-			y := e.FechaDocumento[:4]
+		} else if len(e.DocDate) == 8 {
+			y := e.DocDate[:4]
 			if y < "1990" || y > "2030" {
 				badDatesDoc++
 			}
 		} else {
 			badDatesDoc++
 		}
-		if e.FechaRegistro == "" {
+		if e.RegDate == "" {
 			emptyFechaReg++
-		} else if len(e.FechaRegistro) == 8 {
-			y := e.FechaRegistro[:4]
+		} else if len(e.RegDate) == 8 {
+			y := e.RegDate[:4]
 			if y < "1990" || y > "2030" {
 				badDatesReg++
 			}
 		} else {
 			badDatesReg++
 		}
-		if e.Saldo == 0 && e.Debito == 0 && e.Credito == 0 {
+		if e.Balance == 0 && e.Debit == 0 && e.Credit == 0 {
 			zeroSaldo++
 		}
-		tipos[e.TipoComprobante]++
-		tiposSec[e.TipoCompSec]++
+		tipos[e.VoucherType]++
+		tiposSec[e.SecVoucherType]++
 	}
 	fmt.Printf("  Vacios: empresa=%d cuenta=%d nit=%d tipo=%d fechaDoc=%d fechaReg=%d\n",
 		emptyEmp, emptyCuenta, emptyNit, emptyTipo, emptyFechaDoc, emptyFechaReg)
@@ -645,20 +645,20 @@ func validateLibrosAuxiliares(dataPath string) {
 	fmt.Printf("  Tipos secundarios: %v\n", tiposSec)
 
 	if emptyCuenta == 0 && emptyNit == 0 && emptyFechaDoc == 0 {
-		fmt.Println("  OK: Campos clave parseados correctamente")
+		fmt.Println("  OK: Campos clave parsed correctamente")
 	} else if emptyCuenta == 0 {
 		fmt.Println("  PARCIAL: Cuenta OK, otros campos parciales")
 	} else {
-		fmt.Println("  FALLO: Revisar campos vacios")
+		fmt.Println("  FAILED: Revisar campos vacios")
 	}
 
 	showSample("Libros Auxiliares", len(entries), func(i int) string {
 		e := entries[i]
 		return fmt.Sprintf("emp:%-3s cuenta:%-9s tipo:%s-%s nit:%-10s fechaDoc:%-8s fechaReg:%-8s saldo:%.2f deb:%.2f cred:%.2f ref:%s sec:%s-%s",
-			e.Empresa, e.CuentaContable, e.TipoComprobante, e.CodigoComprobante,
-			e.NitTercero, e.FechaDocumento, e.FechaRegistro,
-			e.Saldo, e.Debito, e.Credito,
-			e.NumeroReferencia, e.TipoCompSec, e.CodigoCompSec)
+			e.Company, e.LedgerAccount, e.VoucherType, e.VoucherCode,
+			e.ThirdPartyNit, e.DocDate, e.RegDate,
+			e.Balance, e.Debit, e.Credit,
+			e.RefNumber, e.SecVoucherType, e.SecVoucherCode)
 	})
 }
 

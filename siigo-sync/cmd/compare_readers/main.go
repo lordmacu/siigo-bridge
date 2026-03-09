@@ -122,7 +122,7 @@ func main() {
 				v2stats.DataTypes[isam.RecTypeRefData],
 				v2stats.DataTypes[isam.RecTypeRedRef],
 				v2stats.DeletedCount, v2stats.NullCount,
-				v2stats.SystemCount, v2stats.HeaderCount, v2stats.PointerCount)
+				v2stats.SystemCount, v2stats.DataTypes[isam.RecTypeDeleted], v2stats.PointerCount)
 			totalV2 += v2count
 		}
 

@@ -17,16 +17,16 @@ func main() {
 		fmt.Printf("ERROR: %v\n", err)
 		return
 	}
-	fmt.Printf("Archivo: Z07%s, Total: %d registros\n\n", year, len(entries))
+	fmt.Printf("File: Z07%s, Total: %d records\n\n", year, len(entries))
 
 	// Show ALL records
 	fmt.Println("--- TODOS LOS REGISTROS ---")
 	for i, e := range entries {
 		fmt.Printf("[%2d] emp:%-3s cuenta:%-9s tipo:%s-%s nit:%-10s fechaDoc:%-8s fechaReg:%-8s saldo:%12.2f deb:%12.2f cred:%12.2f ref:%-7s sec:%s-%s\n",
-			i, e.Empresa, e.CuentaContable, e.TipoComprobante, e.CodigoComprobante,
-			e.NitTercero, e.FechaDocumento, e.FechaRegistro,
-			e.Saldo, e.Debito, e.Credito,
-			e.NumeroReferencia, e.TipoCompSec, e.CodigoCompSec)
+			i, e.Company, e.LedgerAccount, e.VoucherType, e.VoucherCode,
+			e.ThirdPartyNit, e.DocDate, e.RegDate,
+			e.Balance, e.Debit, e.Credit,
+			e.RefNumber, e.SecVoucherType, e.SecVoucherCode)
 	}
 
 	// Statistics
@@ -40,12 +40,12 @@ func main() {
 	empresas := map[string]int{}
 	refs := map[string]int{}
 	for _, e := range entries {
-		cuentas[e.CuentaContable]++
-		nits[e.NitTercero]++
-		tipos[e.TipoComprobante]++
-		tiposSec[e.TipoCompSec]++
-		empresas[e.Empresa]++
-		refs[e.NumeroReferencia]++
+		cuentas[e.LedgerAccount]++
+		nits[e.ThirdPartyNit]++
+		tipos[e.VoucherType]++
+		tiposSec[e.SecVoucherType]++
+		empresas[e.Company]++
+		refs[e.RefNumber]++
 	}
 
 	fmt.Printf("Empresas unicas: %v\n", empresas)
@@ -69,18 +69,18 @@ func main() {
 	minDateDoc, maxDateDoc := "99999999", "00000000"
 	minDateReg, maxDateReg := "99999999", "00000000"
 	for _, e := range entries {
-		if e.FechaDocumento < minDateDoc {
-			minDateDoc = e.FechaDocumento
+		if e.DocDate < minDateDoc {
+			minDateDoc = e.DocDate
 		}
-		if e.FechaDocumento > maxDateDoc {
-			maxDateDoc = e.FechaDocumento
+		if e.DocDate > maxDateDoc {
+			maxDateDoc = e.DocDate
 		}
-		if e.FechaRegistro != "" {
-			if e.FechaRegistro < minDateReg {
-				minDateReg = e.FechaRegistro
+		if e.RegDate != "" {
+			if e.RegDate < minDateReg {
+				minDateReg = e.RegDate
 			}
-			if e.FechaRegistro > maxDateReg {
-				maxDateReg = e.FechaRegistro
+			if e.RegDate > maxDateReg {
+				maxDateReg = e.RegDate
 			}
 		}
 	}
@@ -93,17 +93,17 @@ func main() {
 	nonZeroSaldo := 0
 	negativeSaldo := 0
 	for _, e := range entries {
-		if e.Saldo < minSaldo {
-			minSaldo = e.Saldo
+		if e.Balance < minSaldo {
+			minSaldo = e.Balance
 		}
-		if e.Saldo > maxSaldo {
-			maxSaldo = e.Saldo
+		if e.Balance > maxSaldo {
+			maxSaldo = e.Balance
 		}
-		sumSaldo += e.Saldo
-		if e.Saldo != 0 {
+		sumSaldo += e.Balance
+		if e.Balance != 0 {
 			nonZeroSaldo++
 		}
-		if e.Saldo < 0 {
+		if e.Balance < 0 {
 			negativeSaldo++
 		}
 	}
@@ -113,10 +113,10 @@ func main() {
 	// Check debito/credito
 	nonZeroDeb, nonZeroCred := 0, 0
 	for _, e := range entries {
-		if e.Debito != 0 {
+		if e.Debit != 0 {
 			nonZeroDeb++
 		}
-		if e.Credito != 0 {
+		if e.Credit != 0 {
 			nonZeroCred++
 		}
 	}
@@ -126,7 +126,7 @@ func main() {
 	fmt.Println("\n--- CRUCE TIPO vs TIPO SECUNDARIO ---")
 	cross := map[string]int{}
 	for _, e := range entries {
-		key := e.TipoComprobante + "->" + e.TipoCompSec
+		key := e.VoucherType + "->" + e.SecVoucherType
 		cross[key]++
 	}
 	for k, v := range cross {
@@ -137,9 +137,9 @@ func main() {
 	fmt.Println("\n--- RELACION FECHA DOC vs FECHA REG ---")
 	docBeforeReg, docAfterReg, docEqReg := 0, 0, 0
 	for _, e := range entries {
-		if e.FechaDocumento < e.FechaRegistro {
+		if e.DocDate < e.RegDate {
 			docBeforeReg++
-		} else if e.FechaDocumento > e.FechaRegistro {
+		} else if e.DocDate > e.RegDate {
 			docAfterReg++
 		} else {
 			docEqReg++

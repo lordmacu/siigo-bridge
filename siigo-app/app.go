@@ -40,13 +40,13 @@ func (a *App) startup(ctx context.Context) {
 		return
 	}
 	a.db = db
-	a.db.AddLog("info", "APP", "Aplicacion iniciada")
+	a.db.AddLog("info", "APP", "Application started")
 
 	cfg, err := config.Load("config.json")
 	if err != nil {
 		cfg = config.Default()
 		cfg.Save("config.json")
-		a.db.AddLog("warning", "APP", "Config no encontrada, se creo config por defecto")
+		a.db.AddLog("warning", "APP", "Config not found, default config created")
 	}
 	a.cfg = cfg
 
@@ -67,7 +67,7 @@ func (a *App) shutdown(ctx context.Context) {
 func (a *App) startSyncLoop() {
 	a.looping = true
 	a.paused = false
-	a.db.AddLog("info", "SYNC", "Sync loop iniciado")
+	a.db.AddLog("info", "SYNC", "Sync loop started")
 
 	interval := time.Duration(a.cfg.Sync.IntervalSeconds) * time.Second
 	if interval < 10*time.Second {
@@ -87,7 +87,7 @@ func (a *App) startSyncLoop() {
 			}
 		case <-a.stopCh:
 			a.looping = false
-			a.db.AddLog("info", "SYNC", "Sync loop detenido")
+			a.db.AddLog("info", "SYNC", "Sync loop stopped")
 			return
 		}
 	}
@@ -97,7 +97,7 @@ func (a *App) doOneSyncCycle() {
 	a.syncing = true
 	defer func() { a.syncing = false }()
 
-	a.db.AddLog("info", "SYNC", "--- Ciclo iniciado ---")
+	a.db.AddLog("info", "SYNC", "--- Cycle started ---")
 
 	// Step 1: Parse ISAM files and diff against SQLite
 	a.diffClientes()
@@ -113,7 +113,7 @@ func (a *App) doOneSyncCycle() {
 		a.sendPending("cartera")
 	}
 
-	a.db.AddLog("info", "SYNC", "--- Ciclo completado ---")
+	a.db.AddLog("info", "SYNC", "--- Cycle completed ---")
 }
 
 func (a *App) ensureLogin() bool {
@@ -135,7 +135,7 @@ func (a *App) PauseSync() string {
 		return "already_paused"
 	}
 	a.paused = true
-	a.db.AddLog("info", "SYNC", "Sincronizacion pausada por el usuario")
+	a.db.AddLog("info", "SYNC", "Sync paused by user")
 	return "ok"
 }
 
@@ -145,7 +145,7 @@ func (a *App) ResumeSync() string {
 		return "already_running"
 	}
 	a.paused = false
-	a.db.AddLog("info", "SYNC", "Sincronizacion reanudada por el usuario")
+	a.db.AddLog("info", "SYNC", "Sync resumed by user")
 	return "ok"
 }
 
@@ -155,17 +155,17 @@ func (a *App) IsSyncing() bool { return a.syncing }
 // SyncNow triggers an immediate sync cycle
 func (a *App) SyncNow() string {
 	if a.syncing {
-		return "Ya hay una sincronizacion en curso"
+		return "Sync already in progress"
 	}
 	go a.doOneSyncCycle()
-	return "Sincronizacion manual iniciada"
+	return "Manual sync started"
 }
 
 // RetryErrors resets all error records to pending for a given table
 func (a *App) RetryErrors(tableName string) string {
 	n := a.db.RetryErrors(tableName)
-	a.db.AddLog("info", "SYNC", fmt.Sprintf("Reintentando %d registros con error en %s", n, tableName))
-	return fmt.Sprintf("ok: %d registros marcados para reenvio", n)
+	a.db.AddLog("info", "SYNC", fmt.Sprintf("Retrying %d error records in %s", n, tableName))
+	return fmt.Sprintf("ok: %d records marked for retry", n)
 }
 
 // ==================== DIFF: Parse ISAM → Compare with SQLite ====================
@@ -173,7 +173,7 @@ func (a *App) RetryErrors(tableName string) string {
 func (a *App) diffClientes() {
 	clientes, err := parsers.ParseTercerosClientes(a.cfg.Siigo.DataPath)
 	if err != nil {
-		a.db.AddLog("error", "Z17", "Error parseando: "+err.Error())
+		a.db.AddLog("error", "Z17", "Error parsing: "+err.Error())
 		return
 	}
 
@@ -181,13 +181,13 @@ func (a *App) diffClientes() {
 	currentKeys := make(map[string]bool, len(clientes))
 
 	for _, t := range clientes {
-		nit := strings.TrimLeft(t.NumeroDoc, "0")
+		nit := strings.TrimLeft(t.DocNumber, "0")
 		if nit == "" {
 			continue
 		}
 		currentKeys[nit] = true
 
-		action := a.db.UpsertClient(nit, t.Nombre, t.TipoDoc, t.TipoClave, t.Empresa, t.Codigo, t.FechaCreacion, t.TipoCtaPref, t.Hash)
+		action := a.db.UpsertClient(nit, t.Name, t.DocType, t.KeyType, t.Company, t.Code, t.CreationDate, t.PreferredAcctType, t.Hash)
 		switch action {
 		case "add":
 			adds++
@@ -197,13 +197,13 @@ func (a *App) diffClientes() {
 	}
 
 	deletes := a.db.MarkDeletedClients(currentKeys)
-	a.db.AddLog("info", "Z17", fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(clientes)))
+	a.db.AddLog("info", "Z17", fmt.Sprintf("Diff: %d added, %d edited, %d deleted (of %d)", adds, edits, deletes, len(clientes)))
 }
 
 func (a *App) diffProductos() {
 	productos, year, err := parsers.ParseInventario(a.cfg.Siigo.DataPath)
 	if err != nil {
-		a.db.AddLog("error", "Z04", "Error parseando inventario: "+err.Error())
+		a.db.AddLog("error", "Z04", "Error parsing inventory: "+err.Error())
 		return
 	}
 
@@ -211,13 +211,13 @@ func (a *App) diffProductos() {
 	currentKeys := make(map[string]bool, len(productos))
 
 	for _, p := range productos {
-		key := p.Codigo
+		key := p.Code
 		if key == "" {
 			key = p.Hash
 		}
 		currentKeys[key] = true
 
-		action := a.db.UpsertProduct(key, p.Nombre, p.NombreCorto, p.Grupo, p.Referencia, p.Empresa, p.Hash)
+		action := a.db.UpsertProduct(key, p.Name, p.ShortName, p.Group, p.Reference, p.Company, p.Hash)
 		switch action {
 		case "add":
 			adds++
@@ -228,13 +228,13 @@ func (a *App) diffProductos() {
 
 	deletes := a.db.MarkDeletedProducts(currentKeys)
 	source := "Z04" + year
-	a.db.AddLog("info", source, fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(productos)))
+	a.db.AddLog("info", source, fmt.Sprintf("Diff: %d added, %d edited, %d deleted (of %d)", adds, edits, deletes, len(productos)))
 }
 
 func (a *App) diffMovimientos() {
 	movimientos, err := parsers.ParseMovimientos(a.cfg.Siigo.DataPath)
 	if err != nil {
-		a.db.AddLog("error", "Z49", "Error parseando: "+err.Error())
+		a.db.AddLog("error", "Z49", "Error parsing: "+err.Error())
 		return
 	}
 
@@ -242,18 +242,18 @@ func (a *App) diffMovimientos() {
 	currentKeys := make(map[string]bool, len(movimientos))
 
 	for _, m := range movimientos {
-		key := m.TipoComprobante + "-" + m.NumeroDoc
+		key := m.VoucherType + "-" + m.DocNumber
 		if key == "-" {
 			key = m.Hash
 		}
 		currentKeys[key] = true
 
-		fecha := m.Fecha
+		fecha := ""
 		if len(fecha) == 8 {
 			fecha = fecha[:4] + "-" + fecha[4:6] + "-" + fecha[6:8]
 		}
 
-		action := a.db.UpsertMovement(key, m.TipoComprobante, m.Empresa, m.NumeroDoc, fecha, m.NitTercero, m.CuentaContable, m.Descripcion, m.Valor, m.TipoMov, m.Hash)
+		action := a.db.UpsertMovement(key, m.VoucherType, m.Company, m.DocNumber, fecha, "", "", m.Description, 0, "", m.Hash)
 		switch action {
 		case "add":
 			adds++
@@ -263,7 +263,7 @@ func (a *App) diffMovimientos() {
 	}
 
 	deletes := a.db.MarkDeletedMovements(currentKeys)
-	a.db.AddLog("info", "Z49", fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(movimientos)))
+	a.db.AddLog("info", "Z49", fmt.Sprintf("Diff: %d added, %d edited, %d deleted (of %d)", adds, edits, deletes, len(movimientos)))
 }
 
 func (a *App) diffCartera() {
@@ -278,7 +278,7 @@ func (a *App) diffCartera() {
 
 		cartera, err := parsers.ParseCartera(a.cfg.Siigo.DataPath, anio)
 		if err != nil {
-			a.db.AddLog("error", file, "Error parseando: "+err.Error())
+			a.db.AddLog("error", file, "Error parsing: "+err.Error())
 			continue
 		}
 
@@ -286,15 +286,15 @@ func (a *App) diffCartera() {
 		currentKeys := make(map[string]bool, len(cartera))
 
 		for _, c := range cartera {
-			key := file + "-" + c.TipoRegistro + "-" + c.Empresa + "-" + c.Secuencia
+			key := file + "-" + c.RecordType + "-" + c.Company + "-" + c.Sequence
 			currentKeys[key] = true
 
-			fecha := c.Fecha
+			fecha := c.Date
 			if len(fecha) == 8 {
 				fecha = fecha[:4] + "-" + fecha[4:6] + "-" + fecha[6:8]
 			}
 
-			action := a.db.UpsertCartera(key, c.TipoRegistro, c.Empresa, c.Secuencia, c.TipoDoc, c.NitTercero, c.CuentaContable, fecha, c.Descripcion, c.TipoMov, c.Hash)
+			action := a.db.UpsertCartera(key, c.RecordType, c.Company, c.Sequence, c.DocType, c.ThirdPartyNit, c.LedgerAccount, fecha, c.Description, c.MovType, c.Hash)
 			switch action {
 			case "add":
 				adds++
@@ -304,7 +304,7 @@ func (a *App) diffCartera() {
 		}
 
 		deletes := a.db.MarkDeletedCartera(currentKeys)
-		a.db.AddLog("info", file, fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(cartera)))
+		a.db.AddLog("info", file, fmt.Sprintf("Diff: %d added, %d edited, %d deleted (of %d)", adds, edits, deletes, len(cartera)))
 	}
 }
 
@@ -348,7 +348,7 @@ func (a *App) sendPending(tableName string) {
 
 	a.db.RemoveDeletedSynced(tableName)
 
-	a.db.AddLog("info", "API", fmt.Sprintf("[%s] Enviados: %d, Errores: %d (de %d pendientes)", tableName, sent, errors, len(pending)))
+	a.db.AddLog("info", "API", fmt.Sprintf("[%s] Sent: %d, Errors: %d (of %d pending)", tableName, sent, errors, len(pending)))
 }
 
 // ==================== CONFIG ====================
@@ -367,7 +367,7 @@ func (a *App) SaveConfig(dataPath, baseURL, email, password string, interval int
 	if err := a.cfg.Save("config.json"); err != nil {
 		return "Error: " + err.Error()
 	}
-	a.db.AddLog("info", "CONFIG", "Configuracion guardada")
+	a.db.AddLog("info", "CONFIG", "Configuration saved")
 	return "ok"
 }
 
@@ -427,47 +427,47 @@ func (a *App) RefreshCache(which string) {
 	case "clients":
 		c, err := parsers.ParseTercerosClientes(a.cfg.Siigo.DataPath)
 		if err != nil {
-			a.db.AddLog("error", "Z17", "Error leyendo clientes: "+err.Error())
+			a.db.AddLog("error", "Z17", "Error reading clients: "+err.Error())
 			return
 		}
 		cachedClientes = c
 		clientesByNIT = make(map[string]*parsers.Tercero, len(c))
 		for i := range c {
-			nit := strings.TrimLeft(c[i].NumeroDoc, "0")
+			nit := strings.TrimLeft(c[i].DocNumber, "0")
 			if nit != "" {
 				clientesByNIT[nit] = &cachedClientes[i]
 			}
 		}
-		a.db.AddLog("info", "Z17", fmt.Sprintf("Cache: %d clientes", len(c)))
+		a.db.AddLog("info", "Z17", fmt.Sprintf("Cache: %d clients", len(c)))
 	case "products":
 		p, year, err := parsers.ParseInventario(a.cfg.Siigo.DataPath)
 		if err != nil {
-			a.db.AddLog("error", "Z04", "Error leyendo inventario: "+err.Error())
+			a.db.AddLog("error", "Z04", "Error reading inventory: "+err.Error())
 			return
 		}
 		cachedProductos = p
 		productosByCodigo = make(map[string]*parsers.Inventario, len(p))
 		for i := range p {
-			if p[i].Codigo != "" {
-				productosByCodigo[p[i].Codigo] = &cachedProductos[i]
+			if p[i].Code != "" {
+				productosByCodigo[p[i].Code] = &cachedProductos[i]
 			}
 		}
-		a.db.AddLog("info", "Z04"+year, fmt.Sprintf("Cache: %d productos", len(p)))
+		a.db.AddLog("info", "Z04"+year, fmt.Sprintf("Cache: %d products", len(p)))
 	case "movements":
 		m, err := parsers.ParseMovimientos(a.cfg.Siigo.DataPath)
 		if err != nil {
-			a.db.AddLog("error", "Z49", "Error leyendo movimientos: "+err.Error())
+			a.db.AddLog("error", "Z49", "Error reading movements: "+err.Error())
 			return
 		}
 		cachedMovimientos = m
 		movimientosByNIT = make(map[string][]parsers.Movimiento)
 		for _, mov := range m {
-			nit := strings.TrimLeft(mov.NitTercero, "0")
+			nit := strings.TrimLeft(mov.ThirdPartyName, "0")
 			if nit != "" {
 				movimientosByNIT[nit] = append(movimientosByNIT[nit], mov)
 			}
 		}
-		a.db.AddLog("info", "Z49", fmt.Sprintf("Cache: %d movimientos", len(m)))
+		a.db.AddLog("info", "Z49", fmt.Sprintf("Cache: %d movements", len(m)))
 	case "cartera":
 		var all []parsers.Cartera
 		for _, file := range a.cfg.Sync.Files {
@@ -480,7 +480,7 @@ func (a *App) RefreshCache(which string) {
 			}
 			c, err := parsers.ParseCartera(a.cfg.Siigo.DataPath, anio)
 			if err != nil {
-				a.db.AddLog("error", file, "Error leyendo cartera: "+err.Error())
+				a.db.AddLog("error", file, "Error reading cartera: "+err.Error())
 				continue
 			}
 			all = append(all, c...)
@@ -488,12 +488,12 @@ func (a *App) RefreshCache(which string) {
 		cachedCartera = all
 		carteraByNIT = make(map[string][]parsers.Cartera)
 		for _, c := range all {
-			nit := strings.TrimLeft(c.NitTercero, "0")
+			nit := strings.TrimLeft(c.ThirdPartyNit, "0")
 			if nit != "" {
 				carteraByNIT[nit] = append(carteraByNIT[nit], c)
 			}
 		}
-		a.db.AddLog("info", "Z09", fmt.Sprintf("Cache: %d cartera", len(all)))
+		a.db.AddLog("info", "Z09", fmt.Sprintf("Cache: %d cartera records", len(all)))
 	}
 }
 
@@ -506,10 +506,10 @@ func (a *App) GetClientes(page int, search string) PaginatedISAM {
 		var filtered []parsers.Tercero
 		q := strings.ToLower(search)
 		for _, c := range data {
-			if strings.Contains(strings.ToLower(c.NumeroDoc), q) ||
-				strings.Contains(strings.ToLower(c.Nombre), q) ||
-				strings.Contains(strings.ToLower(c.Empresa), q) ||
-				strings.Contains(strings.ToLower(c.Codigo), q) {
+			if strings.Contains(strings.ToLower(c.DocNumber), q) ||
+				strings.Contains(strings.ToLower(c.Name), q) ||
+				strings.Contains(strings.ToLower(c.Company), q) ||
+				strings.Contains(strings.ToLower(c.Code), q) {
 				filtered = append(filtered, c)
 			}
 		}
@@ -529,9 +529,9 @@ func (a *App) GetProductos(page int, search string) PaginatedISAM {
 		var filtered []parsers.Inventario
 		q := strings.ToLower(search)
 		for _, p := range data {
-			if strings.Contains(strings.ToLower(p.Nombre), q) ||
-				strings.Contains(strings.ToLower(p.Codigo), q) ||
-				strings.Contains(strings.ToLower(p.Grupo), q) {
+			if strings.Contains(strings.ToLower(p.Name), q) ||
+				strings.Contains(strings.ToLower(p.Code), q) ||
+				strings.Contains(strings.ToLower(p.Group), q) {
 				filtered = append(filtered, p)
 			}
 		}
@@ -551,11 +551,10 @@ func (a *App) GetMovimientos(page int, search string) PaginatedISAM {
 		var filtered []parsers.Movimiento
 		q := strings.ToLower(search)
 		for _, m := range data {
-			if strings.Contains(strings.ToLower(m.TipoComprobante), q) ||
-				strings.Contains(strings.ToLower(m.NumeroDoc), q) ||
-				strings.Contains(strings.ToLower(m.NitTercero), q) ||
-				strings.Contains(strings.ToLower(m.Descripcion), q) ||
-				strings.Contains(strings.ToLower(m.Fecha), q) {
+			if strings.Contains(strings.ToLower(m.VoucherType), q) ||
+				strings.Contains(strings.ToLower(m.DocNumber), q) ||
+				strings.Contains(strings.ToLower(m.ThirdPartyName), q) ||
+				strings.Contains(strings.ToLower(m.Description), q) {
 				filtered = append(filtered, m)
 			}
 		}
@@ -575,11 +574,11 @@ func (a *App) GetCartera(page int, search string) PaginatedISAM {
 		var filtered []parsers.Cartera
 		q := strings.ToLower(search)
 		for _, c := range data {
-			if strings.Contains(strings.ToLower(c.NitTercero), q) ||
-				strings.Contains(strings.ToLower(c.Descripcion), q) ||
-				strings.Contains(strings.ToLower(c.CuentaContable), q) ||
-				strings.Contains(strings.ToLower(c.Fecha), q) ||
-				strings.Contains(strings.ToLower(c.TipoRegistro), q) {
+			if strings.Contains(strings.ToLower(c.ThirdPartyNit), q) ||
+				strings.Contains(strings.ToLower(c.Description), q) ||
+				strings.Contains(strings.ToLower(c.LedgerAccount), q) ||
+				strings.Contains(strings.ToLower(c.Date), q) ||
+				strings.Contains(strings.ToLower(c.RecordType), q) {
 				filtered = append(filtered, c)
 			}
 		}
@@ -651,7 +650,7 @@ func (a *App) TestConnection() string {
 		return "Error: " + err.Error()
 	}
 	a.client = client
-	a.db.AddLog("info", "API", "Conexion exitosa con "+a.cfg.Finearom.BaseURL)
+	a.db.AddLog("info", "API", "Connection successful with "+a.cfg.Finearom.BaseURL)
 	return "ok"
 }
 
@@ -710,7 +709,7 @@ func (a *App) ClearDatabase() string {
 	if err := a.db.ClearAll(); err != nil {
 		return "Error: " + err.Error()
 	}
-	a.db.AddLog("warning", "APP", "Base de datos vaciada por el usuario")
+	a.db.AddLog("warning", "APP", "Database cleared by user")
 	return "ok"
 }
 
@@ -718,6 +717,6 @@ func (a *App) ClearLogs() string {
 	if err := a.db.ClearLogs(); err != nil {
 		return "Error: " + err.Error()
 	}
-	a.db.AddLog("info", "APP", "Logs limpiados por el usuario")
+	a.db.AddLog("info", "APP", "Logs cleared by user")
 	return "ok"
 }

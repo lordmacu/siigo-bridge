@@ -13,14 +13,14 @@ import (
 // SaldoTercero represents a balance per account and third-party from Z25YYYY.
 // Z25YYYY files contain account-NIT pairs with BCD-encoded monetary values.
 type SaldoTercero struct {
-	Empresa        string  `json:"empresa"`          // company code (3 chars)
-	CuentaContable string  `json:"cuenta_contable"`  // PUC account code (up to 9 digits)
-	NitTercero     string  `json:"nit_tercero"`      // third-party NIT (13 chars)
-	SaldoAnterior  float64 `json:"saldo_anterior"`   // previous balance (BCD)
-	Debito         float64 `json:"debito"`           // debit amount (BCD)
-	Credito        float64 `json:"credito"`          // credit amount (BCD)
-	SaldoFinal     float64 `json:"saldo_final"`      // final balance (calculated)
-	Hash           string  `json:"hash"`
+	Company       string  `json:"empresa"`          // company code (3 chars)
+	LedgerAccount string  `json:"cuenta_contable"`  // PUC account code (up to 9 digits)
+	ThirdPartyNit string  `json:"nit_tercero"`      // third-party NIT (13 chars)
+	PrevBalance   float64 `json:"saldo_anterior"`   // previous balance (BCD)
+	Debit         float64 `json:"debito"`           // debit amount (BCD)
+	Credit        float64 `json:"credito"`          // credit amount (BCD)
+	FinalBalance  float64 `json:"saldo_final"`      // final balance (calculated)
+	Hash          string  `json:"hash"`
 }
 
 // FindLatestZ25 finds the most recent Z25YYYY file.
@@ -63,16 +63,16 @@ func ParseSaldosTercerosFile(path, year string) ([]SaldoTercero, string, error) 
 	}
 
 	extfh := isam.ExtfhAvailable()
-	var saldos []SaldoTercero
+	var balances []SaldoTercero
 	for _, rec := range records {
 		s := parseSaldoTerceroRecord(rec, extfh)
-		if s.CuentaContable == "" || s.NitTercero == "" {
+		if s.LedgerAccount == "" || s.ThirdPartyNit == "" {
 			continue
 		}
-		saldos = append(saldos, s)
+		balances = append(balances, s)
 	}
 
-	return saldos, year, nil
+	return balances, year, nil
 }
 
 func parseSaldoTerceroRecord(rec []byte, extfh bool) SaldoTercero {
@@ -97,48 +97,48 @@ func parseSaldoTerceroRecord(rec []byte, extfh bool) SaldoTercero {
 //	[148:156] BCD debito (8 bytes packed decimal, 2 decimals)
 //	[156:164] BCD credito (8 bytes packed decimal, 2 decimals)
 func parseSaldoTerceroEXTFH(rec []byte, hash [32]byte) SaldoTercero {
-	empresa := strings.TrimSpace(isam.ExtractField(rec, 0, 3))
-	cuentaRaw := strings.TrimSpace(isam.ExtractField(rec, 3, 9))
+	company := strings.TrimSpace(isam.ExtractField(rec, 0, 3))
+	accountRaw := strings.TrimSpace(isam.ExtractField(rec, 3, 9))
 	nit := strings.TrimSpace(isam.ExtractField(rec, 12, 13))
 	nit = strings.TrimLeft(nit, "0")
 
-	if cuentaRaw == "" || nit == "" {
+	if accountRaw == "" || nit == "" {
 		return SaldoTercero{}
 	}
 
 	// Try to decode BCD monetary values
-	var saldoAnt, debito, credito float64
+	var prevBalance, debit, credit float64
 	if len(rec) >= 164 {
-		saldoAnt = DecodePacked(rec[140:148], 2)
-		debito = DecodePacked(rec[148:156], 2)
-		credito = DecodePacked(rec[156:164], 2)
+		prevBalance = DecodePacked(rec[140:148], 2)
+		debit = DecodePacked(rec[148:156], 2)
+		credit = DecodePacked(rec[156:164], 2)
 	}
 
-	saldoFinal := saldoAnt + debito - credito
+	finalBalance := prevBalance + debit - credit
 
 	return SaldoTercero{
-		Empresa:        empresa,
-		CuentaContable: cuentaRaw,
-		NitTercero:     nit,
-		SaldoAnterior:  saldoAnt,
-		Debito:         debito,
-		Credito:        credito,
-		SaldoFinal:     saldoFinal,
-		Hash:           fmt.Sprintf("%x", hash[:8]),
+		Company:       company,
+		LedgerAccount: accountRaw,
+		ThirdPartyNit: nit,
+		PrevBalance:   prevBalance,
+		Debit:         debit,
+		Credit:        credit,
+		FinalBalance:  finalBalance,
+		Hash:          fmt.Sprintf("%x", hash[:8]),
 	}
 }
 
 func parseSaldoTerceroHeuristic(rec []byte, hash [32]byte) SaldoTercero {
-	// Heuristic: look for digit sequences that could be cuenta and NIT
-	cuenta := findDigitSequence(rec, 3, 9)
+	// Heuristic: look for digit sequences that could be account and NIT
+	account := findDigitSequence(rec, 3, 9)
 	nit := findDigitSequence(rec, 12, 13)
-	if cuenta == "" || nit == "" {
+	if account == "" || nit == "" {
 		return SaldoTercero{}
 	}
 	return SaldoTercero{
-		CuentaContable: cuenta,
-		NitTercero:     strings.TrimLeft(nit, "0"),
-		Hash:           fmt.Sprintf("%x", hash[:8]),
+		LedgerAccount: account,
+		ThirdPartyNit: strings.TrimLeft(nit, "0"),
+		Hash:          fmt.Sprintf("%x", hash[:8]),
 	}
 }
 

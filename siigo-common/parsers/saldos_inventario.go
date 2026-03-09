@@ -12,15 +12,15 @@ import (
 // SaldoInventario represents inventory balance per product from Z15YYYY.
 // Each record has the product key and BCD-encoded period balances.
 type SaldoInventario struct {
-	RecordKey      string  `json:"record_key"`
-	Empresa        string  `json:"empresa"`
-	Grupo          string  `json:"grupo"`
-	CodigoProducto string  `json:"codigo_producto"`
-	SaldoInicial   float64 `json:"saldo_inicial"`
-	Entradas       float64 `json:"entradas"`
-	Salidas        float64 `json:"salidas"`
-	SaldoFinal     float64 `json:"saldo_final"`
-	Hash           string  `json:"hash"`
+	RecordKey   string  `json:"record_key"`
+	Company     string  `json:"empresa"`
+	Group       string  `json:"grupo"`
+	ProductCode string  `json:"codigo_producto"`
+	InitBalance float64 `json:"saldo_inicial"`
+	Entries     float64 `json:"entradas"`
+	Withdrawals float64 `json:"salidas"`
+	FinalBalance float64 `json:"saldo_final"`
+	Hash        string  `json:"hash"`
 }
 
 // FindLatestZ15 finds the Z15YYYY file with most data (largest file size).
@@ -69,7 +69,7 @@ func ParseSaldosInventario(dataPath string) ([]SaldoInventario, string, error) {
 	var items []SaldoInventario
 	for _, rec := range records {
 		item := parseSaldoInvRecord(rec, extfh)
-		if item.CodigoProducto == "" {
+		if item.ProductCode == "" {
 			continue
 		}
 		items = append(items, item)
@@ -77,21 +77,21 @@ func ParseSaldosInventario(dataPath string) ([]SaldoInventario, string, error) {
 	return items, year, nil
 }
 
-// Z15YYYY structure (320 bytes) — verified from hex dump with v2 reader:
+// Z15YYYY structure (320 bytes) -- verified from hex dump with v2 reader:
 //
-//	[0:2]     tipo ("06"=periodo)
-//	[2:5]     empresa ("001")
-//	[5:8]     grupo inventario ("000")
-//	[8:14]    codigo producto ("100000")
-//	[14:15]   variante ("1"=base)
+//	[0:2]     type ("06"=period)
+//	[2:5]     company ("001")
+//	[5:8]     inventory group ("000")
+//	[8:14]    product code ("100000")
+//	[14:15]   variant ("1"=base)
 //	[15:16]   null separator
 //	[16:22]   padding/flags
 //	[22:23]   BCD sign (0x0C = positive)
-//	[23:30]   BCD saldo inicial (7 bytes packed decimal)
+//	[23:30]   BCD initial balance (7 bytes packed decimal)
 //	[30:31]   BCD sign
-//	[31:38]   BCD entradas
+//	[31:38]   BCD entries
 //	[38:39]   BCD sign
-//	[39:46]   BCD saldo campo 2
+//	[39:46]   BCD balance field 2
 //	[46:47]   BCD sign
 //	... repeating BCD fields for each period (12 periods)
 //
@@ -112,35 +112,35 @@ func parseSaldoInvRecord(rec []byte, extfh bool) SaldoInventario {
 
 func parseSaldoInvEXTFH(rec []byte, hash [32]byte) SaldoInventario {
 	// Key fields are ASCII at the beginning
-	tipo := strings.TrimSpace(isam.ExtractField(rec, 0, 2))
-	empresa := strings.TrimSpace(isam.ExtractField(rec, 2, 3))
-	grupo := strings.TrimSpace(isam.ExtractField(rec, 5, 3))
-	codigo := strings.TrimSpace(isam.ExtractField(rec, 8, 6))
+	recType := strings.TrimSpace(isam.ExtractField(rec, 0, 2))
+	company := strings.TrimSpace(isam.ExtractField(rec, 2, 3))
+	group := strings.TrimSpace(isam.ExtractField(rec, 5, 3))
+	code := strings.TrimSpace(isam.ExtractField(rec, 8, 6))
 
-	if codigo == "" || codigo == "000000" {
+	if code == "" || code == "000000" {
 		return SaldoInventario{}
 	}
 
 	// BCD fields: separate sign byte (0x0C=positive, 0x0D=negative) + 7 bytes packed data
 	// Sign bytes at 24, 32, 42; data at 25, 33, 43
-	saldoInicial := extractBCDValueSigned(rec, 24, 25, 7)
-	entradas := extractBCDValueSigned(rec, 32, 33, 7)
-	salidas := extractBCDValueSigned(rec, 42, 43, 7)
-	saldoFinal := saldoInicial + entradas - salidas
+	initBalance := extractBCDValueSigned(rec, 24, 25, 7)
+	entries := extractBCDValueSigned(rec, 32, 33, 7)
+	withdrawals := extractBCDValueSigned(rec, 42, 43, 7)
+	finalBalance := initBalance + entries - withdrawals
 
 	hashStr := fmt.Sprintf("%x", hash[:8])
-	key := fmt.Sprintf("%s-%s-%s-%s-%s", tipo, empresa, grupo, codigo, hashStr[:6])
+	key := fmt.Sprintf("%s-%s-%s-%s-%s", recType, company, group, code, hashStr[:6])
 
 	return SaldoInventario{
-		RecordKey:      key,
-		Empresa:        empresa,
-		Grupo:          grupo,
-		CodigoProducto: codigo,
-		SaldoInicial:   saldoInicial,
-		Entradas:       entradas,
-		Salidas:        salidas,
-		SaldoFinal:     saldoFinal,
-		Hash:           hashStr,
+		RecordKey:    key,
+		Company:      company,
+		Group:        group,
+		ProductCode:  code,
+		InitBalance:  initBalance,
+		Entries:      entries,
+		Withdrawals:  withdrawals,
+		FinalBalance: finalBalance,
+		Hash:         hashStr,
 	}
 }
 

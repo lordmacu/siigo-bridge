@@ -24,7 +24,7 @@ func validateZ07T(dataPath string) {
 		fmt.Printf("ERROR: %v\n", err)
 		return
 	}
-	fmt.Printf("Total registros: %d\n", len(recs))
+	fmt.Printf("Total records: %d\n", len(recs))
 
 	// Stats
 	tipos := map[string]int{}
@@ -36,30 +36,30 @@ func validateZ07T(dataPath string) {
 	first := true
 
 	for _, r := range recs {
-		tipos[r.TipoComprobante]++
-		tiposMov[r.TipoMovimiento]++
-		tiposSec[r.TipoCompSec]++
-		tiposTrans[r.TipoTransaccion]++
-		if r.FechaDocumento == "" {
+		tipos[r.VoucherType]++
+		tiposMov[r.MovType]++
+		tiposSec[r.SecVoucherType]++
+		tiposTrans[r.TransType]++
+		if r.DocDate == "" {
 			emptyFecha++
 		}
-		if r.FechaVencimiento == "" {
+		if r.DueDate == "" {
 			emptyFechaVenc++
 		}
-		if r.NitTercero == "" {
+		if r.ThirdPartyNit == "" {
 			emptyNit++
 		}
-		if r.CuentaContable == "" {
+		if r.LedgerAccount == "" {
 			emptyCuenta++
 		}
-		if r.Valor == 0 {
+		if r.Amount == 0 {
 			emptyValor++
 		}
-		if first || r.Valor < minVal {
-			minVal = r.Valor
+		if first || r.Amount < minVal {
+			minVal = r.Amount
 		}
-		if first || r.Valor > maxVal {
-			maxVal = r.Valor
+		if first || r.Amount > maxVal {
+			maxVal = r.Amount
 		}
 		first = false
 	}
@@ -73,20 +73,20 @@ func validateZ07T(dataPath string) {
 	fmt.Printf("Rango valores: min=%.2f max=%.2f\n", minVal, maxVal)
 
 	// Show first 10
-	fmt.Println("\nPrimeros 10 registros:")
+	fmt.Println("\nFirst 10 records:")
 	for i, r := range recs {
 		if i >= 10 {
 			break
 		}
 		fmt.Printf("  [%d] %s %s emp:%s nit:%-12s cta:%-9s fecha:%s mov:%s val:%.0f | sec:%s-%s fechaV:%s trans:%s\n",
-			i+1, r.TipoComprobante, r.Secuencia, r.Empresa,
-			r.NitTercero, r.CuentaContable, r.FechaDocumento,
-			r.TipoMovimiento, r.Valor,
-			r.TipoCompSec, r.SecuenciaSec, r.FechaVencimiento, r.TipoTransaccion)
+			i+1, r.VoucherType, r.Sequence, r.Company,
+			r.ThirdPartyNit, r.LedgerAccount, r.DocDate,
+			r.MovType, r.Amount,
+			r.SecVoucherType, r.SequenceSec, r.DueDate, r.TransType)
 	}
 
 	// Show last 5
-	fmt.Println("\nUltimos 5 registros:")
+	fmt.Println("\nLast 5 records:")
 	start := len(recs) - 5
 	if start < 0 {
 		start = 0
@@ -94,38 +94,38 @@ func validateZ07T(dataPath string) {
 	for i := start; i < len(recs); i++ {
 		r := recs[i]
 		fmt.Printf("  [%d] %s %s emp:%s nit:%-12s cta:%-9s fecha:%s mov:%s val:%.0f | sec:%s-%s\n",
-			i+1, r.TipoComprobante, r.Secuencia, r.Empresa,
-			r.NitTercero, r.CuentaContable, r.FechaDocumento,
-			r.TipoMovimiento, r.Valor,
-			r.TipoCompSec, r.SecuenciaSec)
+			i+1, r.VoucherType, r.Sequence, r.Company,
+			r.ThirdPartyNit, r.LedgerAccount, r.DocDate,
+			r.MovType, r.Amount,
+			r.SecVoucherType, r.SequenceSec)
 	}
 
 	// Show some D and some C records
-	fmt.Println("\n5 registros DEBITO:")
+	fmt.Println("\n5 records DEBITO:")
 	shown := 0
 	for _, r := range recs {
 		if shown >= 5 {
 			break
 		}
-		if r.TipoMovimiento == "D" {
+		if r.MovType == "D" {
 			shown++
 			fmt.Printf("  %s emp:%s nit:%-12s cta:%-9s fecha:%s val:%.0f | %s-%s\n",
-				r.TipoComprobante, r.Empresa, r.NitTercero, r.CuentaContable,
-				r.FechaDocumento, r.Valor, r.TipoCompSec, r.SecuenciaSec)
+				r.VoucherType, r.Company, r.ThirdPartyNit, r.LedgerAccount,
+				r.DocDate, r.Amount, r.SecVoucherType, r.SequenceSec)
 		}
 	}
 
-	fmt.Println("\n5 registros CREDITO:")
+	fmt.Println("\n5 records CREDITO:")
 	shown = 0
 	for _, r := range recs {
 		if shown >= 5 {
 			break
 		}
-		if r.TipoMovimiento == "C" {
+		if r.MovType == "C" {
 			shown++
 			fmt.Printf("  %s emp:%s nit:%-12s cta:%-9s fecha:%s val:%.0f | %s-%s\n",
-				r.TipoComprobante, r.Empresa, r.NitTercero, r.CuentaContable,
-				r.FechaDocumento, r.Valor, r.TipoCompSec, r.SecuenciaSec)
+				r.VoucherType, r.Company, r.ThirdPartyNit, r.LedgerAccount,
+				r.DocDate, r.Amount, r.SecVoucherType, r.SequenceSec)
 		}
 	}
 }
@@ -137,28 +137,28 @@ func validateZ26(dataPath string) {
 		fmt.Printf("ERROR: %v\n", err)
 		return
 	}
-	fmt.Printf("Archivo: Z26%s, Total: %d periodos\n", year, len(recs))
+	fmt.Printf("File: Z26%s, Total: %d periodos\n", year, len(recs))
 
 	estados := map[string]int{}
 	emptyInicio, emptyFin := 0, 0
 
 	for _, r := range recs {
-		estados[r.Estado]++
-		if r.FechaInicio == "" {
+		estados[r.Status]++
+		if r.StartDate == "" {
 			emptyInicio++
 		}
-		if r.FechaFin == "" {
+		if r.EndDate == "" {
 			emptyFin++
 		}
 	}
 	fmt.Printf("Estados: %v\n", estados)
 	fmt.Printf("Vacios: fechaInicio=%d, fechaFin=%d\n", emptyInicio, emptyFin)
 
-	fmt.Println("\nTodos los periodos:")
+	fmt.Println("\nAll periodos:")
 	for i, r := range recs {
 		fmt.Printf("  [%d] periodo:%s emp:%s inicio:%s fin:%s estado:%s saldo1:%.2f saldo2:%.2f saldo3:%.2f\n",
-			i+1, r.NumeroPeriodo, r.Empresa, r.FechaInicio, r.FechaFin, r.Estado,
-			r.Saldo1, r.Saldo2, r.Saldo3)
+			i+1, r.PeriodNumber, r.Company, r.StartDate, r.EndDate, r.Status,
+			r.Balance1, r.Balance2, r.Balance3)
 	}
 }
 
@@ -169,7 +169,7 @@ func validateZ05(dataPath string) {
 		fmt.Printf("ERROR: %v\n", err)
 		return
 	}
-	fmt.Printf("Archivo: Z05%s, Total: %d registros\n", year, len(recs))
+	fmt.Printf("File: Z05%s, Total: %d records\n", year, len(recs))
 
 	tipos := map[string]int{}
 	flags := map[string]int{}
@@ -177,16 +177,16 @@ func validateZ05(dataPath string) {
 	emptyNit, emptyFecha, emptyValor := 0, 0, 0
 
 	for _, r := range recs {
-		tipos[r.Tipo]++
+		tipos[r.RecType]++
 		flags[r.FlagByte]++
-		tiposDoc[r.TipoDoc]++
+		tiposDoc[r.DocType]++
 		if r.NIT == "" {
 			emptyNit++
 		}
-		if r.Fecha == "" {
+		if r.Date == "" {
 			emptyFecha++
 		}
-		if r.Valor == 0 {
+		if r.Amount == 0 {
 			emptyValor++
 		}
 	}
@@ -195,10 +195,10 @@ func validateZ05(dataPath string) {
 	fmt.Printf("Tipos doc: %v\n", tiposDoc)
 	fmt.Printf("Vacios: nit=%d, fecha=%d, valor=%d\n", emptyNit, emptyFecha, emptyValor)
 
-	fmt.Println("\nTodos los registros:")
+	fmt.Println("\nAll records:")
 	for i, r := range recs {
 		fmt.Printf("  [%d] tipo:%s emp:%s flag:%s sec:%s doc:%s fecha:%s nit:%-12s sec2:%s val:%.2f fechaR:%s\n",
-			i+1, r.Tipo, r.Empresa, r.FlagByte, r.Secuencia, r.TipoDoc,
-			r.Fecha, r.NIT, r.TipoSecundario, r.Valor, r.FechaRegistro)
+			i+1, r.RecType, r.Company, r.FlagByte, r.Sequence, r.DocType,
+			r.Date, r.NIT, r.SecondaryType, r.Amount, r.RegDate)
 	}
 }

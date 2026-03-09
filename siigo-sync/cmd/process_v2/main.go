@@ -190,12 +190,12 @@ func main() {
 		noRecovery    bool
 	)
 
-	flag.StringVar(&dataPath, "data", defaultDataPath, "Directorio de archivos ISAM")
+	flag.StringVar(&dataPath, "data", defaultDataPath, "ISAM file directory")
 	flag.StringVar(&dbPath, "db", defaultDBPath, "Ruta de salida SQLite")
 	flag.StringVar(&reportPath, "report", defaultReportPath, "Ruta de reporte JSON")
 	flag.StringVar(&include, "include", "*", "Patrones separados por coma (ej: Z17,Z03*,C03)")
-	flag.IntVar(&maxFiles, "max-files", 0, "Maximo de archivos a procesar (0 = todos)")
-	flag.IntVar(&samplePerFile, "sample", defaultSamplePerFile, "Muestras maximas por archivo para inferencia")
+	flag.IntVar(&maxFiles, "max-files", 0, "Max files to process (0 = all)")
+	flag.IntVar(&samplePerFile, "sample", defaultSamplePerFile, "Max samples per file for inference")
 	flag.IntVar(&maxFields, "max-fields", defaultMaxFields, "Maximo de campos inferidos por esquema")
 	flag.StringVar(&readMode, "mode", defaultReadMode, "Modo de lectura: auto|binary|physical")
 	flag.BoolVar(&incDeleted, "physical-include-deleted", false, "Incluir bloques deleted (tipo 3) en modo physical")
@@ -229,16 +229,16 @@ func main() {
 	patterns := parsePatterns(include)
 	files, err := listIsamFiles(dataPath, patterns, maxFiles)
 	if err != nil {
-		log.Fatalf("listando archivos: %v", err)
+		log.Fatalf("listing files: %v", err)
 	}
 	if len(files) == 0 {
-		log.Fatalf("no se encontraron archivos ISAM en %s", dataPath)
+		log.Fatalf("no ISAM files found in %s", dataPath)
 	}
 
 	metas := make([]fileMeta, 0, len(files))
 	groups := map[string]*groupBucket{}
 
-	log.Printf("[v2] Escaneo inicial: %d archivos candidatos", len(files))
+	log.Printf("[v2] Initial scan: %d candidate files", len(files))
 
 	for idx, p := range files {
 		name := filepath.Base(p)
@@ -283,7 +283,7 @@ func main() {
 	}
 
 	if len(metas) == 0 {
-		log.Fatalf("no quedaron archivos procesables")
+		log.Fatalf("no processable files remaining")
 	}
 
 	groupSchemas := map[string][]FieldDef{}
@@ -361,7 +361,7 @@ func main() {
 		log.Fatalf("guardando reporte: %v", err)
 	}
 
-	log.Printf("[v2] OK: %d archivos procesados -> DB=%s | Reporte=%s",
+	log.Printf("[v2] OK: %d files processed -> DB=%s | Reporte=%s",
 		len(reports), dbPath, reportPath)
 }
 
@@ -619,7 +619,7 @@ func loadPhysicalIndexed(data []byte, opts loadOptions) (*loadResult, error) {
 	indexType := int(data[0x2B])
 	start := 0x800
 	if len(data) <= start+2 {
-		return nil, fmt.Errorf("archivo indexado sin zona de datos (len=%d)", len(data))
+		return nil, fmt.Errorf("indexed file without data zone (len=%d)", len(data))
 	}
 
 	validStatus := map[int]bool{0: true, 1: true, 2: true, 4: true, 6: true, 8: true, 10: true, 12: true, 14: true}

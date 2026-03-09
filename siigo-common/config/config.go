@@ -15,9 +15,10 @@ type Config struct {
 	Telegram        TelegramConfig        `json:"telegram"`
 	Webhooks        WebhookConfig         `json:"webhooks"`
 	FieldMappings   map[string][]FieldMap `json:"field_mappings,omitempty"`
-	SendEnabled     map[string]bool       `json:"send_enabled,omitempty"`
-	DetectEnabled   map[string]bool       `json:"detect_enabled,omitempty"`
-	AllowEditDelete bool                  `json:"allow_edit_delete"`
+	SendEnabled       map[string]bool       `json:"send_enabled,omitempty"`
+	DetectEnabled     map[string]bool       `json:"detect_enabled,omitempty"`
+	GlobalSendEnabled bool                  `json:"global_send_enabled"`
+	AllowEditDelete   bool                  `json:"allow_edit_delete"`
 	SetupComplete   bool                  `json:"setup_complete"`
 }
 
@@ -237,8 +238,12 @@ func DefaultDetectEnabled() map[string]bool {
 	return m
 }
 
-// IsSendEnabled checks if sending is enabled for a given table
+// IsSendEnabled checks if sending is enabled for a given table.
+// Both the global send toggle AND the per-table toggle must be enabled.
 func (c *Config) IsSendEnabled(table string) bool {
+	if !c.GlobalSendEnabled {
+		return false
+	}
 	if c.SendEnabled == nil {
 		return false
 	}

@@ -6,9 +6,11 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"embed"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"log"
 	"net"
 	"net/http"
@@ -16,6 +18,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"siigo-common/api"
 	"siigo-common/config"
 	"siigo-common/isam"
@@ -27,8 +30,12 @@ import (
 	gosync "sync"
 	"time"
 
+	"github.com/getlantern/systray"
 	"github.com/golang-jwt/jwt/v5"
 )
+
+//go:embed frontend/dist
+var embeddedFrontend embed.FS
 
 // Auth credentials loaded from config.json (auth.username / auth.password)
 
@@ -121,6 +128,19 @@ type Server struct {
 }
 
 func main() {
+	// In production, work from the directory where the .exe is located
+	// (important when launched from shortcuts, Start Menu, etc.)
+	// Skip in dev mode (Air puts the exe in a temp dir)
+	if os.Getenv("AIR_ENV") == "" && os.Getenv("DEV") == "" {
+		if exePath, err := os.Executable(); err == nil {
+			exeDir := filepath.Dir(exePath)
+			// Only chdir if the exe dir has a config.json or looks like an install dir
+			if _, statErr := os.Stat(filepath.Join(exeDir, "config.json")); statErr == nil {
+				os.Chdir(exeDir)
+			}
+		}
+	}
+
 	db, err := storage.NewDB("siigo_web.db")
 	if err != nil {
 		log.Fatalf("DB error: %v", err)
@@ -163,7 +183,7 @@ func main() {
 		}
 	}()
 
-	db.AddLog("info", "APP", "Servidor web iniciado")
+	db.AddLog("info", "APP", "Web server started")
 
 	srv.registerBotCommands()
 	bot.StartPolling()
@@ -171,35 +191,61 @@ func main() {
 	if srv.cfg.SetupComplete {
 		go srv.startSyncLoop()
 	} else {
-		db.AddLog("info", "APP", "Setup pendiente — sync loops deshabilitados hasta completar wizard")
+		db.AddLog("info", "APP", "Setup pending — sync loops disabled until wizard is completed")
 	}
 
 	mux := http.NewServeMux()
 	srv.registerRoutes(mux)
 
-	// Serve React static files
+	// Serve React frontend — prefer disk (dev), fallback to embedded (production)
 	frontendDir := "frontend/dist"
+	var frontendHandler http.Handler
 	if _, err := os.Stat(frontendDir); err == nil {
-		fs := http.FileServer(http.Dir(frontendDir))
-		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			// If it's an API call, skip
-			if strings.HasPrefix(r.URL.Path, "/api/") {
-				http.NotFound(w, r)
-				return
-			}
-			// Sanitize path to prevent directory traversal
+		// Development: serve from disk (supports Vite proxy / hot reload)
+		diskFS := http.FileServer(http.Dir(frontendDir))
+		frontendHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			cleanPath := filepath.Clean(r.URL.Path)
 			if strings.Contains(cleanPath, "..") {
 				http.NotFound(w, r)
 				return
 			}
-			// Try to serve the file; if not found, serve index.html (SPA)
 			fullPath := filepath.Join(frontendDir, cleanPath)
 			if _, err := os.Stat(fullPath); os.IsNotExist(err) && r.URL.Path != "/" {
 				http.ServeFile(w, r, filepath.Join(frontendDir, "index.html"))
 				return
 			}
-			fs.ServeHTTP(w, r)
+			diskFS.ServeHTTP(w, r)
+		})
+	} else if subFS, fsErr := fs.Sub(embeddedFrontend, "frontend/dist"); fsErr == nil {
+		// Production: serve from embedded filesystem (single .exe)
+		embFS := http.FS(subFS)
+		embServer := http.FileServer(embFS)
+		frontendHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			cleanPath := filepath.Clean(r.URL.Path)
+			if strings.Contains(cleanPath, "..") {
+				http.NotFound(w, r)
+				return
+			}
+			// Try to open the file; if not found, serve index.html (SPA routing)
+			f, err := embFS.Open(cleanPath)
+			if err != nil {
+				// SPA fallback: serve index.html for client-side routing
+				r.URL.Path = "/"
+				embServer.ServeHTTP(w, r)
+				return
+			}
+			f.Close()
+			embServer.ServeHTTP(w, r)
+		})
+	}
+
+	if frontendHandler != nil {
+		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasPrefix(r.URL.Path, "/api/") {
+				http.NotFound(w, r)
+				return
+			}
+			frontendHandler.ServeHTTP(w, r)
 		})
 	} else {
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -207,7 +253,7 @@ func main() {
 				http.NotFound(w, r)
 				return
 			}
-			fmt.Fprintf(w, "Run 'npm run build' in frontend/ to build the UI")
+			fmt.Fprintf(w, "Frontend not available. Run 'npm run build' in frontend/")
 		})
 	}
 
@@ -221,30 +267,21 @@ func main() {
 		port = cfg.Server.Port
 	}
 
-	log.Printf("Siigo Web running on http://localhost:%s", port)
-	// Notify with tunnel URL if available (tunnel may start after server)
-	go func() {
-		time.Sleep(5 * time.Second) // give tunnel time to start
-		localURL := "http://localhost:" + port
-		if tunnelURL := readTunnelURL(); tunnelURL != "" {
-			bot.Send(fmt.Sprintf("🟢 <b>Servidor iniciado</b>\n\n🖥 Local: %s\n🌍 Publica: %s\n📄 Swagger: %s/api/v1/docs", localURL, tunnelURL, tunnelURL))
-		} else {
-			bot.NotifyServerStarted(localURL)
-		}
-	}()
+	// Kill any existing instance on this port
+	killExistingInstance(port)
 
-	// Graceful shutdown
+	localURL := fmt.Sprintf("http://localhost:%s", port)
+	log.Printf("Siigo Web running on %s", localURL)
+
 	httpServer := &http.Server{
 		Addr:    ":" + port,
 		Handler: corsMiddleware(mux),
 	}
 
-	go func() {
-		sigCh := make(chan os.Signal, 1)
-		signal.Notify(sigCh, os.Interrupt)
-		<-sigCh
+	// Graceful shutdown helper
+	shutdownServer := func() {
 		log.Println("Shutdown signal received, stopping...")
-		db.AddLog("info", "APP", "Servidor detenido (shutdown graceful)")
+		db.AddLog("info", "APP", "Server stopped (graceful shutdown)")
 
 		// Stop sync loops
 		select {
@@ -252,19 +289,165 @@ func main() {
 		default:
 		}
 		select {
-		case srv.stopCh <- true: // one for each loop
+		case srv.stopCh <- true:
 		default:
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		httpServer.Shutdown(ctx)
+	}
+
+	// Handle OS signals (Ctrl+C, taskkill, etc.)
+	go func() {
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, os.Interrupt)
+		<-sigCh
+		shutdownServer()
+		systray.Quit()
 	}()
 
-	if err := httpServer.ListenAndServe(); err != http.ErrServerClosed {
-		log.Fatalf("Server error: %v", err)
+	// Start HTTP server in background
+	go func() {
+		if err := httpServer.ListenAndServe(); err != http.ErrServerClosed {
+			log.Fatalf("Server error: %v", err)
+		}
+	}()
+
+	// Auto-open browser unless NO_BROWSER env var is set
+	if os.Getenv("NO_BROWSER") == "" {
+		go func() {
+			time.Sleep(500 * time.Millisecond)
+			openBrowser(localURL)
+		}()
 	}
-	log.Println("Server stopped")
+
+	// Notify Telegram with tunnel URL if available
+	go func() {
+		time.Sleep(5 * time.Second)
+		if tunnelURL := readTunnelURL(); tunnelURL != "" {
+			bot.Send(fmt.Sprintf("🟢 <b>Server started</b>\n\n🖥 Local: %s\n🌍 Public: %s\n📄 Swagger: %s/api/v1/docs", localURL, tunnelURL, tunnelURL))
+		} else {
+			bot.NotifyServerStarted(localURL)
+		}
+	}()
+
+	// System tray (blocks main thread — this IS the main loop)
+	systray.Run(func() {
+		// onReady
+		systray.SetIcon(generateTrayIcon())
+		systray.SetTitle("Siigo Web")
+		systray.SetTooltip(fmt.Sprintf("Siigo Web — %s", localURL))
+
+		mOpen := systray.AddMenuItem("Open Web Panel", "Open in browser")
+		systray.AddSeparator()
+		mRestart := systray.AddMenuItem("Restart Server", "Restart the server")
+		systray.AddSeparator()
+		mQuit := systray.AddMenuItem("Quit", "Close Siigo Web")
+
+		go func() {
+			for {
+				select {
+				case <-mOpen.ClickedCh:
+					openBrowser(localURL)
+				case <-mRestart.ClickedCh:
+					log.Println("Restarting server...")
+					db.AddLog("info", "APP", "Server restarted from tray")
+					// Restart the executable
+					exe, _ := os.Executable()
+					cmd := exec.Command(exe)
+					cmd.Stdout = os.Stdout
+					cmd.Stderr = os.Stderr
+					cmd.Start()
+					// Shutdown current instance (new one will kill us via port check)
+					shutdownServer()
+					systray.Quit()
+				case <-mQuit.ClickedCh:
+					shutdownServer()
+					systray.Quit()
+				}
+			}
+		}()
+	}, func() {
+		// onExit
+		log.Println("Tray exited, server stopped")
+	})
+}
+
+// killExistingInstance checks if the port is already in use and kills the process occupying it.
+func killExistingInstance(port string) {
+	// Try to listen briefly to check if port is free
+	ln, err := net.Listen("tcp", ":"+port)
+	if err == nil {
+		// Port is free, nothing to kill
+		ln.Close()
+		return
+	}
+
+	log.Printf("Port %s is in use, attempting to kill existing instance...", port)
+
+	if runtime.GOOS == "windows" {
+		// Use netstat to find the PID using this port
+		out, err := exec.Command("cmd", "/c", "netstat", "-ano").Output()
+		if err != nil {
+			log.Printf("Could not run netstat: %v", err)
+			return
+		}
+
+		lines := strings.Split(string(out), "\n")
+		for _, line := range lines {
+			// Look for LISTENING on our port
+			if strings.Contains(line, ":"+port) && strings.Contains(line, "LISTENING") {
+				fields := strings.Fields(strings.TrimSpace(line))
+				if len(fields) >= 5 {
+					pid := fields[len(fields)-1]
+					if pid != "0" {
+						log.Printf("Killing process PID %s on port %s", pid, port)
+						killCmd := exec.Command("taskkill", "/F", "/PID", pid)
+						if killErr := killCmd.Run(); killErr != nil {
+							log.Printf("Could not kill PID %s: %v", pid, killErr)
+						} else {
+							log.Printf("Killed previous instance (PID %s)", pid)
+							time.Sleep(500 * time.Millisecond) // Wait for port to be released
+						}
+					}
+				}
+				break
+			}
+		}
+	} else {
+		// Unix: use lsof or fuser
+		out, err := exec.Command("lsof", "-ti", ":"+port).Output()
+		if err == nil {
+			pid := strings.TrimSpace(string(out))
+			if pid != "" {
+				log.Printf("Killing process PID %s on port %s", pid, port)
+				killCmd := exec.Command("kill", "-9", pid)
+				if killErr := killCmd.Run(); killErr != nil {
+					log.Printf("Could not kill PID %s: %v", pid, killErr)
+				} else {
+					log.Printf("Killed previous instance (PID %s)", pid)
+					time.Sleep(500 * time.Millisecond)
+				}
+			}
+		}
+	}
+}
+
+// openBrowser opens the given URL in the default browser
+func openBrowser(url string) {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+	case "darwin":
+		cmd = exec.Command("open", url)
+	default:
+		cmd = exec.Command("xdg-open", url)
+	}
+	if err := cmd.Start(); err != nil {
+		log.Printf("Could not open browser: %v", err)
+	}
 }
 
 // readTunnelURL reads the Cloudflare tunnel URL from the log file.
@@ -442,11 +625,11 @@ func (s *Server) permMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		token := extractToken(r)
 		info := s.getTokenInfo(token)
 		if info == nil {
-			jsonError(w, "No autorizado", 401)
+			jsonError(w, "Unauthorized", 401)
 			return
 		}
 		if !hasModulePermission(info, module) {
-			jsonError(w, "Sin permiso para este modulo", 403)
+			jsonError(w, "No permission for this module", 403)
 			return
 		}
 		next(w, r)
@@ -466,7 +649,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	if !s.loginLimiter.Allow(strings.TrimSpace(ip)) {
 		w.Header().Set("Retry-After", "60")
-		jsonError(w, "Demasiados intentos. Intente de nuevo en 1 minuto.", 429)
+		jsonError(w, "Too many attempts. Try again in 1 minute.", 429)
 		s.bot.NotifyLoginFailed("rate-limited", ip)
 		return
 	}
@@ -494,7 +677,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		// Check app_users table
 		user, err := s.db.GetAppUser(body.Username)
 		if err != nil || !s.db.CheckAppUserPassword(user, body.Password) || !user.Active {
-			jsonError(w, "Credenciales incorrectas", 401)
+			jsonError(w, "Invalid credentials", 401)
 			return
 		}
 		perms := user.Permissions
@@ -526,7 +709,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleCheckAuth(w http.ResponseWriter, r *http.Request) {
 	token := extractToken(r)
 	if !s.isValidToken(token) {
-		jsonError(w, "No autorizado", 401)
+		jsonError(w, "Unauthorized", 401)
 		return
 	}
 	info := s.getTokenInfo(token)
@@ -559,7 +742,7 @@ func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		token := extractToken(r)
 		if !s.isValidToken(token) {
-			jsonError(w, "No autorizado", 401)
+			jsonError(w, "Unauthorized", 401)
 			return
 		}
 		next(w, r)
@@ -615,6 +798,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/refresh-cache", s.authMiddleware(s.handleRefreshCache))
 	mux.HandleFunc("/api/field-mappings", s.permMiddleware(s.handleFieldMappings))
 	mux.HandleFunc("/api/send-enabled", s.authMiddleware(s.handleSendEnabled))
+	mux.HandleFunc("/api/global-send", s.permMiddleware(s.handleGlobalSend))
 	mux.HandleFunc("/api/detect-enabled", s.authMiddleware(s.handleDetectEnabled))
 	mux.HandleFunc("/api/error-summary", s.permMiddleware(s.handleErrorSummary))
 	mux.HandleFunc("/api/export-history", s.authMiddleware(s.handleExportHistory))
@@ -704,7 +888,7 @@ func jsonError(w http.ResponseWriter, msg string, code int) {
 
 func (s *Server) startSyncLoop() {
 	s.paused = false
-	s.db.AddLog("info", "SYNC", "Loops iniciados (deteccion + envio independientes)")
+	s.db.AddLog("info", "SYNC", "Loops started (detect + send independent)")
 
 	go s.startDetectLoop()
 	s.startSendLoop()
@@ -729,7 +913,7 @@ func (s *Server) startDetectLoop() {
 				s.doDetectCycle()
 			}
 		case <-s.stopCh:
-			s.db.AddLog("info", "DETECT", "Detect loop detenido")
+			s.db.AddLog("info", "DETECT", "Detect loop stopped")
 			return
 		}
 	}
@@ -756,7 +940,7 @@ func (s *Server) startSendLoop() {
 				s.doSendCycle()
 			}
 		case <-s.stopCh:
-			s.db.AddLog("info", "SEND", "Send loop detenido")
+			s.db.AddLog("info", "SEND", "Send loop stopped")
 			return
 		}
 	}
@@ -766,7 +950,7 @@ func (s *Server) doDetectCycle() {
 	s.detecting = true
 	defer func() { s.detecting = false }()
 
-	s.db.AddLog("info", "DETECT", "--- Ciclo deteccion iniciado ---")
+	s.db.AddLog("info", "DETECT", "--- Detection cycle started --- Reading ISAM files...")
 
 	// Each diff only runs if detection is enabled for that table
 	type detectEntry struct {
@@ -799,13 +983,16 @@ func (s *Server) doDetectCycle() {
 		{"historial", s.diffHistorial},
 		{"maestros", s.diffMaestros},
 	}
+	enabledCount := 0
 	for _, d := range detects {
 		if s.cfg.IsDetectEnabled(d.table) {
+			enabledCount++
+			s.db.AddLog("info", "DETECT", fmt.Sprintf("Scanning table: %s...", d.table))
 			d.fn()
 		}
 	}
 
-	s.db.AddLog("info", "DETECT", "--- Ciclo deteccion completado ---")
+	s.db.AddLog("info", "DETECT", fmt.Sprintf("--- Detection cycle completed --- %d tables scanned", enabledCount))
 
 	// Record sync stats for dashboard charts
 	stats := s.db.GetStats()
@@ -850,7 +1037,7 @@ func (s *Server) doSendCycle() {
 		return
 	}
 
-	s.db.AddLog("info", "SEND", "--- Ciclo envio iniciado ---")
+	s.db.AddLog("info", "SEND", "--- Send cycle started --- Sending pending records to API...")
 
 	totalSent, totalErrors := 0, 0
 	for _, t := range tables {
@@ -869,12 +1056,12 @@ func (s *Server) doSendCycle() {
 	} else if totalSent > 0 {
 		// At least some succeeded — reset counter
 		if s.sendFailCount > 0 {
-			s.db.AddLog("info", "SEND", fmt.Sprintf("Envio recuperado (fallos consecutivos reseteados de %d a 0)", s.sendFailCount))
+			s.db.AddLog("info", "SEND", fmt.Sprintf("Send recovered (consecutive failures reset from %d to 0)", s.sendFailCount))
 		}
 		s.sendFailCount = 0
 	}
 
-	s.db.AddLog("info", "SEND", "--- Ciclo envio completado ---")
+	s.db.AddLog("info", "SEND", fmt.Sprintf("--- Send cycle completed --- Sent: %d, Errors: %d", totalSent, totalErrors))
 
 	// SSE notification
 	sseNotify("send_complete", fmt.Sprintf(`{"sent":%d,"errors":%d}`, totalSent, totalErrors))
@@ -887,13 +1074,13 @@ func (s *Server) checkSendCircuitBreaker(reason string) {
 	threshold := s.cfg.Sync.GetCircuitBreakerThreshold()
 	if s.sendFailCount >= threshold && !s.sendPaused {
 		s.sendPaused = true
-		msg := fmt.Sprintf("🔴 <b>Envio auto-pausado</b>\n\n%d fallos consecutivos.\nUltimo: %s\n\nRevisa el servidor de destino y reactiva el envio con /send-resume o desde la web.",
+		msg := fmt.Sprintf("🔴 <b>Send auto-paused</b>\n\n%d consecutive failures.\nLast: %s\n\nCheck the destination server and reactivate send with /send-resume or from the web.",
 			s.sendFailCount, reason)
 		s.bot.Send(msg)
-		s.db.AddLog("error", "SEND", fmt.Sprintf("Circuit breaker activado: %d fallos consecutivos (%s). Envio pausado automaticamente.", s.sendFailCount, reason))
+		s.db.AddLog("error", "SEND", fmt.Sprintf("Circuit breaker activated: %d consecutive failures (%s). Send auto-paused.", s.sendFailCount, reason))
 		s.webhookDispatch("send_paused", map[string]interface{}{"reason": reason, "fail_count": s.sendFailCount})
 	} else if s.sendFailCount > 0 && !s.sendPaused {
-		s.db.AddLog("warn", "SEND", fmt.Sprintf("Fallo de envio %d/%d (%s)", s.sendFailCount, threshold, reason))
+		s.db.AddLog("warn", "SEND", fmt.Sprintf("Send failure %d/%d (%s)", s.sendFailCount, threshold, reason))
 	}
 }
 
@@ -1044,7 +1231,7 @@ func (s *Server) handleSetupPopulate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if s.cfg.SetupComplete {
-		jsonError(w, "Setup ya completado", 400)
+		jsonError(w, "Setup already completed", 400)
 		return
 	}
 
@@ -1078,7 +1265,7 @@ func (s *Server) handleSetupPopulate(w http.ResponseWriter, r *http.Request) {
 		s.setupPopulating = ""
 		data, _ := json.Marshal(map[string]interface{}{"table": req.Table, "count": count})
 		sseNotify("setup_table_done", string(data))
-		s.db.AddLog("info", "SETUP", fmt.Sprintf("Tabla %s poblada: %d registros", req.Table, count))
+		s.db.AddLog("info", "SETUP", fmt.Sprintf("Table %s populated: %d records", req.Table, count))
 	}()
 
 	jsonResponse(w, map[string]interface{}{"status": "started", "table": req.Table})
@@ -1101,7 +1288,7 @@ func (s *Server) handleSetupComplete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.db.AddLog("info", "SETUP", "Setup wizard completado — sync loops iniciados")
+	s.db.AddLog("info", "SETUP", "Setup wizard completed — sync loops started")
 	go s.startSyncLoop()
 	sseNotify("setup_complete", "{}")
 
@@ -1113,7 +1300,7 @@ func (s *Server) handleSetupComplete(w http.ResponseWriter, r *http.Request) {
 func (s *Server) diffClientes() {
 	clientes, _, err := parsers.ParseTercerosAmpliados(s.cfg.Siigo.DataPath)
 	if err != nil {
-		s.db.AddLog("error", "Z08A", "Error parseando: "+err.Error())
+		s.db.AddLog("error", "Z08A", "Error parsing: "+err.Error())
 		return
 	}
 
@@ -1126,24 +1313,29 @@ func (s *Server) diffClientes() {
 			continue
 		}
 		currentKeys[nit] = true
-		action := s.db.UpsertClient(nit, t.Nombre, t.TipoPersona, t.Empresa, t.Direccion, t.Email, t.RepresentanteLegal, t.Hash)
+		action := s.db.UpsertClient(nit, t.Name, t.PersonType, t.Company, t.Address, t.Email, t.LegalRep, t.Hash)
 		switch action {
 		case "add":
 			adds++
+			s.db.AddLog("info", "DETECT", fmt.Sprintf("[Clients] + New: NIT=%s, Name=%s", nit, t.Name))
 		case "edit":
 			edits++
+			s.db.AddLog("info", "DETECT", fmt.Sprintf("[Clients] ~ Updated: NIT=%s, Name=%s", nit, t.Name))
 		}
 	}
 
 	deletes := s.db.MarkDeletedClients(currentKeys)
-	s.db.AddLog("info", "Z08A", fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(clientes)))
+	if deletes > 0 {
+		s.db.AddLog("info", "DETECT", fmt.Sprintf("[Clients] - Deleted: %d records no longer in ISAM", deletes))
+	}
+	s.db.AddLog("info", "DETECT", fmt.Sprintf("[Clients] Summary: %d new, %d updated, %d deleted (ISAM total: %d)", adds, edits, deletes, len(clientes)))
 	s.bot.NotifyChangesDetected("Clientes", adds, edits, deletes)
 }
 
 func (s *Server) diffProductos() {
 	productos, year, err := parsers.ParseInventario(s.cfg.Siigo.DataPath)
 	if err != nil {
-		s.db.AddLog("error", "Z04", "Error parseando inventario: "+err.Error())
+		s.db.AddLog("error", "Z04", "Error parsing inventory: "+err.Error())
 		return
 	}
 
@@ -1151,30 +1343,35 @@ func (s *Server) diffProductos() {
 	currentKeys := make(map[string]bool, len(productos))
 
 	for _, p := range productos {
-		key := p.Codigo
+		key := p.Code
 		if key == "" {
 			key = p.Hash
 		}
 		currentKeys[key] = true
-		action := s.db.UpsertProduct(key, p.Nombre, p.NombreCorto, p.Grupo, p.Referencia, p.Empresa, p.Hash)
+		action := s.db.UpsertProduct(key, p.Name, p.ShortName, p.Group, p.Reference, p.Company, p.Hash)
 		switch action {
 		case "add":
 			adds++
+			s.db.AddLog("info", "DETECT", fmt.Sprintf("[Products] + New: Code=%s, Name=%s, Group=%s", key, p.Name, p.Group))
 		case "edit":
 			edits++
+			s.db.AddLog("info", "DETECT", fmt.Sprintf("[Products] ~ Updated: Code=%s, Name=%s", key, p.Name))
 		}
 	}
 
 	deletes := s.db.MarkDeletedProducts(currentKeys)
+	if deletes > 0 {
+		s.db.AddLog("info", "DETECT", fmt.Sprintf("[Products] - Deleted: %d records no longer in ISAM", deletes))
+	}
 	source := "Z04" + year
-	s.db.AddLog("info", source, fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(productos)))
+	s.db.AddLog("info", "DETECT", fmt.Sprintf("[Products] Summary (%s): %d new, %d updated, %d deleted (ISAM total: %d)", source, adds, edits, deletes, len(productos)))
 	s.bot.NotifyChangesDetected("Productos", adds, edits, deletes)
 }
 
 func (s *Server) diffMovimientos() {
 	movimientos, err := parsers.ParseMovimientos(s.cfg.Siigo.DataPath)
 	if err != nil {
-		s.db.AddLog("error", "Z49", "Error parseando: "+err.Error())
+		s.db.AddLog("error", "Z49", "Error parsing: "+err.Error())
 		return
 	}
 
@@ -1182,39 +1379,44 @@ func (s *Server) diffMovimientos() {
 	currentKeys := make(map[string]bool, len(movimientos))
 
 	for _, m := range movimientos {
-		key := m.TipoComprobante + "-" + m.NumeroDoc
+		key := m.VoucherType + "-" + m.DocNumber
 		if key == "-" {
 			key = m.Hash
 		}
 		currentKeys[key] = true
 
-		desc := m.Descripcion
-		if m.Descripcion2 != "" {
+		desc := m.Description
+		if m.Description2 != "" {
 			if desc != "" {
-				desc += " | " + m.Descripcion2
+				desc += " | " + m.Description2
 			} else {
-				desc = m.Descripcion2
+				desc = m.Description2
 			}
 		}
 		// Z49 only has tipo, numero, nombre, descripcion. No fecha/cuenta/valor/tipoMov.
-		action := s.db.UpsertMovement(key, m.TipoComprobante, m.Empresa, m.NumeroDoc, "", m.NombreTercero, "", desc, "", "", m.Hash)
+		action := s.db.UpsertMovement(key, m.VoucherType, m.Company, m.DocNumber, "", m.ThirdPartyName, "", desc, "", "", m.Hash)
 		switch action {
 		case "add":
 			adds++
+			s.db.AddLog("info", "DETECT", fmt.Sprintf("[Movements] + New: %s Doc=%s, ThirdParty=%s", m.VoucherType, m.DocNumber, m.ThirdPartyName))
 		case "edit":
 			edits++
+			s.db.AddLog("info", "DETECT", fmt.Sprintf("[Movements] ~ Updated: %s Doc=%s, ThirdParty=%s", m.VoucherType, m.DocNumber, m.ThirdPartyName))
 		}
 	}
 
 	deletes := s.db.MarkDeletedMovements(currentKeys)
-	s.db.AddLog("info", "Z49", fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(movimientos)))
+	if deletes > 0 {
+		s.db.AddLog("info", "DETECT", fmt.Sprintf("[Movements] - Deleted: %d records", deletes))
+	}
+	s.db.AddLog("info", "DETECT", fmt.Sprintf("[Movements] Summary: %d new, %d updated, %d deleted (ISAM total: %d)", adds, edits, deletes, len(movimientos)))
 	s.bot.NotifyChangesDetected("Movimientos", adds, edits, deletes)
 }
 
 func (s *Server) diffCartera() {
 	cartera, year, err := parsers.ParseCarteraLatest(s.cfg.Siigo.DataPath)
 	if err != nil {
-		s.db.AddLog("error", "Z09", "Error parseando cartera: "+err.Error())
+		s.db.AddLog("error", "Z09", "Error parsing cartera: "+err.Error())
 		return
 	}
 
@@ -1223,31 +1425,36 @@ func (s *Server) diffCartera() {
 	file := "Z09" + year
 
 	for _, c := range cartera {
-		key := file + "-" + c.TipoRegistro + "-" + c.Empresa + "-" + c.Secuencia
+		key := file + "-" + c.RecordType + "-" + c.Company + "-" + c.Sequence
 		currentKeys[key] = true
 
-		fecha := c.Fecha
+		fecha := c.Date
 		if len(fecha) == 8 {
 			fecha = fecha[:4] + "-" + fecha[4:6] + "-" + fecha[6:8]
 		}
-		action := s.db.UpsertCartera(key, c.TipoRegistro, c.Empresa, c.Secuencia, c.TipoDoc, c.NitTercero, c.CuentaContable, fecha, c.Descripcion, c.TipoMov, c.Hash)
+		action := s.db.UpsertCartera(key, c.RecordType, c.Company, c.Sequence, c.DocType, c.ThirdPartyNit, c.LedgerAccount, fecha, c.Description, c.MovType, c.Hash)
 		switch action {
 		case "add":
 			adds++
+			s.db.AddLog("info", "DETECT", fmt.Sprintf("[Cartera] + New: NIT=%s, Account=%s, Date=%s, %s", c.ThirdPartyNit, c.LedgerAccount, fecha, c.Description))
 		case "edit":
 			edits++
+			s.db.AddLog("info", "DETECT", fmt.Sprintf("[Cartera] ~ Updated: NIT=%s, Account=%s, Date=%s", c.ThirdPartyNit, c.LedgerAccount, fecha))
 		}
 	}
 
 	deletes := s.db.MarkDeletedCartera(currentKeys)
-	s.db.AddLog("info", file, fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(cartera)))
+	if deletes > 0 {
+		s.db.AddLog("info", "DETECT", fmt.Sprintf("[Cartera] - Deleted: %d records", deletes))
+	}
+	s.db.AddLog("info", "DETECT", fmt.Sprintf("[Cartera] Summary (%s): %d new, %d updated, %d deleted (ISAM total: %d)", file, adds, edits, deletes, len(cartera)))
 	s.bot.NotifyChangesDetected("Cartera ("+file+")", adds, edits, deletes)
 }
 
 func (s *Server) diffPlanCuentas() {
 	cuentas, year, err := parsers.ParsePlanCuentas(s.cfg.Siigo.DataPath)
 	if err != nil {
-		s.db.AddLog("error", "Z03", "Error parseando plan de cuentas: "+err.Error())
+		s.db.AddLog("error", "Z03", "Error parsing chart of accounts: "+err.Error())
 		return
 	}
 
@@ -1255,11 +1462,11 @@ func (s *Server) diffPlanCuentas() {
 	currentKeys := make(map[string]bool, len(cuentas))
 
 	for _, c := range cuentas {
-		if c.CodigoCuenta == "" {
+		if c.AccountCode == "" {
 			continue
 		}
-		currentKeys[c.CodigoCuenta] = true
-		action := s.db.UpsertPlanCuenta(c.CodigoCuenta, c.Nombre, c.Empresa, c.Naturaleza, c.Hash, c.Activa, c.Auxiliar)
+		currentKeys[c.AccountCode] = true
+		action := s.db.UpsertPlanCuenta(c.AccountCode, c.Name, c.Company, c.Nature, c.Hash, c.Active, c.Auxiliary)
 		switch action {
 		case "add":
 			adds++
@@ -1270,14 +1477,16 @@ func (s *Server) diffPlanCuentas() {
 
 	deletes := s.db.MarkDeletedPlanCuentas(currentKeys)
 	source := "Z03" + year
-	s.db.AddLog("info", source, fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(cuentas)))
+	if adds > 0 || edits > 0 || deletes > 0 {
+		s.db.AddLog("info", "DETECT", fmt.Sprintf("[Chart of Accounts] %s: %d new, %d updated, %d deleted (total: %d)", source, adds, edits, deletes, len(cuentas)))
+	}
 	s.bot.NotifyChangesDetected("Plan Cuentas", adds, edits, deletes)
 }
 
 func (s *Server) diffActivosFijos() {
 	activos, year, err := parsers.ParseActivosFijos(s.cfg.Siigo.DataPath)
 	if err != nil {
-		s.db.AddLog("error", "Z27", "Error parseando activos fijos: "+err.Error())
+		s.db.AddLog("error", "Z27", "Error parsing fixed assets: "+err.Error())
 		return
 	}
 
@@ -1285,11 +1494,11 @@ func (s *Server) diffActivosFijos() {
 	currentKeys := make(map[string]bool, len(activos))
 
 	for _, a := range activos {
-		if a.Codigo == "" {
+		if a.Code == "" {
 			continue
 		}
-		currentKeys[a.Codigo] = true
-		action := s.db.UpsertActivoFijo(a.Codigo, a.Nombre, a.Empresa, a.NitResponsable, a.FechaAdquisicion, a.Hash)
+		currentKeys[a.Code] = true
+		action := s.db.UpsertActivoFijo(a.Code, a.Name, a.Company, a.ResponsibleNit, a.AcquisitionDate, a.Hash)
 		switch action {
 		case "add":
 			adds++
@@ -1300,14 +1509,16 @@ func (s *Server) diffActivosFijos() {
 
 	deletes := s.db.MarkDeletedActivosFijos(currentKeys)
 	source := "Z27" + year
-	s.db.AddLog("info", source, fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(activos)))
+	if adds > 0 || edits > 0 || deletes > 0 {
+		s.db.AddLog("info", "DETECT", fmt.Sprintf("[Fixed Assets] %s: %d new, %d updated, %d deleted (total: %d)", source, adds, edits, deletes, len(activos)))
+	}
 	s.bot.NotifyChangesDetected("Activos Fijos", adds, edits, deletes)
 }
 
 func (s *Server) diffSaldosTerceros() {
 	saldos, year, err := parsers.ParseSaldosTerceros(s.cfg.Siigo.DataPath)
 	if err != nil {
-		s.db.AddLog("error", "Z25", "Error parseando saldos terceros: "+err.Error())
+		s.db.AddLog("error", "Z25", "Error parsing third-party balances: "+err.Error())
 		return
 	}
 
@@ -1315,12 +1526,12 @@ func (s *Server) diffSaldosTerceros() {
 	currentKeys := make(map[string]bool, len(saldos))
 
 	for _, st := range saldos {
-		key := st.CuentaContable + "-" + st.NitTercero
+		key := st.LedgerAccount + "-" + st.ThirdPartyNit
 		if key == "-" {
 			continue
 		}
 		currentKeys[key] = true
-		action := s.db.UpsertSaldoTercero(key, st.CuentaContable, st.NitTercero, st.Empresa, st.Hash, st.SaldoAnterior, st.Debito, st.Credito, st.SaldoFinal)
+		action := s.db.UpsertSaldoTercero(key, st.LedgerAccount, st.ThirdPartyNit, st.Company, st.Hash, st.PrevBalance, st.Debit, st.Credit, st.FinalBalance)
 		switch action {
 		case "add":
 			adds++
@@ -1331,14 +1542,16 @@ func (s *Server) diffSaldosTerceros() {
 
 	deletes := s.db.MarkDeletedSaldosTerceros(currentKeys)
 	source := "Z25" + year
-	s.db.AddLog("info", source, fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(saldos)))
+	if adds > 0 || edits > 0 || deletes > 0 {
+		s.db.AddLog("info", "DETECT", fmt.Sprintf("[Third-Party Balances] %s: %d new, %d updated, %d deleted (total: %d)", source, adds, edits, deletes, len(saldos)))
+	}
 	s.bot.NotifyChangesDetected("Saldos Terceros", adds, edits, deletes)
 }
 
 func (s *Server) diffSaldosConsolidados() {
 	saldos, year, err := parsers.ParseSaldosConsolidados(s.cfg.Siigo.DataPath)
 	if err != nil {
-		s.db.AddLog("error", "Z28", "Error parseando saldos consolidados: "+err.Error())
+		s.db.AddLog("error", "Z28", "Error parsing consolidated balances: "+err.Error())
 		return
 	}
 
@@ -1346,11 +1559,11 @@ func (s *Server) diffSaldosConsolidados() {
 	currentKeys := make(map[string]bool, len(saldos))
 
 	for _, sc := range saldos {
-		if sc.CuentaContable == "" {
+		if sc.LedgerAccount == "" {
 			continue
 		}
-		currentKeys[sc.CuentaContable] = true
-		action := s.db.UpsertSaldoConsolidado(sc.CuentaContable, sc.Empresa, sc.Hash, sc.SaldoAnterior, sc.Debito, sc.Credito, sc.SaldoFinal)
+		currentKeys[sc.LedgerAccount] = true
+		action := s.db.UpsertSaldoConsolidado(sc.LedgerAccount, sc.Company, sc.Hash, sc.PrevBalance, sc.Debit, sc.Credit, sc.FinalBalance)
 		switch action {
 		case "add":
 			adds++
@@ -1361,14 +1574,16 @@ func (s *Server) diffSaldosConsolidados() {
 
 	deletes := s.db.MarkDeletedSaldosConsolidados(currentKeys)
 	source := "Z28" + year
-	s.db.AddLog("info", source, fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(saldos)))
+	if adds > 0 || edits > 0 || deletes > 0 {
+		s.db.AddLog("info", "DETECT", fmt.Sprintf("[Consolidated Balances] %s: %d new, %d updated, %d deleted (total: %d)", source, adds, edits, deletes, len(saldos)))
+	}
 	s.bot.NotifyChangesDetected("Saldos Consolidados", adds, edits, deletes)
 }
 
 func (s *Server) diffDocumentos() {
 	docs, year, err := parsers.ParseDocumentos(s.cfg.Siigo.DataPath)
 	if err != nil {
-		s.db.AddLog("error", "Z11", "Error parseando documentos: "+err.Error())
+		s.db.AddLog("error", "Z11", "Error parsing documents: "+err.Error())
 		return
 	}
 
@@ -1376,13 +1591,13 @@ func (s *Server) diffDocumentos() {
 	currentKeys := make(map[string]bool, len(docs))
 
 	for _, d := range docs {
-		key := d.TipoComprobante + "-" + d.CodigoComp + "-" + d.Secuencia + "-" + d.Hash[:8]
+		key := d.VoucherType + "-" + d.VoucherCode + "-" + d.Sequence + "-" + d.Hash[:8]
 		currentKeys[key] = true
-		fecha := d.Fecha
+		fecha := d.Date
 		if len(fecha) == 8 {
 			fecha = fecha[:4] + "-" + fecha[4:6] + "-" + fecha[6:8]
 		}
-		action := s.db.UpsertDocumento(key, d.TipoComprobante, d.CodigoComp, d.Secuencia, d.NitTercero, d.CuentaContable, d.ProductoRef, d.Bodega, d.CentroCosto, fecha, d.Descripcion, d.TipoMov, d.Referencia, d.Hash)
+		action := s.db.UpsertDocumento(key, d.VoucherType, d.VoucherCode, d.Sequence, d.ThirdPartyNit, d.LedgerAccount, d.ProductoRef, d.Warehouse, d.CostCenter, fecha, d.Description, d.MovType, d.Reference, d.Hash)
 		switch action {
 		case "add":
 			adds++
@@ -1393,14 +1608,16 @@ func (s *Server) diffDocumentos() {
 
 	deletes := s.db.MarkDeletedDocumentos(currentKeys)
 	source := "Z11" + year
-	s.db.AddLog("info", source, fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(docs)))
+	if adds > 0 || edits > 0 || deletes > 0 {
+		s.db.AddLog("info", "DETECT", fmt.Sprintf("[Documents] %s: %d new, %d updated, %d deleted (total: %d)", source, adds, edits, deletes, len(docs)))
+	}
 	s.bot.NotifyChangesDetected("Documentos", adds, edits, deletes)
 }
 
 func (s *Server) diffTercerosAmpliados() {
 	terceros, year, err := parsers.ParseTercerosAmpliados(s.cfg.Siigo.DataPath)
 	if err != nil {
-		s.db.AddLog("error", "Z08A", "Error parseando terceros ampliados: "+err.Error())
+		s.db.AddLog("error", "Z08A", "Error parsing extended third parties: "+err.Error())
 		return
 	}
 
@@ -1412,7 +1629,7 @@ func (s *Server) diffTercerosAmpliados() {
 			continue
 		}
 		currentKeys[t.Nit] = true
-		action := s.db.UpsertTerceroAmpliado(t.Nit, t.Nombre, t.Empresa, t.TipoPersona, t.RepresentanteLegal, t.Direccion, t.Email, t.Hash)
+		action := s.db.UpsertTerceroAmpliado(t.Nit, t.Name, t.Company, t.PersonType, t.LegalRep, t.Address, t.Email, t.Hash)
 		switch action {
 		case "add":
 			adds++
@@ -1423,14 +1640,16 @@ func (s *Server) diffTercerosAmpliados() {
 
 	deletes := s.db.MarkDeletedTercerosAmpliados(currentKeys)
 	source := "Z08A" + year
-	s.db.AddLog("info", source, fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(terceros)))
+	if adds > 0 || edits > 0 || deletes > 0 {
+		s.db.AddLog("info", "DETECT", fmt.Sprintf("[Extended Clients] %s: %d new, %d updated, %d deleted (total: %d)", source, adds, edits, deletes, len(terceros)))
+	}
 	s.bot.NotifyChangesDetected("Terceros Ampliados", adds, edits, deletes)
 }
 
 func (s *Server) diffTransaccionesDetalle() {
 	items, err := parsers.ParseTransaccionesDetalle(s.cfg.Siigo.DataPath)
 	if err != nil {
-		s.db.AddLog("error", "Z07T", "Error parseando transacciones detalle: "+err.Error())
+		s.db.AddLog("error", "Z07T", "Error parsing transaction details: "+err.Error())
 		return
 	}
 
@@ -1438,12 +1657,12 @@ func (s *Server) diffTransaccionesDetalle() {
 	currentKeys := make(map[string]bool, len(items))
 
 	for _, t := range items {
-		key := t.TipoComprobante + "-" + t.Empresa + "-" + t.Secuencia + "-" + t.CuentaContable
+		key := t.VoucherType + "-" + t.Company + "-" + t.Sequence + "-" + t.LedgerAccount
 		if key == "---" {
 			key = t.Hash
 		}
 		currentKeys[key] = true
-		action := s.db.UpsertTransaccionDetalle(key, t.TipoComprobante, t.Empresa, t.Secuencia, t.NitTercero, t.CuentaContable, t.FechaDocumento, t.FechaVencimiento, t.TipoMovimiento, t.Referencia, t.Hash, t.Valor)
+		action := s.db.UpsertTransaccionDetalle(key, t.VoucherType, t.Company, t.Sequence, t.ThirdPartyNit, t.LedgerAccount, t.DocDate, t.DueDate, t.MovType, t.Reference, t.Hash, t.Amount)
 		switch action {
 		case "add":
 			adds++
@@ -1453,13 +1672,15 @@ func (s *Server) diffTransaccionesDetalle() {
 	}
 
 	deletes := s.db.MarkDeletedTransaccionesDetalle(currentKeys)
-	s.db.AddLog("info", "Z07T", fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(items)))
+	if adds > 0 || edits > 0 || deletes > 0 {
+		s.db.AddLog("info", "DETECT", fmt.Sprintf("[Transaction Details] Z07T: %d new, %d updated, %d deleted (total: %d)", adds, edits, deletes, len(items)))
+	}
 }
 
 func (s *Server) diffPeriodosContables() {
 	items, year, err := parsers.ParsePeriodos(s.cfg.Siigo.DataPath)
 	if err != nil {
-		s.db.AddLog("error", "Z26", "Error parseando periodos contables: "+err.Error())
+		s.db.AddLog("error", "Z26", "Error parsing accounting periods: "+err.Error())
 		return
 	}
 
@@ -1467,12 +1688,12 @@ func (s *Server) diffPeriodosContables() {
 	currentKeys := make(map[string]bool, len(items))
 
 	for _, p := range items {
-		key := p.Empresa + "-" + p.NumeroPeriodo
+		key := p.Company + "-" + p.PeriodNumber
 		if key == "-" {
 			key = p.Hash
 		}
 		currentKeys[key] = true
-		action := s.db.UpsertPeriodoContable(key, p.Empresa, p.NumeroPeriodo, p.FechaInicio, p.FechaFin, p.Estado, p.Hash, p.Saldo1, p.Saldo2, p.Saldo3)
+		action := s.db.UpsertPeriodoContable(key, p.Company, p.PeriodNumber, p.StartDate, p.EndDate, p.Status, p.Hash, p.Balance1, p.Balance2, p.Balance3)
 		switch action {
 		case "add":
 			adds++
@@ -1483,13 +1704,15 @@ func (s *Server) diffPeriodosContables() {
 
 	deletes := s.db.MarkDeletedPeriodosContables(currentKeys)
 	source := "Z26" + year
-	s.db.AddLog("info", source, fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(items)))
+	if adds > 0 || edits > 0 || deletes > 0 {
+		s.db.AddLog("info", "DETECT", fmt.Sprintf("[Accounting Periods] %s: %d new, %d updated, %d deleted (total: %d)", source, adds, edits, deletes, len(items)))
+	}
 }
 
 func (s *Server) diffCondicionesPago() {
 	items, year, err := parsers.ParseCondicionesPago(s.cfg.Siigo.DataPath)
 	if err != nil {
-		s.db.AddLog("error", "Z05", "Error parseando condiciones pago: "+err.Error())
+		s.db.AddLog("error", "Z05", "Error parsing payment conditions: "+err.Error())
 		return
 	}
 
@@ -1497,12 +1720,12 @@ func (s *Server) diffCondicionesPago() {
 	currentKeys := make(map[string]bool, len(items))
 
 	for _, c := range items {
-		key := c.Tipo + "-" + c.Empresa + "-" + c.Secuencia + "-" + c.NIT
+		key := c.RecType + "-" + c.Company + "-" + c.Sequence + "-" + c.NIT
 		if key == "---" {
 			key = c.Hash
 		}
 		currentKeys[key] = true
-		action := s.db.UpsertCondicionPago(key, c.Tipo, c.Empresa, c.Secuencia, c.TipoDoc, c.Fecha, c.NIT, c.TipoSecundario, c.FechaRegistro, c.Hash, c.Valor)
+		action := s.db.UpsertCondicionPago(key, c.RecType, c.Company, c.Sequence, c.DocType, c.Date, c.NIT, c.SecondaryType, c.RegDate, c.Hash, c.Amount)
 		switch action {
 		case "add":
 			adds++
@@ -1513,13 +1736,15 @@ func (s *Server) diffCondicionesPago() {
 
 	deletes := s.db.MarkDeletedCondicionesPago(currentKeys)
 	source := "Z05" + year
-	s.db.AddLog("info", source, fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(items)))
+	if adds > 0 || edits > 0 || deletes > 0 {
+		s.db.AddLog("info", "DETECT", fmt.Sprintf("[Payment Conditions] %s: %d new, %d updated, %d deleted (total: %d)", source, adds, edits, deletes, len(items)))
+	}
 }
 
 func (s *Server) diffLibrosAuxiliares() {
 	items, year, err := parsers.ParseLibrosAuxiliares(s.cfg.Siigo.DataPath)
 	if err != nil {
-		s.db.AddLog("error", "Z07", "Error parseando libros auxiliares: "+err.Error())
+		s.db.AddLog("error", "Z07", "Error parsing auxiliary ledgers: "+err.Error())
 		return
 	}
 
@@ -1527,12 +1752,12 @@ func (s *Server) diffLibrosAuxiliares() {
 	currentKeys := make(map[string]bool, len(items))
 
 	for _, la := range items {
-		key := la.TipoComprobante + "-" + la.Empresa + "-" + la.CuentaContable + "-" + la.NitTercero + "-" + la.FechaDocumento
+		key := la.VoucherType + "-" + la.Company + "-" + la.LedgerAccount + "-" + la.ThirdPartyNit + "-" + la.DocDate
 		if key == "----" {
 			key = la.Hash
 		}
 		currentKeys[key] = true
-		action := s.db.UpsertLibroAuxiliar(key, la.Empresa, la.CuentaContable, la.TipoComprobante, la.CodigoComprobante, la.FechaDocumento, la.NitTercero, la.Hash, la.Saldo, la.Debito, la.Credito)
+		action := s.db.UpsertLibroAuxiliar(key, la.Company, la.LedgerAccount, la.VoucherType, la.VoucherCode, la.DocDate, la.ThirdPartyNit, la.Hash, la.Balance, la.Debit, la.Credit)
 		switch action {
 		case "add":
 			adds++
@@ -1543,13 +1768,15 @@ func (s *Server) diffLibrosAuxiliares() {
 
 	deletes := s.db.MarkDeletedLibrosAuxiliares(currentKeys)
 	source := "Z07" + year
-	s.db.AddLog("info", source, fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(items)))
+	if adds > 0 || edits > 0 || deletes > 0 {
+		s.db.AddLog("info", "DETECT", fmt.Sprintf("[Auxiliary Ledgers] %s: %d new, %d updated, %d deleted (total: %d)", source, adds, edits, deletes, len(items)))
+	}
 }
 
 func (s *Server) diffCodigosDane() {
 	items, err := parsers.ParseDane(s.cfg.Siigo.DataPath)
 	if err != nil {
-		s.db.AddLog("error", "ZDANE", "Error parseando codigos DANE: "+err.Error())
+		s.db.AddLog("error", "ZDANE", "Error parsing DANE codes: "+err.Error())
 		return
 	}
 
@@ -1557,11 +1784,11 @@ func (s *Server) diffCodigosDane() {
 	currentKeys := make(map[string]bool, len(items))
 
 	for _, d := range items {
-		if d.Codigo == "" {
+		if d.Code == "" {
 			continue
 		}
-		currentKeys[d.Codigo] = true
-		action := s.db.UpsertCodigoDane(d.Codigo, d.Nombre, d.Hash)
+		currentKeys[d.Code] = true
+		action := s.db.UpsertCodigoDane(d.Code, d.Name, d.Hash)
 		switch action {
 		case "add":
 			adds++
@@ -1571,13 +1798,15 @@ func (s *Server) diffCodigosDane() {
 	}
 
 	deletes := s.db.MarkDeletedCodigosDane(currentKeys)
-	s.db.AddLog("info", "ZDANE", fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(items)))
+	if adds > 0 || edits > 0 || deletes > 0 {
+		s.db.AddLog("info", "DETECT", fmt.Sprintf("[DANE Codes] ZDANE: %d new, %d updated, %d deleted (total: %d)", adds, edits, deletes, len(items)))
+	}
 }
 
 func (s *Server) diffActividadesICA() {
 	items, err := parsers.ParseICA(s.cfg.Siigo.DataPath)
 	if err != nil {
-		s.db.AddLog("error", "ZICA", "Error parseando actividades ICA: "+err.Error())
+		s.db.AddLog("error", "ZICA", "Error parsing ICA activities: "+err.Error())
 		return
 	}
 
@@ -1585,11 +1814,11 @@ func (s *Server) diffActividadesICA() {
 	currentKeys := make(map[string]bool, len(items))
 
 	for _, a := range items {
-		if a.Codigo == "" {
+		if a.Code == "" {
 			continue
 		}
-		currentKeys[a.Codigo] = true
-		action := s.db.UpsertActividadICA(a.Codigo, a.Nombre, a.Tarifa, a.Hash)
+		currentKeys[a.Code] = true
+		action := s.db.UpsertActividadICA(a.Code, a.Name, a.Rate, a.Hash)
 		switch action {
 		case "add":
 			adds++
@@ -1599,13 +1828,15 @@ func (s *Server) diffActividadesICA() {
 	}
 
 	deletes := s.db.MarkDeletedActividadesICA(currentKeys)
-	s.db.AddLog("info", "ZICA", fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(items)))
+	if adds > 0 || edits > 0 || deletes > 0 {
+		s.db.AddLog("info", "DETECT", fmt.Sprintf("[ICA Activities] ZICA: %d new, %d updated, %d deleted (total: %d)", adds, edits, deletes, len(items)))
+	}
 }
 
 func (s *Server) diffConceptosPILA() {
 	items, err := parsers.ParsePILA(s.cfg.Siigo.DataPath)
 	if err != nil {
-		s.db.AddLog("error", "ZPILA", "Error parseando conceptos PILA: "+err.Error())
+		s.db.AddLog("error", "ZPILA", "Error parsing PILA concepts: "+err.Error())
 		return
 	}
 
@@ -1613,12 +1844,12 @@ func (s *Server) diffConceptosPILA() {
 	currentKeys := make(map[string]bool, len(items))
 
 	for _, p := range items {
-		key := p.Tipo + "-" + p.Fondo + "-" + p.Concepto
+		key := p.RecType + "-" + p.Fund + "-" + p.Concept
 		if key == "--" {
 			key = p.Hash
 		}
 		currentKeys[key] = true
-		action := s.db.UpsertConceptoPILA(key, p.Tipo, p.Fondo, p.Concepto, p.Flags, p.TipoBase, p.BaseCalculo, p.Hash)
+		action := s.db.UpsertConceptoPILA(key, p.RecType, p.Fund, p.Concept, p.Flags, p.BaseType, p.CalcBase, p.Hash)
 		switch action {
 		case "add":
 			adds++
@@ -1628,13 +1859,15 @@ func (s *Server) diffConceptosPILA() {
 	}
 
 	deletes := s.db.MarkDeletedConceptosPILA(currentKeys)
-	s.db.AddLog("info", "ZPILA", fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(items)))
+	if adds > 0 || edits > 0 || deletes > 0 {
+		s.db.AddLog("info", "DETECT", fmt.Sprintf("[PILA Concepts] ZPILA: %d new, %d updated, %d deleted (total: %d)", adds, edits, deletes, len(items)))
+	}
 }
 
 func (s *Server) diffActivosFijosDetalle() {
 	items, year, err := parsers.ParseActivosFijosDetalle(s.cfg.Siigo.DataPath)
 	if err != nil {
-		s.db.AddLog("error", "Z27D", "Error parseando activos fijos detalle: "+err.Error())
+		s.db.AddLog("error", "Z27D", "Error parsing fixed asset details: "+err.Error())
 		return
 	}
 
@@ -1642,12 +1875,12 @@ func (s *Server) diffActivosFijosDetalle() {
 	currentKeys := make(map[string]bool, len(items))
 
 	for _, a := range items {
-		key := a.Grupo + "-" + a.Secuencia
+		key := a.Group + "-" + a.Sequence
 		if key == "-" {
 			key = a.Hash
 		}
 		currentKeys[key] = true
-		action := s.db.UpsertActivoFijoDetalle(key, a.Grupo, a.Secuencia, a.Nombre, a.NitResponsable, a.Codigo, a.Fecha, a.Hash, a.ValorCompra)
+		action := s.db.UpsertActivoFijoDetalle(key, a.Group, a.Sequence, a.Name, a.ResponsibleNit, a.Code, a.Date, a.Hash, a.PurchaseValue)
 		switch action {
 		case "add":
 			adds++
@@ -1658,13 +1891,15 @@ func (s *Server) diffActivosFijosDetalle() {
 
 	deletes := s.db.MarkDeletedActivosFijosDetalle(currentKeys)
 	source := "Z27D" + year
-	s.db.AddLog("info", source, fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(items)))
+	if adds > 0 || edits > 0 || deletes > 0 {
+		s.db.AddLog("info", "DETECT", fmt.Sprintf("[Fixed Asset Details] %s: %d new, %d updated, %d deleted (total: %d)", source, adds, edits, deletes, len(items)))
+	}
 }
 
 func (s *Server) diffAuditTrailTerceros() {
 	items, year, err := parsers.ParseAuditTrailTerceros(s.cfg.Siigo.DataPath)
 	if err != nil {
-		s.db.AddLog("error", "Z11N", "Error parseando audit trail terceros: "+err.Error())
+		s.db.AddLog("error", "Z11N", "Error parsing third-party audit trail: "+err.Error())
 		return
 	}
 
@@ -1672,12 +1907,12 @@ func (s *Server) diffAuditTrailTerceros() {
 	currentKeys := make(map[string]bool, len(items))
 
 	for _, at := range items {
-		key := at.NitTercero + "-" + at.Timestamp
+		key := at.ThirdPartyNit + "-" + at.Timestamp
 		if key == "-" {
 			key = at.Hash
 		}
 		currentKeys[key] = true
-		action := s.db.UpsertAuditTrailTercero(key, at.FechaCambio, at.NitTercero, at.Timestamp, at.Usuario, at.FechaPeriodo, at.TipoDoc, at.Nombre, at.NitRepresentante, at.NombreRepresentante, at.Direccion, at.Email, at.Hash)
+		action := s.db.UpsertAuditTrailTercero(key, at.ChangeDate, at.ThirdPartyNit, at.Timestamp, at.User, at.PeriodDate, at.DocType, at.Name, at.RepNit, at.RepName, at.Address, at.Email, at.Hash)
 		switch action {
 		case "add":
 			adds++
@@ -1688,13 +1923,15 @@ func (s *Server) diffAuditTrailTerceros() {
 
 	deletes := s.db.MarkDeletedAuditTrailTerceros(currentKeys)
 	source := "Z11N" + year
-	s.db.AddLog("info", source, fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(items)))
+	if adds > 0 || edits > 0 || deletes > 0 {
+		s.db.AddLog("info", "DETECT", fmt.Sprintf("[Audit Trail] %s: %d new, %d updated, %d deleted (total: %d)", source, adds, edits, deletes, len(items)))
+	}
 }
 
 func (s *Server) diffClasificacionCuentas() {
 	items, year, err := parsers.ParseClasificacionCuentas(s.cfg.Siigo.DataPath)
 	if err != nil {
-		s.db.AddLog("error", "Z279CP", "Error parseando clasificacion cuentas: "+err.Error())
+		s.db.AddLog("error", "Z279CP", "Error parsing account classification: "+err.Error())
 		return
 	}
 
@@ -1702,11 +1939,11 @@ func (s *Server) diffClasificacionCuentas() {
 	currentKeys := make(map[string]bool, len(items))
 
 	for _, c := range items {
-		if c.CodigoCuenta == "" {
+		if c.AccountCode == "" {
 			continue
 		}
-		currentKeys[c.CodigoCuenta] = true
-		action := s.db.UpsertClasificacionCuenta(c.CodigoCuenta, c.CodigoGrupo, c.CodigoDetalle, c.Descripcion, c.Hash)
+		currentKeys[c.AccountCode] = true
+		action := s.db.UpsertClasificacionCuenta(c.AccountCode, c.GroupCode, c.DetailCode, c.Description, c.Hash)
 		switch action {
 		case "add":
 			adds++
@@ -1717,13 +1954,15 @@ func (s *Server) diffClasificacionCuentas() {
 
 	deletes := s.db.MarkDeletedClasificacionCuentas(currentKeys)
 	source := "Z279CP" + year
-	s.db.AddLog("info", source, fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(items)))
+	if adds > 0 || edits > 0 || deletes > 0 {
+		s.db.AddLog("info", "DETECT", fmt.Sprintf("[Account Classification] %s: %d new, %d updated, %d deleted (total: %d)", source, adds, edits, deletes, len(items)))
+	}
 }
 
 func (s *Server) diffMovimientosInventario() {
 	items, year, err := parsers.ParseMovimientosInventario(s.cfg.Siigo.DataPath)
 	if err != nil {
-		s.db.AddLog("error", "Z16", "Error parseando movimientos inventario: "+err.Error())
+		s.db.AddLog("error", "Z16", "Error parsing inventory movements: "+err.Error())
 		return
 	}
 
@@ -1735,7 +1974,7 @@ func (s *Server) diffMovimientosInventario() {
 			continue
 		}
 		currentKeys[m.RecordKey] = true
-		action := s.db.UpsertMovimientoInventario(m.RecordKey, m.Empresa, m.Grupo, m.CodigoProducto, m.TipoComprobante, m.CodigoComp, m.Secuencia, m.TipoDoc, m.Fecha, m.Cantidad, m.Valor, m.TipoMov, m.Hash)
+		action := s.db.UpsertMovimientoInventario(m.RecordKey, m.Company, m.Group, m.ProductCode, m.VoucherType, m.VoucherCode, m.Sequence, m.DocType, m.Date, m.Quantity, m.Amount, m.MovType, m.Hash)
 		switch action {
 		case "add":
 			adds++
@@ -1746,13 +1985,15 @@ func (s *Server) diffMovimientosInventario() {
 
 	deletes := s.db.MarkDeletedMovimientosInventario(currentKeys)
 	source := "Z16" + year
-	s.db.AddLog("info", source, fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(items)))
+	if adds > 0 || edits > 0 || deletes > 0 {
+		s.db.AddLog("info", "DETECT", fmt.Sprintf("[Inventory Movements] %s: %d new, %d updated, %d deleted (total: %d)", source, adds, edits, deletes, len(items)))
+	}
 }
 
 func (s *Server) diffSaldosInventario() {
 	items, year, err := parsers.ParseSaldosInventario(s.cfg.Siigo.DataPath)
 	if err != nil {
-		s.db.AddLog("error", "Z15", "Error parseando saldos inventario: "+err.Error())
+		s.db.AddLog("error", "Z15", "Error parsing inventory balances: "+err.Error())
 		return
 	}
 
@@ -1764,7 +2005,7 @@ func (s *Server) diffSaldosInventario() {
 			continue
 		}
 		currentKeys[si.RecordKey] = true
-		action := s.db.UpsertSaldoInventario(si.RecordKey, si.Empresa, si.Grupo, si.CodigoProducto, si.Hash, si.SaldoInicial, si.Entradas, si.Salidas, si.SaldoFinal)
+		action := s.db.UpsertSaldoInventario(si.RecordKey, si.Company, si.Group, si.ProductCode, si.Hash, si.InitBalance, si.Entries, si.Withdrawals, si.FinalBalance)
 		switch action {
 		case "add":
 			adds++
@@ -1775,13 +2016,15 @@ func (s *Server) diffSaldosInventario() {
 
 	deletes := s.db.MarkDeletedSaldosInventario(currentKeys)
 	source := "Z15" + year
-	s.db.AddLog("info", source, fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(items)))
+	if adds > 0 || edits > 0 || deletes > 0 {
+		s.db.AddLog("info", "DETECT", fmt.Sprintf("[Inventory Balances] %s: %d new, %d updated, %d deleted (total: %d)", source, adds, edits, deletes, len(items)))
+	}
 }
 
 func (s *Server) diffHistorial() {
 	items, year, err := parsers.ParseHistorial(s.cfg.Siigo.DataPath)
 	if err != nil {
-		s.db.AddLog("error", "Z18", "Error parseando historial: "+err.Error())
+		s.db.AddLog("error", "Z18", "Error parsing history: "+err.Error())
 		return
 	}
 
@@ -1789,12 +2032,12 @@ func (s *Server) diffHistorial() {
 	currentKeys := make(map[string]bool, len(items))
 
 	for _, h := range items {
-		key := h.Empresa + "-" + h.SubTipo + "-" + h.Fecha + "-" + h.NitOrigen
+		key := h.Company + "-" + h.SubType + "-" + h.Date + "-" + h.OriginNit
 		if key == "---" {
 			continue
 		}
 		currentKeys[key] = true
-		action := s.db.UpsertHistorial(key, h.TipoRegistro, h.SubTipo, h.Empresa, h.Fecha, h.NombreOrigen, h.NombreDestin, h.NitOrigen, h.Hash)
+		action := s.db.UpsertHistorial(key, h.RecordType, h.SubType, h.Company, h.Date, h.OriginName, h.DestName, h.OriginNit, h.Hash)
 		switch action {
 		case "add":
 			adds++
@@ -1805,13 +2048,15 @@ func (s *Server) diffHistorial() {
 
 	deletes := s.db.MarkDeletedHistorial(currentKeys)
 	source := "Z18" + year
-	s.db.AddLog("info", source, fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(items)))
+	if adds > 0 || edits > 0 || deletes > 0 {
+		s.db.AddLog("info", "DETECT", fmt.Sprintf("[History] %s: %d new, %d updated, %d deleted (total: %d)", source, adds, edits, deletes, len(items)))
+	}
 }
 
 func (s *Server) diffMaestros() {
 	items, err := parsers.ParseMaestros(s.cfg.Siigo.DataPath)
 	if err != nil {
-		s.db.AddLog("error", "Z06", "Error parseando maestros: "+err.Error())
+		s.db.AddLog("error", "Z06", "Error parsing master records: "+err.Error())
 		return
 	}
 
@@ -1819,12 +2064,12 @@ func (s *Server) diffMaestros() {
 	currentKeys := make(map[string]bool, len(items))
 
 	for _, m := range items {
-		key := m.Tipo + "-" + m.Codigo
+		key := m.RecType + "-" + m.Code
 		if key == "-" {
 			continue
 		}
 		currentKeys[key] = true
-		action := s.db.UpsertMaestro(key, m.Tipo, m.Codigo, m.Nombre, m.Responsable, m.Direccion, m.Email, m.Hash)
+		action := s.db.UpsertMaestro(key, m.RecType, m.Code, m.Name, m.Responsible, m.Address, m.Email, m.Hash)
 		switch action {
 		case "add":
 			adds++
@@ -1834,7 +2079,9 @@ func (s *Server) diffMaestros() {
 	}
 
 	deletes := s.db.MarkDeletedMaestros(currentKeys)
-	s.db.AddLog("info", "Z06", fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(items)))
+	if adds > 0 || edits > 0 || deletes > 0 {
+		s.db.AddLog("info", "DETECT", fmt.Sprintf("[Masters] Z06: %d new, %d updated, %d deleted (total: %d)", adds, edits, deletes, len(items)))
+	}
 }
 
 // ==================== SEND PENDING ====================
@@ -1871,6 +2118,8 @@ func (s *Server) sendPending(tableName string) (int, int) {
 		return 0, 0
 	}
 
+	s.db.AddLog("info", "SEND", fmt.Sprintf("[%s] Sending %d pending records...", tableName, len(pending)))
+
 	batchSize := s.cfg.Sync.BatchSize
 	if batchSize <= 0 {
 		batchSize = 50
@@ -1882,7 +2131,7 @@ func (s *Server) sendPending(tableName string) (int, int) {
 	for i, rec := range pending {
 		// Delay between batches (not before the first record)
 		if i > 0 && i%batchSize == 0 && batchDelay > 0 {
-			s.db.AddLog("info", "API", fmt.Sprintf("[%s] Batch %d completado, esperando %dms...", tableName, i/batchSize, s.cfg.Sync.BatchDelayMs))
+			s.db.AddLog("info", "SEND", fmt.Sprintf("[%s] Batch %d done (%d sent), waiting %dms...", tableName, i/batchSize, sent, s.cfg.Sync.BatchDelayMs))
 			time.Sleep(batchDelay)
 		}
 
@@ -1894,6 +2143,7 @@ func (s *Server) sendPending(tableName string) (int, int) {
 		if err != nil {
 			s.db.MarkSyncError(tableName, rec.ID, err.Error())
 			s.db.AddSyncHistory(tableName, rec.Key, rec.SyncAction, dataStr, "error", err.Error())
+			s.db.AddLog("error", "SEND", fmt.Sprintf("[%s] Failed key=%s (%s): %s", tableName, rec.Key, rec.SyncAction, err.Error()))
 			lastErr = err.Error()
 			errors++
 			continue
@@ -1901,11 +2151,12 @@ func (s *Server) sendPending(tableName string) (int, int) {
 
 		s.db.MarkSynced(tableName, rec.ID)
 		s.db.AddSyncHistory(tableName, rec.Key, rec.SyncAction, dataStr, "sent", "")
+		s.db.AddLog("info", "SEND", fmt.Sprintf("[%s] Sent OK: key=%s, action=%s", tableName, rec.Key, rec.SyncAction))
 		sent++
 	}
 
 	s.db.RemoveDeletedSynced(tableName)
-	s.db.AddLog("info", "API", fmt.Sprintf("[%s] Enviados: %d, Errores: %d (de %d pendientes, batch=%d)", tableName, sent, errors, len(pending), batchSize))
+	s.db.AddLog("info", "SEND", fmt.Sprintf("[%s] Summary: %d sent, %d errors (of %d pending)", tableName, sent, errors, len(pending)))
 	if errors > 0 {
 		s.bot.NotifySyncErrors(tableName, errors, lastErr)
 	}
@@ -1936,7 +2187,7 @@ func (s *Server) retryFailedRecords() {
 		n := s.db.RequeueRetryableErrors(table, maxRetries)
 		if n > 0 {
 			totalRequeued += n
-			s.db.AddLog("info", "RETRY", fmt.Sprintf("[%s] %d registros reintentados automaticamente (intento %d/%d)", table, n, rc+1, maxRetries))
+			s.db.AddLog("info", "RETRY", fmt.Sprintf("[%s] %d records auto-retried (attempt %d/%d)", table, n, rc+1, maxRetries))
 		}
 	}
 
@@ -1953,7 +2204,7 @@ func (s *Server) retryFailedRecords() {
 		delay = 5 * time.Minute
 	}
 
-	s.db.AddLog("info", "RETRY", fmt.Sprintf("Backoff exponencial: esperando %ds antes de reintentar %d registros...", int(delay.Seconds()), totalRequeued))
+	s.db.AddLog("info", "RETRY", fmt.Sprintf("Exponential backoff: waiting %ds before retrying %d records...", int(delay.Seconds()), totalRequeued))
 	time.Sleep(delay)
 
 	for _, table := range tables {
@@ -2082,7 +2333,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, err.Error(), 500)
 			return
 		}
-		s.db.AddLog("info", "CONFIG", "Configuracion guardada")
+		s.db.AddLog("info", "CONFIG", "Configuration saved")
 		jsonResponse(w, map[string]string{"status": "ok"})
 		return
 	}
@@ -2096,6 +2347,27 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		},
 		"sync": s.cfg.Sync,
 	})
+}
+
+func (s *Server) handleGlobalSend(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "POST" {
+		var body struct {
+			Enabled bool `json:"enabled"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			jsonError(w, err.Error(), 400)
+			return
+		}
+		s.cfg.GlobalSendEnabled = body.Enabled
+		if err := s.cfg.Save("config.json"); err != nil {
+			jsonError(w, err.Error(), 500)
+			return
+		}
+		s.db.AddLog("info", "CONFIG", fmt.Sprintf("Global send to Finearom: %v", body.Enabled))
+		jsonResponse(w, map[string]interface{}{"status": "ok", "enabled": body.Enabled})
+		return
+	}
+	jsonResponse(w, map[string]interface{}{"enabled": s.cfg.GlobalSendEnabled})
 }
 
 func (s *Server) handleAllowEditDelete(w http.ResponseWriter, r *http.Request) {
@@ -2112,7 +2384,7 @@ func (s *Server) handleAllowEditDelete(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, err.Error(), 500)
 			return
 		}
-		s.db.AddLog("info", "CONFIG", fmt.Sprintf("Edicion/eliminacion de registros: %v", body.Enabled))
+		s.db.AddLog("info", "CONFIG", fmt.Sprintf("Record edit/delete: %v", body.Enabled))
 		jsonResponse(w, map[string]interface{}{"status": "ok", "enabled": body.Enabled})
 		return
 	}
@@ -2121,7 +2393,7 @@ func (s *Server) handleAllowEditDelete(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleRecord(w http.ResponseWriter, r *http.Request) {
 	if !s.cfg.AllowEditDelete {
-		jsonError(w, "Edicion/eliminacion de registros no esta habilitada", 403)
+		jsonError(w, "Record edit/delete is not enabled", 403)
 		return
 	}
 
@@ -2163,7 +2435,7 @@ func (s *Server) handleRecord(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, err.Error(), 500)
 			return
 		}
-		s.db.AddLog("info", "EDIT", fmt.Sprintf("Registro %d editado en %s", id, table))
+		s.db.AddLog("info", "EDIT", fmt.Sprintf("Record %d edited in %s", id, table))
 		s.db.AddAudit(s.getUsernameFromRequest(r), "edit_record", table, fmt.Sprintf("%d", id), "")
 		jsonResponse(w, map[string]string{"status": "ok"})
 
@@ -2172,7 +2444,7 @@ func (s *Server) handleRecord(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, err.Error(), 500)
 			return
 		}
-		s.db.AddLog("info", "DELETE", fmt.Sprintf("Registro %d eliminado de %s", id, table))
+		s.db.AddLog("info", "DELETE", fmt.Sprintf("Record %d deleted from %s", id, table))
 		s.db.AddAudit(s.getUsernameFromRequest(r), "delete_record", table, fmt.Sprintf("%d", id), "")
 		jsonResponse(w, map[string]string{"status": "ok"})
 
@@ -2426,14 +2698,14 @@ func (s *Server) handleSyncNow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.detecting || s.sending {
-		jsonResponse(w, map[string]string{"message": "Ya hay una sincronizacion en curso"})
+		jsonResponse(w, map[string]string{"message": "Sync already in progress"})
 		return
 	}
 	go func() {
 		s.doDetectCycle()
 		s.doSendCycle()
 	}()
-	jsonResponse(w, map[string]string{"message": "Sincronizacion manual iniciada (deteccion + envio)"})
+	jsonResponse(w, map[string]string{"message": "Manual sync started (detect + send)"})
 }
 
 func (s *Server) handlePause(w http.ResponseWriter, r *http.Request) {
@@ -2442,7 +2714,7 @@ func (s *Server) handlePause(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.paused = true
-	s.db.AddLog("info", "SYNC", "Sincronizacion pausada por el usuario")
+	s.db.AddLog("info", "SYNC", "Sync paused by user")
 	jsonResponse(w, map[string]string{"status": "ok"})
 }
 
@@ -2452,7 +2724,7 @@ func (s *Server) handleResume(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.paused = false
-	s.db.AddLog("info", "SYNC", "Sincronizacion reanudada por el usuario")
+	s.db.AddLog("info", "SYNC", "Sync resumed by user")
 	jsonResponse(w, map[string]string{"status": "ok"})
 }
 
@@ -2480,8 +2752,8 @@ func (s *Server) handleSendResume(w http.ResponseWriter, r *http.Request) {
 	s.sendPaused = false
 	s.sendFailCount = 0
 	if wasPaused {
-		s.db.AddLog("info", "SEND", "Envio reactivado desde la web (circuit breaker reseteado)")
-		s.bot.Send("▶️ <b>Envio reactivado</b>\n\nReactivado desde la web. Contador de fallos reseteado.")
+		s.db.AddLog("info", "SEND", "Send reactivated from web (circuit breaker reset)")
+		s.bot.Send("▶️ <b>Send reactivated</b>\n\nReactivador from the web. Failure counter reset.")
 	}
 	jsonResponse(w, map[string]string{"status": "ok"})
 }
@@ -2496,7 +2768,7 @@ func (s *Server) handleRetryErrors(w http.ResponseWriter, r *http.Request) {
 	}
 	json.NewDecoder(r.Body).Decode(&body)
 	n := s.db.RetryErrors(body.Table)
-	s.db.AddLog("info", "SYNC", fmt.Sprintf("Reintentando %d registros con error en %s", n, body.Table))
+	s.db.AddLog("info", "SYNC", fmt.Sprintf("Retrying %d error records in %s", n, body.Table))
 	jsonResponse(w, map[string]interface{}{"status": "ok", "count": n})
 }
 
@@ -2511,7 +2783,7 @@ func (s *Server) handleTestConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.client = client
-	s.db.AddLog("info", "API", "Conexion exitosa con "+s.cfg.Finearom.BaseURL)
+	s.db.AddLog("info", "API", "Connection successful with "+s.cfg.Finearom.BaseURL)
 	jsonResponse(w, map[string]string{"status": "ok"})
 }
 
@@ -2531,7 +2803,7 @@ func (s *Server) handleClearDatabase(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), 500)
 		return
 	}
-	s.db.AddLog("warning", "APP", "Base de datos vaciada por el usuario")
+	s.db.AddLog("warning", "APP", "Database cleared by user")
 	s.db.AddAudit(s.getUsernameFromRequest(r), "clear_database", "", "", "All data tables cleared")
 	s.bot.NotifyDBCleared()
 	jsonResponse(w, map[string]string{"status": "ok"})
@@ -2546,7 +2818,7 @@ func (s *Server) handleClearLogs(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), 500)
 		return
 	}
-	s.db.AddLog("info", "APP", "Logs limpiados por el usuario")
+	s.db.AddLog("info", "APP", "Logs cleared by user")
 	jsonResponse(w, map[string]string{"status": "ok"})
 }
 
@@ -2575,7 +2847,7 @@ func (s *Server) handleFieldMappings(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, err.Error(), 500)
 			return
 		}
-		s.db.AddLog("info", "CONFIG", "Mapeo de campos actualizado")
+		s.db.AddLog("info", "CONFIG", "Field mapping updated")
 		jsonResponse(w, map[string]string{"status": "ok"})
 		return
 	}
@@ -2596,7 +2868,7 @@ func (s *Server) handleSendEnabled(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, err.Error(), 500)
 			return
 		}
-		s.db.AddLog("info", "CONFIG", "Envio por modulo actualizado")
+		s.db.AddLog("info", "CONFIG", "Per-module send config updated")
 		jsonResponse(w, map[string]string{"status": "ok"})
 		return
 	}
@@ -2617,7 +2889,7 @@ func (s *Server) handleDetectEnabled(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, err.Error(), 500)
 			return
 		}
-		s.db.AddLog("info", "CONFIG", "Deteccion por modulo actualizado")
+		s.db.AddLog("info", "CONFIG", "Per-module detection config updated")
 		jsonResponse(w, map[string]string{"status": "ok"})
 		return
 	}
@@ -2755,9 +3027,9 @@ func (s *Server) handleTelegramConfig(w http.ResponseWriter, r *http.Request) {
 		s.registerBotCommands()
 		if s.bot.IsEnabled() {
 			s.bot.StartPolling()
-			s.db.AddLog("info", "CONFIG", "Telegram bot activado y polling reiniciado")
+			s.db.AddLog("info", "CONFIG", "Telegram bot activated and polling restarted")
 		} else {
-			s.db.AddLog("info", "CONFIG", "Telegram bot desactivado")
+			s.db.AddLog("info", "CONFIG", "Telegram bot deactivated")
 		}
 		jsonResponse(w, map[string]string{"status": "ok"})
 		return
@@ -2783,10 +3055,10 @@ func (s *Server) handleTelegramTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.bot.IsEnabled() {
-		jsonError(w, "Telegram no esta configurado o deshabilitado", 400)
+		jsonError(w, "Telegram not configured or disabled", 400)
 		return
 	}
-	s.bot.Send("✅ <b>Test exitoso</b>\n\nLas notificaciones de Telegram estan funcionando.")
+	s.bot.Send("✅ <b>Test successful</b>\n\nTelegram notifications are working.")
 	jsonResponse(w, map[string]string{"status": "ok"})
 }
 
@@ -2948,7 +3220,7 @@ func (s *Server) handleV1Auth(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if !authenticated {
-			jsonError(w, "Credenciales incorrectas", 401)
+			jsonError(w, "Invalid credentials", 401)
 			return
 		}
 		authMethod = "credentials"
@@ -3837,7 +4109,7 @@ func (s *Server) handleUserByID(w http.ResponseWriter, r *http.Request) {
 		if body.Password != "" {
 			s.db.UpdateAppUserPassword(id, body.Password)
 		}
-		s.db.AddLog("info", "USERS", fmt.Sprintf("Usuario '%s' actualizado", user.Username))
+		s.db.AddLog("info", "USERS", fmt.Sprintf("User '%s' updated", user.Username))
 		jsonResponse(w, map[string]string{"status": "ok"})
 	case "DELETE":
 		user, err := s.db.GetAppUserByID(id)
@@ -3849,7 +4121,7 @@ func (s *Server) handleUserByID(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, err.Error(), 500)
 			return
 		}
-		s.db.AddLog("info", "USERS", fmt.Sprintf("Usuario '%s' eliminado", user.Username))
+		s.db.AddLog("info", "USERS", fmt.Sprintf("User '%s' deleted", user.Username))
 		jsonResponse(w, map[string]string{"status": "ok"})
 	default:
 		jsonError(w, "Method not allowed", 405)
@@ -3869,11 +4141,11 @@ func (s *Server) registerBotCommands() {
 			sendState = "Enviando al API..."
 		}
 		if s.sendPaused {
-			sendState = fmt.Sprintf("AUTO-PAUSADO (%d fallos)", s.sendFailCount)
+			sendState = fmt.Sprintf("AUTO-PAUSED (%d fallos)", s.sendFailCount)
 		}
 		if s.paused {
-			detectState = "PAUSADO"
-			sendState = "PAUSADO"
+			detectState = "PAUSED"
+			sendState = "PAUSED"
 		}
 		uptime := time.Since(s.startTime).Round(time.Second)
 		stats := s.db.GetStats()
@@ -3881,7 +4153,7 @@ func (s *Server) registerBotCommands() {
 		totalPending := toInt(stats["clients_pending"]) + toInt(stats["products_pending"]) + toInt(stats["movements_pending"]) + toInt(stats["cartera_pending"])
 		totalErrors := toInt(stats["clients_errors"]) + toInt(stats["products_errors"]) + toInt(stats["movements_errors"]) + toInt(stats["cartera_errors"])
 
-		msg := fmt.Sprintf("📡 <b>Estado del servidor</b>\n\n📥 Deteccion: %s (cada %ds)\n📤 Envio: %s (cada %ds)\n⏱ Uptime: %s\n⏳ Pendientes: %d\n❌ Errores: %d",
+		msg := fmt.Sprintf("📡 <b>Server status</b>\n\n📥 Detection: %s (every %ds)\n📤 Send: %s (every %ds)\n⏱ Uptime: %s\n⏳ Pending: %d\n❌ Errors: %d",
 			detectState, s.cfg.Sync.IntervalSeconds,
 			sendState, s.cfg.Sync.SendIntervalSeconds,
 			uptime, totalPending, totalErrors)
@@ -3893,7 +4165,7 @@ func (s *Server) registerBotCommands() {
 
 	s.bot.RegisterCommand("/stats", func(args string) string {
 		stats := s.db.GetStats()
-		return fmt.Sprintf("📊 <b>Estadisticas</b>\n\n👤 Clientes: %v total, %v sync, %v pend, %v err\n📦 Productos: %v total, %v sync, %v pend, %v err\n📋 Movimientos: %v total, %v sync, %v pend, %v err\n💰 Cartera: %v total, %v sync, %v pend, %v err",
+		return fmt.Sprintf("📊 <b>Statistics</b>\n\n👤 Clients: %v total, %v sync, %v pend, %v err\n📦 Products: %v total, %v sync, %v pend, %v err\n📋 Movements: %v total, %v sync, %v pend, %v err\n💰 Cartera: %v total, %v sync, %v pend, %v err",
 			stats["clients_total"], stats["clients_synced"], stats["clients_pending"], stats["clients_errors"],
 			stats["products_total"], stats["products_synced"], stats["products_pending"], stats["products_errors"],
 			stats["movements_total"], stats["movements_synced"], stats["movements_pending"], stats["movements_errors"],
@@ -3904,7 +4176,7 @@ func (s *Server) registerBotCommands() {
 	s.bot.RegisterCommand("/errors", func(args string) string {
 		errors := s.db.GetErrorSummary()
 		if len(errors) == 0 {
-			return "✅ <b>Sin errores</b>\n\nNo hay registros con error."
+			return "✅ <b>No errors</b>\n\nNo error records found."
 		}
 		msg := "❌ <b>Resumen de errores</b>\n"
 		for _, e := range errors {
@@ -3915,37 +4187,37 @@ func (s *Server) registerBotCommands() {
 
 	s.bot.RegisterCommand("/sync", func(args string) string {
 		if s.detecting || s.sending {
-			return "⏳ Ya hay una sincronizacion en curso."
+			return "⏳ Sync already in progress."
 		}
 		go func() {
 			s.doDetectCycle()
 			s.doSendCycle()
 		}()
-		return "🔄 Sincronizacion manual iniciada (deteccion + envio)."
+		return "🔄 Manual sync started (detect + send)."
 	})
 
 	s.bot.RegisterCommand("/pause", func(args string) string {
 		s.paused = true
-		s.db.AddLog("info", "SYNC", "Sync pausado via Telegram")
-		return "⏸ Sincronizacion pausada."
+		s.db.AddLog("info", "SYNC", "Sync paused via Telegram")
+		return "⏸ Sync paused."
 	})
 
 	s.bot.RegisterCommand("/resume", func(args string) string {
 		s.paused = false
 		s.sendPaused = false
 		s.sendFailCount = 0
-		s.db.AddLog("info", "SYNC", "Sync reanudado via Telegram")
-		return "▶️ Sincronizacion reanudada (deteccion + envio)."
+		s.db.AddLog("info", "SYNC", "Sync resumed via Telegram")
+		return "▶️ Sync resumed (detect + send)."
 	})
 
 	s.bot.RegisterCommand("/send-resume", func(args string) string {
 		if !s.sendPaused {
-			return "✅ El envio ya esta activo, no esta pausado."
+			return "✅ Send is already active, not paused."
 		}
 		s.sendPaused = false
 		s.sendFailCount = 0
-		s.db.AddLog("info", "SEND", "Envio reactivado via Telegram (circuit breaker reseteado)")
-		return "▶️ Envio reactivado. Contador de fallos reseteado a 0."
+		s.db.AddLog("info", "SEND", "Send reactivated via Telegram (circuit breaker reset)")
+		return "▶️ Send reactivated. Failure counter reset to 0."
 	})
 
 	s.bot.RegisterCommand("/retry", func(args string) string {
@@ -3958,14 +4230,14 @@ func (s *Server) registerBotCommands() {
 		if total == 0 {
 			return "✅ No hay errores para reintentar."
 		}
-		s.db.AddLog("info", "SYNC", fmt.Sprintf("Reintentando %d errores via Telegram", total))
-		return fmt.Sprintf("🔄 %d registros movidos a pendiente para reintento.", total)
+		s.db.AddLog("info", "SYNC", fmt.Sprintf("Retrying %d errors via Telegram", total))
+		return fmt.Sprintf("🔄 %d %d records moved to pending for retry.", total)
 	})
 
 	s.bot.RegisterCommand("/url", func(args string) string {
 		msg := "🌐 <b>URLs</b>\n\n🖥 Local: http://localhost:3210"
 		if tunnelURL := readTunnelURL(); tunnelURL != "" {
-			msg += fmt.Sprintf("\n🌍 Publica: %s", tunnelURL)
+			msg += fmt.Sprintf("\n🌍 Public: %s", tunnelURL)
 			msg += fmt.Sprintf("\n📄 Swagger: %s/api/v1/docs", tunnelURL)
 		}
 		return msg
@@ -3996,16 +4268,16 @@ func (s *Server) registerBotCommands() {
 
 		status := "🟢 OK"
 		if s.paused {
-			status = "🟡 PAUSADO"
+			status = "🟡 PAUSED"
 		}
 
-		return fmt.Sprintf("%s\n\n⏱ Uptime: %s\n📊 Registros: %d\n📥 Detectando: %v\n📤 Enviando: %v\n⏸ Pausado: %v", status, uptime, totalRecords, s.detecting, s.sending, s.paused)
+		return fmt.Sprintf("%s\n\n⏱ Uptime: %s\n📊 Records: %d\n📥 Detecting: %v\n📤 Sending: %v\n⏸ Paused: %v", status, uptime, totalRecords, s.detecting, s.sending, s.paused)
 	})
 
 	s.bot.RegisterCommand("/exec", func(args string) string {
 		pin := s.cfg.Telegram.ExecPin
 		if pin == "" {
-			return "⛔ PIN no configurado. Configura exec_pin en Telegram Config."
+			return "⛔ PIN not configured. Set exec_pin in Telegram Config."
 		}
 		parts := strings.SplitN(args, " ", 2)
 		if len(parts) < 2 {
@@ -4059,7 +4331,7 @@ func (s *Server) registerBotCommands() {
 			return "❌ Error iniciando Claude: " + err.Error()
 		}
 
-		return "🤖 <b>Claude iniciado</b>\n\nProceso lanzado en background.\nRevisa la terminal del servidor para la URL de conexion."
+		return "🤖 <b>Claude started</b>\n\nProcess launched in background.\nCheck server terminal for connection URL."
 	})
 }
 

@@ -10,14 +10,14 @@ import (
 // Producto represents a product/item from Siigo Z06CP file.
 // Z06CP contains actual products with names, account codes, and pricing.
 type Producto struct {
-	Comprobante    string `json:"comprobante"`               // comprobante number (4 digits)
-	Secuencia      string `json:"secuencia"`                 // sequence within comprobante
-	TipoTercero    string `json:"tipo_tercero"`              // R=recibo, G=general, L=linea
-	Grupo          string `json:"grupo"`                     // inventory group code
-	CuentaContable string `json:"cuenta_contable,omitempty"` // PUC account
-	Fecha          string `json:"fecha,omitempty"`           // YYYYMMDD
-	Nombre         string `json:"nombre"`                    // product name
-	TipoMov        string `json:"tipo_mov,omitempty"`        // D=debit, C=credit
+	Voucher        string `json:"comprobante"`               // comprobante number (4 digits)
+	Sequence       string `json:"secuencia"`                 // sequence within comprobante
+	ThirdPartyType string `json:"tipo_tercero"`              // R=recibo, G=general, L=linea
+	Group          string `json:"grupo"`                     // inventory group code
+	LedgerAccount  string `json:"cuenta_contable,omitempty"` // PUC account
+	Date           string `json:"fecha,omitempty"`           // YYYYMMDD
+	Name           string `json:"nombre"`                    // product name
+	MovType        string `json:"tipo_mov,omitempty"`        // D=debit, C=credit
 	Hash           string `json:"hash"`
 }
 
@@ -30,16 +30,16 @@ func ParseProductos(dataPath string) ([]Producto, error) {
 	}
 
 	extfh := isam.ExtfhAvailable()
-	var productos []Producto
+	var products []Producto
 	for _, rec := range records {
 		p := parseProductoRecord(rec, extfh)
-		if p.Nombre == "" {
+		if p.Name == "" {
 			continue
 		}
-		productos = append(productos, p)
+		products = append(products, p)
 	}
 
-	return productos, nil
+	return products, nil
 }
 
 func parseProductoRecord(rec []byte, extfh bool) Producto {
@@ -72,65 +72,65 @@ func parseProductoEXTFH(rec []byte, hash [32]byte) Producto {
 		return Producto{}
 	}
 
-	comprobante := strings.TrimLeft(isam.ExtractField(rec, 0, 5), "0")
-	secuencia := strings.TrimLeft(isam.ExtractField(rec, 5, 5), "0")
-	tipoTercero := isam.ExtractField(rec, 10, 1)
-	grupo := strings.TrimSpace(isam.ExtractField(rec, 11, 3))
+	voucher := strings.TrimLeft(isam.ExtractField(rec, 0, 5), "0")
+	seq := strings.TrimLeft(isam.ExtractField(rec, 5, 5), "0")
+	thirdPartyType := isam.ExtractField(rec, 10, 1)
+	group := strings.TrimSpace(isam.ExtractField(rec, 11, 3))
 
-	cuenta := strings.TrimSpace(isam.ExtractField(rec, 14, 13))
+	account := strings.TrimSpace(isam.ExtractField(rec, 14, 13))
 
-	fechaRaw := isam.ExtractField(rec, 38, 8)
-	fecha := ""
-	if looksLikeDate(fechaRaw) {
-		fecha = fechaRaw
+	dateRaw := isam.ExtractField(rec, 38, 8)
+	date := ""
+	if looksLikeDate(dateRaw) {
+		date = dateRaw
 	}
 
-	nombre := strings.TrimSpace(isam.ExtractField(rec, 46, 40))
+	name := strings.TrimSpace(isam.ExtractField(rec, 46, 40))
 
-	if nombre == "" {
-		nombre = findDescripcion(rec, 46)
+	if name == "" {
+		name = findDescripcion(rec, 46)
 	}
 
-	tipoMov := ""
+	movType := ""
 	if len(rec) > 92 {
 		tm := rec[92]
 		if tm == 'D' || tm == 'C' {
-			tipoMov = string(tm)
+			movType = string(tm)
 		}
 	}
 
 	return Producto{
-		Comprobante:    comprobante,
-		Secuencia:      secuencia,
-		TipoTercero:    tipoTercero,
-		Grupo:          grupo,
-		CuentaContable: cuenta,
-		Fecha:          fecha,
-		Nombre:         nombre,
-		TipoMov:        tipoMov,
+		Voucher:        voucher,
+		Sequence:       seq,
+		ThirdPartyType: thirdPartyType,
+		Group:          group,
+		LedgerAccount:  account,
+		Date:           date,
+		Name:           name,
+		MovType:        movType,
 		Hash:           fmt.Sprintf("%x", hash[:8]),
 	}
 }
 
 func parseProductoHeuristic(rec []byte, hash [32]byte) Producto {
-	nombre := findDescripcion(rec, 30)
-	if nombre == "" {
+	name := findDescripcion(rec, 30)
+	if name == "" {
 		return Producto{}
 	}
 
 	return Producto{
-		Nombre: nombre,
-		Hash:   fmt.Sprintf("%x", hash[:8]),
+		Name: name,
+		Hash: fmt.Sprintf("%x", hash[:8]),
 	}
 }
 
 // ToFinearomProduct converts a Producto to a map for the Finearom API
 func (p *Producto) ToFinearomProduct() map[string]interface{} {
 	return map[string]interface{}{
-		"code":            p.Comprobante + "-" + p.Secuencia,
-		"product_name":    p.Nombre,
-		"grupo":           p.Grupo,
-		"cuenta_contable": p.CuentaContable,
+		"code":            p.Voucher + "-" + p.Sequence,
+		"product_name":    p.Name,
+		"grupo":           p.Group,
+		"cuenta_contable": p.LedgerAccount,
 		"siigo_sync_hash": p.Hash,
 	}
 }

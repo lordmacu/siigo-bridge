@@ -9,17 +9,17 @@ import (
 
 // Movimiento represents a document header from Siigo Z49 file.
 // Z49 is a document INDEX — it stores headers only (type, number, name, description).
-// It does NOT contain: dates, cuenta contable, valores, or tipo D/C.
+// It does NOT contain: dates, accounting account, amounts, or D/C type.
 // For detailed accounting lines with those fields, use Z09 (cartera).
 type Movimiento struct {
-	TipoComprobante string `json:"tipo_comprobante"` // RC=recibo caja, FV=factura venta, etc.
-	Empresa         string `json:"empresa"`          // 001
-	NumeroDoc       string `json:"numero_doc"`       // document number
-	NombreTercero   string `json:"nombre_tercero"`   // third party name (only E, T types)
-	Descripcion     string `json:"descripcion"`      // transaction description
-	Descripcion2    string `json:"descripcion2"`     // secondary description / user initials
-	RawPreview      string `json:"raw_preview"`      // first 120 chars for debugging
-	Hash            string `json:"hash"`
+	VoucherType    string `json:"tipo_comprobante"` // RC=cash receipt, FV=sales invoice, etc.
+	Company        string `json:"empresa"`          // 001
+	DocNumber      string `json:"numero_doc"`       // document number
+	ThirdPartyName string `json:"nombre_tercero"`   // third party name (only E, T types)
+	Description    string `json:"descripcion"`      // transaction description
+	Description2   string `json:"descripcion2"`     // secondary description / user initials
+	RawPreview     string `json:"raw_preview"`      // first 120 chars for debugging
+	Hash           string `json:"hash"`
 }
 
 // ParseMovimientos reads the Z49 file and returns all movements
@@ -31,37 +31,37 @@ func ParseMovimientos(dataPath string) ([]Movimiento, error) {
 	}
 
 	extfh := isam.ExtfhAvailable()
-	var movimientos []Movimiento
+	var movements []Movimiento
 	for _, rec := range records {
 		m := parseMovimientoRecord(rec, extfh)
-		if m.Descripcion == "" && m.NombreTercero == "" && m.NumeroDoc == "" {
+		if m.Description == "" && m.ThirdPartyName == "" && m.DocNumber == "" {
 			continue
 		}
-		movimientos = append(movimientos, m)
+		movements = append(movements, m)
 	}
 
-	return movimientos, nil
+	return movements, nil
 }
 
 // ParseMovimientosAnio reads movements for a specific year (Z49YYYY)
-func ParseMovimientosAnio(dataPath string, anio string) ([]Movimiento, error) {
-	path := dataPath + "Z49" + anio
+func ParseMovimientosAnio(dataPath string, year string) ([]Movimiento, error) {
+	path := dataPath + "Z49" + year
 	records, _, err := isam.ReadIsamFile(path)
 	if err != nil {
 		return nil, err
 	}
 
 	extfh := isam.ExtfhAvailable()
-	var movimientos []Movimiento
+	var movements []Movimiento
 	for _, rec := range records {
 		m := parseMovimientoRecord(rec, extfh)
-		if m.Descripcion == "" && m.NombreTercero == "" && m.NumeroDoc == "" {
+		if m.Description == "" && m.ThirdPartyName == "" && m.DocNumber == "" {
 			continue
 		}
-		movimientos = append(movimientos, m)
+		movements = append(movements, m)
 	}
 
-	return movimientos, nil
+	return movements, nil
 }
 
 func parseMovimientoRecord(rec []byte, extfh bool) Movimiento {
@@ -81,85 +81,85 @@ func parseMovimientoRecord(rec []byte, extfh bool) Movimiento {
 // parseMovimientoEXTFH extracts data from EXTFH-delivered Z49 records.
 // Z49 EXTFH structure (2295 bytes) - verified via hex dump 2026-03-08:
 //
-//	[0]      tipo letter: R=recibo, T=traslado, F=factura, E=egreso,
-//	         N=nota, P=pago, L=libro, H=hoja, J=journal, C=comprobante
-//	         Space(0x20) = NIT-keyed record (no comprobante type)
+//	[0]      tipo letter: R=receipt, T=transfer, F=invoice, E=expense,
+//	         N=note, P=payment, L=ledger, H=worksheet, J=journal, C=voucher
+//	         Space(0x20) = NIT-keyed record (no voucher type)
 //	[1:4]    codigo_comprobante - 3 digit code (001, 010, 100, etc.)
 //	[4:15]   numero_doc - 11 chars zero-padded document number (also NIT for space-type)
 //	[15:72]  nombre_tercero - 57 chars (only for types: T, E, F)
 //	[72:128] descripcion - primary description text
 //	[129:192] descripcion2 - secondary description / user initials
 //
-// Z49 does NOT store: dates, cuenta_contable, valores, or tipo D/C.
+// Z49 does NOT store: dates, cuenta_contable, values, or D/C type.
 // Actual data extent: max ~192 bytes used, rest is spaces.
 // For detailed accounting lines, use Z09 (cartera).
 func parseMovimientoEXTFH(rec []byte, hash [32]byte, rawPreview string) Movimiento {
-	tipo := rec[0]
+	recType := rec[0]
 
-	// Space-prefixed records: keyed by NIT, no comprobante type
-	if tipo == ' ' || tipo == '0' {
-		numDoc := strings.TrimLeft(isam.ExtractField(rec, 4, 11), "0")
+	// Space-prefixed records: keyed by NIT, no voucher type
+	if recType == ' ' || recType == '0' {
+		docNum := strings.TrimLeft(isam.ExtractField(rec, 4, 11), "0")
 		desc := findDescripcion(rec, 50, 128)
 		desc2 := findDescripcion(rec, 129, 192)
-		if numDoc != "" || desc != "" {
+		if docNum != "" || desc != "" {
 			return Movimiento{
-				NumeroDoc:    numDoc,
-				NombreTercero: numDoc, // for space-type records, the doc number IS the NIT
-				Descripcion:  desc,
-				Descripcion2: desc2,
-				RawPreview:   rawPreview,
-				Hash:         fmt.Sprintf("%x", hash[:8]),
+				DocNumber:      docNum,
+				ThirdPartyName: docNum, // for space-type records, the doc number IS the NIT
+				Description:    desc,
+				Description2:   desc2,
+				RawPreview:     rawPreview,
+				Hash:           fmt.Sprintf("%x", hash[:8]),
 			}
 		}
 		return Movimiento{}
 	}
 
 	// Skip records without a letter type at position 0
-	if tipo < 'A' || tipo > 'Z' {
+	if recType < 'A' || recType > 'Z' {
 		return Movimiento{}
 	}
 
-	// Map single-letter tipo to Siigo comprobante code
-	tipoMap := map[byte]string{
-		'R': "RC", // Recibo de Caja
-		'T': "TR", // Traslado
-		'F': "FV", // Factura de Venta
-		'E': "CE", // Comprobante de Egreso
-		'N': "ND", // Nota Debito
-		'C': "CC", // Comprobante de Contabilidad
-		'P': "PG", // Pago
-		'L': "LB", // Libro
-		'H': "HJ", // Hoja de trabajo
+	// Map single-letter type to Siigo voucher code
+	typeMap := map[byte]string{
+		'R': "RC", // Cash receipt
+		'T': "TR", // Transfer
+		'F': "FV", // Sales invoice
+		'E': "CE", // Expense voucher
+		'N': "ND", // Debit note
+		'C': "CC", // Accounting voucher
+		'P': "PG", // Payment
+		'L': "LB", // Ledger
+		'H': "HJ", // Worksheet
 		'J': "JR", // Journal
 	}
 
-	tipoComp := tipoMap[tipo]
-	if tipoComp == "" {
-		tipoComp = string(tipo)
+	voucherType := typeMap[recType]
+	if voucherType == "" {
+		voucherType = string(recType)
 	}
 
-	codigo := strings.TrimSpace(isam.ExtractField(rec, 1, 3))
-	if codigo != "" {
-		tipoComp = tipoComp + codigo
+	code := strings.TrimSpace(isam.ExtractField(rec, 1, 3))
+	if code != "" {
+		voucherType = voucherType + code
 	}
 
-	numeroDoc := strings.TrimLeft(isam.ExtractField(rec, 4, 11), "0")
-	// nombreTercero: bytes 15-71 (57 chars). Previously extracted only 35 chars,
-	// truncating text like "GERENCIA Y CONTABILIDAD" → "GERENCIA".
-	nombreTercero := strings.TrimSpace(isam.ExtractField(rec, 15, 57))
+	docNum := strings.TrimLeft(isam.ExtractField(rec, 4, 11), "0")
+	// thirdPartyName: bytes 15-71 (57 chars). Previously extracted only 35 chars,
+	// truncating text like "GERENCIA Y CONTABILIDAD" -> "GERENCIA".
+	thirdPartyName := strings.TrimSpace(isam.ExtractField(rec, 15, 57))
 
 	// Two description areas - extended zone 2 to byte 250 (data confirmed past 192)
-	descripcion := findDescripcion(rec, 72, 128)
-	descripcion2 := findDescripcion(rec, 129, 250)
+	description := findDescripcion(rec, 72, 128)
+	description2 := findDescripcion(rec, 129, 250)
 
 	return Movimiento{
-		TipoComprobante: tipoComp,
-		NumeroDoc:       numeroDoc,
-		NombreTercero:   nombreTercero,
-		Descripcion:     descripcion,
-		Descripcion2:    descripcion2,
-		RawPreview:      rawPreview,
-		Hash:            fmt.Sprintf("%x", hash[:8]),
+		VoucherType:    voucherType,
+		DocNumber:      docNum,
+		ThirdPartyName: thirdPartyName,
+		Description:    description,
+		Description2:   description2,
+		RawPreview:     rawPreview,
+		Hash:           fmt.Sprintf("%x", hash[:8]),
 	}
 }
 
@@ -170,57 +170,57 @@ func parseMovimientoBinary(rec []byte, hash [32]byte, rawPreview string) Movimie
 		return Movimiento{}
 	}
 
-	tipo := rec[2] // +2 for binary marker
+	recType := rec[2] // +2 for binary marker
 
-	if tipo == ' ' || tipo == '0' {
-		numDoc := strings.TrimLeft(isam.ExtractField(rec, 6, 11), "0")
+	if recType == ' ' || recType == '0' {
+		docNum := strings.TrimLeft(isam.ExtractField(rec, 6, 11), "0")
 		desc := findDescripcion(rec, 52, 130)
 		desc2 := findDescripcion(rec, 131, 194)
-		if numDoc != "" || desc != "" {
+		if docNum != "" || desc != "" {
 			return Movimiento{
-				NumeroDoc:     numDoc,
-				NombreTercero: numDoc,
-				Descripcion:   desc,
-				Descripcion2:  desc2,
-				RawPreview:    rawPreview,
-				Hash:          fmt.Sprintf("%x", hash[:8]),
+				DocNumber:      docNum,
+				ThirdPartyName: docNum,
+				Description:    desc,
+				Description2:   desc2,
+				RawPreview:     rawPreview,
+				Hash:           fmt.Sprintf("%x", hash[:8]),
 			}
 		}
 		return Movimiento{}
 	}
 
-	if tipo < 'A' || tipo > 'Z' {
+	if recType < 'A' || recType > 'Z' {
 		return Movimiento{}
 	}
 
-	tipoMap := map[byte]string{
+	typeMap := map[byte]string{
 		'R': "RC", 'T': "TR", 'F': "FV", 'E': "CE", 'N': "ND",
 		'C': "CC", 'P': "PG", 'L': "LB", 'H': "HJ", 'J': "JR",
 	}
 
-	tipoComp := tipoMap[tipo]
-	if tipoComp == "" {
-		tipoComp = string(tipo)
+	voucherType := typeMap[recType]
+	if voucherType == "" {
+		voucherType = string(recType)
 	}
 
-	codigo := strings.TrimSpace(isam.ExtractField(rec, 3, 3))
-	if codigo != "" {
-		tipoComp = tipoComp + codigo
+	code := strings.TrimSpace(isam.ExtractField(rec, 3, 3))
+	if code != "" {
+		voucherType = voucherType + code
 	}
 
-	numeroDoc := strings.TrimLeft(isam.ExtractField(rec, 6, 11), "0")
-	nombreTercero := strings.TrimSpace(isam.ExtractField(rec, 17, 57))
-	descripcion := findDescripcion(rec, 74, 130)
-	descripcion2 := findDescripcion(rec, 131, 252)
+	docNum := strings.TrimLeft(isam.ExtractField(rec, 6, 11), "0")
+	thirdPartyName := strings.TrimSpace(isam.ExtractField(rec, 17, 57))
+	description := findDescripcion(rec, 74, 130)
+	description2 := findDescripcion(rec, 131, 252)
 
 	return Movimiento{
-		TipoComprobante: tipoComp,
-		NumeroDoc:       numeroDoc,
-		NombreTercero:   nombreTercero,
-		Descripcion:     descripcion,
-		Descripcion2:    descripcion2,
-		RawPreview:      rawPreview,
-		Hash:            fmt.Sprintf("%x", hash[:8]),
+		VoucherType:    voucherType,
+		DocNumber:      docNum,
+		ThirdPartyName: thirdPartyName,
+		Description:    description,
+		Description2:   description2,
+		RawPreview:     rawPreview,
+		Hash:           fmt.Sprintf("%x", hash[:8]),
 	}
 }
 
@@ -315,7 +315,7 @@ func looksLikeAccount(s string) bool {
 	if len(s) < 4 {
 		return false
 	}
-	// PUC accounts: 1xxx=activos, 2xxx=pasivos, etc. up to 9xxx
+	// PUC accounts: 1xxx=assets, 2xxx=liabilities, etc. up to 9xxx
 	first := s[0]
 	return first >= '1' && first <= '9'
 }
@@ -333,27 +333,27 @@ func cleanPrintable(s string) string {
 	return strings.TrimSpace(string(clean))
 }
 
-// ToFinearomRecaudo converts a movement to a recaudo map for Finearom API
+// ToFinearomRecaudo converts a movement to a collection receipt map for Finearom API
 func (m *Movimiento) ToFinearomRecaudo() map[string]interface{} {
-	desc := m.Descripcion
-	if m.Descripcion2 != "" {
-		desc = desc + " " + m.Descripcion2
+	desc := m.Description
+	if m.Description2 != "" {
+		desc = desc + " " + m.Description2
 	}
 	return map[string]interface{}{
-		"nit":              m.NombreTercero,
-		"numero_factura":   m.NumeroDoc,
-		"tipo_comprobante": m.TipoComprobante,
+		"nit":              m.ThirdPartyName,
+		"numero_factura":   m.DocNumber,
+		"tipo_comprobante": m.VoucherType,
 		"descripcion":      desc,
 		"siigo_sync_hash":  m.Hash,
 	}
 }
 
-// IsReciboCaja returns true if this movement is a cash receipt (recaudo)
+// IsReciboCaja returns true if this movement is a cash receipt
 func (m *Movimiento) IsReciboCaja() bool {
-	return len(m.TipoComprobante) >= 2 && m.TipoComprobante[:2] == "RC"
+	return len(m.VoucherType) >= 2 && m.VoucherType[:2] == "RC"
 }
 
 // IsFacturaVenta returns true if this movement is a sales invoice
 func (m *Movimiento) IsFacturaVenta() bool {
-	return len(m.TipoComprobante) >= 2 && m.TipoComprobante[:2] == "FV"
+	return len(m.VoucherType) >= 2 && m.VoucherType[:2] == "FV"
 }

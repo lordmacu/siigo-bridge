@@ -643,7 +643,7 @@ func (db *DB) migrate() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_changes_key ON change_history(table_name, record_key)`,
 
-		// Plan de Cuentas table (from Z03YYYY)
+		// Chart of Accounts table (from Z03YYYY)
 		`CREATE TABLE IF NOT EXISTS plan_cuentas (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			codigo_cuenta TEXT NOT NULL UNIQUE,
@@ -678,7 +678,7 @@ func (db *DB) migrate() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_activos_fijos_status ON activos_fijos(sync_status)`,
 
-		// Saldos por Tercero table (from Z25YYYY)
+		// Third-Party Balances table (from Z25YYYY)
 		`CREATE TABLE IF NOT EXISTS saldos_terceros (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			record_key TEXT NOT NULL UNIQUE,
@@ -809,7 +809,7 @@ func (db *DB) migrate() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_periodos_contables_status ON periodos_contables(sync_status)`,
 
-		// Condiciones de Pago table (from Z05YYYY)
+		// Payment Terms table (from Z05YYYY)
 		`CREATE TABLE IF NOT EXISTS condiciones_pago (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			record_key TEXT NOT NULL UNIQUE,
@@ -1084,7 +1084,7 @@ func (db *DB) migrate() error {
 		// Audit trail → terceros, usuario
 		`CREATE INDEX IF NOT EXISTS idx_audit_trail_terceros_usuario ON audit_trail_terceros(usuario)`,
 		`CREATE INDEX IF NOT EXISTS idx_audit_trail_terceros_fecha ON audit_trail_terceros(fecha_cambio)`,
-		// Clasificacion → join con plan_cuentas
+		// Clasificacion → join with plan_cuentas
 		`CREATE INDEX IF NOT EXISTS idx_clasificacion_cuentas_grupo ON clasificacion_cuentas(codigo_grupo)`,
 		// Periodos → empresa
 		`CREATE INDEX IF NOT EXISTS idx_periodos_contables_empresa ON periodos_contables(empresa)`,
@@ -1130,7 +1130,7 @@ func (db *DB) GetAllClientHashes() map[string]string {
 	return db.getAllHashes("clients", "nit")
 }
 
-func (db *DB) UpsertClient(nit, nombre, tipoPersona, empresa, direccion, email, repLegal, hash string) string {
+func (db *DB) UpsertClient(nit, name, personType, company, address, email, legalRep, hash string) string {
 	var existingHash string
 	err := db.conn.QueryRow(`SELECT hash FROM clients WHERE nit=?`, nit).Scan(&existingHash)
 	now := time.Now().Format(time.RFC3339)
@@ -1139,7 +1139,7 @@ func (db *DB) UpsertClient(nit, nombre, tipoPersona, empresa, direccion, email, 
 		db.conn.Exec(
 			`INSERT INTO clients (nit, nombre, tipo_persona, empresa, direccion, email, rep_legal, hash, sync_status, sync_action, updated_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'add', ?)`,
-			nit, nombre, tipoPersona, empresa, direccion, email, repLegal, hash, now,
+			nit, name, personType, company, address, email, legalRep, hash, now,
 		)
 		return "add"
 	}
@@ -1147,14 +1147,14 @@ func (db *DB) UpsertClient(nit, nombre, tipoPersona, empresa, direccion, email, 
 	if existingHash != hash {
 		// Track field changes
 		db.trackChanges("clients", nit, map[string]string{
-			"nombre": nombre, "tipo_persona": tipoPersona,
-			"empresa": empresa, "direccion": direccion, "email": email,
-			"rep_legal": repLegal,
+			"nombre": name, "tipo_persona": personType,
+			"empresa": company, "direccion": address, "email": email,
+			"rep_legal": legalRep,
 		})
 		db.conn.Exec(
 			`UPDATE clients SET nombre=?, tipo_persona=?, empresa=?, direccion=?, email=?, rep_legal=?, hash=?, sync_status='pending', sync_action='edit', updated_at=?
 			 WHERE nit=?`,
-			nombre, tipoPersona, empresa, direccion, email, repLegal, hash, now, nit,
+			name, personType, company, address, email, legalRep, hash, now, nit,
 		)
 		return "edit"
 	}
@@ -1178,21 +1178,21 @@ func (db *DB) GetPendingClients() []PendingRecord {
 	var records []PendingRecord
 	for rows.Next() {
 		var id int64
-		var nit, nombre, tipoPersona, empresa, direccion, email, repLegal, action string
-		if err := rows.Scan(&id, &nit, &nombre, &tipoPersona, &empresa, &direccion, &email, &repLegal, &action); err != nil {
+		var nit, name, personType, company, address, email, legalRep, action string
+		if err := rows.Scan(&id, &nit, &name, &personType, &company, &address, &email, &legalRep, &action); err != nil {
 			continue
 		}
 		records = append(records, PendingRecord{
 			ID: id, Key: nit, SyncAction: action,
 			Data: map[string]interface{}{
 				"nit":           nit,
-				"client_name":   nombre,
-				"business_name": nombre,
-				"tipo_persona":  tipoPersona,
-				"siigo_empresa": empresa,
-				"direccion":     direccion,
+				"client_name":   name,
+				"business_name": name,
+				"tipo_persona":  personType,
+				"siigo_empresa": company,
+				"direccion":     address,
 				"email":         email,
-				"rep_legal":     repLegal,
+				"rep_legal":     legalRep,
 			},
 		})
 	}
@@ -1205,7 +1205,7 @@ func (db *DB) GetAllProductHashes() map[string]string {
 	return db.getAllHashes("products", "code")
 }
 
-func (db *DB) UpsertProduct(code, nombre, nombreCorto, grupo, referencia, empresa, hash string) string {
+func (db *DB) UpsertProduct(code, name, shortName, group, reference, company, hash string) string {
 	var existingHash string
 	err := db.conn.QueryRow(`SELECT hash FROM products WHERE code=?`, code).Scan(&existingHash)
 	now := time.Now().Format(time.RFC3339)
@@ -1214,20 +1214,20 @@ func (db *DB) UpsertProduct(code, nombre, nombreCorto, grupo, referencia, empres
 		db.conn.Exec(
 			`INSERT INTO products (code, nombre, nombre_corto, grupo, referencia, empresa, hash, sync_status, sync_action, updated_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 'add', ?)`,
-			code, nombre, nombreCorto, grupo, referencia, empresa, hash, now,
+			code, name, shortName, group, reference, company, hash, now,
 		)
 		return "add"
 	}
 
 	if existingHash != hash {
 		db.trackChanges("products", code, map[string]string{
-			"nombre": nombre, "nombre_corto": nombreCorto,
-			"grupo": grupo, "referencia": referencia, "empresa": empresa,
+			"nombre": name, "nombre_corto": shortName,
+			"grupo": group, "referencia": reference, "empresa": company,
 		})
 		db.conn.Exec(
 			`UPDATE products SET nombre=?, nombre_corto=?, grupo=?, referencia=?, empresa=?, hash=?, sync_status='pending', sync_action='edit', updated_at=?
 			 WHERE code=?`,
-			nombre, nombreCorto, grupo, referencia, empresa, hash, now, code,
+			name, shortName, group, reference, company, hash, now, code,
 		)
 		return "edit"
 	}
@@ -1251,17 +1251,17 @@ func (db *DB) GetPendingProducts() []PendingRecord {
 	var records []PendingRecord
 	for rows.Next() {
 		var id int64
-		var code, nombre, nombreCorto, grupo, referencia, action string
-		if err := rows.Scan(&id, &code, &nombre, &nombreCorto, &grupo, &referencia, &action); err != nil {
+		var code, name, shortName, group, reference, action string
+		if err := rows.Scan(&id, &code, &name, &shortName, &group, &reference, &action); err != nil {
 			continue
 		}
 		records = append(records, PendingRecord{
 			ID: id, Key: code, SyncAction: action,
 			Data: map[string]interface{}{
 				"code":         code,
-				"product_name": nombre,
-				"grupo":        grupo,
-				"referencia":   referencia,
+				"product_name": name,
+				"grupo":        group,
+				"referencia":   reference,
 			},
 		})
 	}
@@ -1274,7 +1274,7 @@ func (db *DB) GetAllMovementHashes() map[string]string {
 	return db.getAllHashes("movements", "record_key")
 }
 
-func (db *DB) UpsertMovement(key, tipoComprobante, empresa, numeroDoc, fecha, nitTercero, cuentaContable, descripcion, valor, tipoMov, hash string) string {
+func (db *DB) UpsertMovement(key, voucherType, company, docNum, date, thirdPartyNit, ledgerAccount, description, amount, movType, hash string) string {
 	var existingHash string
 	err := db.conn.QueryRow(`SELECT hash FROM movements WHERE record_key=?`, key).Scan(&existingHash)
 	now := time.Now().Format(time.RFC3339)
@@ -1283,21 +1283,21 @@ func (db *DB) UpsertMovement(key, tipoComprobante, empresa, numeroDoc, fecha, ni
 		db.conn.Exec(
 			`INSERT INTO movements (record_key, tipo_comprobante, empresa, numero_doc, fecha, nit_tercero, cuenta_contable, descripcion, valor, tipo_mov, hash, sync_status, sync_action, updated_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'add', ?)`,
-			key, tipoComprobante, empresa, numeroDoc, fecha, nitTercero, cuentaContable, descripcion, valor, tipoMov, hash, now,
+			key, voucherType, company, docNum, date, thirdPartyNit, ledgerAccount, description, amount, movType, hash, now,
 		)
 		return "add"
 	}
 
 	if existingHash != hash {
 		db.trackChanges("movements", key, map[string]string{
-			"tipo_comprobante": tipoComprobante, "empresa": empresa, "numero_doc": numeroDoc,
-			"fecha": fecha, "nit_tercero": nitTercero, "cuenta_contable": cuentaContable,
-			"descripcion": descripcion, "valor": valor, "tipo_mov": tipoMov,
+			"tipo_comprobante": voucherType, "empresa": company, "numero_doc": docNum,
+			"fecha": date, "nit_tercero": thirdPartyNit, "cuenta_contable": ledgerAccount,
+			"descripcion": description, "valor": amount, "tipo_mov": movType,
 		})
 		db.conn.Exec(
 			`UPDATE movements SET tipo_comprobante=?, empresa=?, numero_doc=?, fecha=?, nit_tercero=?, cuenta_contable=?, descripcion=?, valor=?, tipo_mov=?, hash=?, sync_status='pending', sync_action='edit', updated_at=?
 			 WHERE record_key=?`,
-			tipoComprobante, empresa, numeroDoc, fecha, nitTercero, cuentaContable, descripcion, valor, tipoMov, hash, now, key,
+			voucherType, company, docNum, date, thirdPartyNit, ledgerAccount, description, amount, movType, hash, now, key,
 		)
 		return "edit"
 	}
@@ -1321,21 +1321,21 @@ func (db *DB) GetPendingMovements() []PendingRecord {
 	var records []PendingRecord
 	for rows.Next() {
 		var id int64
-		var key, tipoComp, numDoc, fecha, nit, cuenta, desc, valor, tipoMov, action string
-		if err := rows.Scan(&id, &key, &tipoComp, &numDoc, &fecha, &nit, &cuenta, &desc, &valor, &tipoMov, &action); err != nil {
+		var key, voucherType, docNum, date, nit, account, desc, amount, movType, action string
+		if err := rows.Scan(&id, &key, &voucherType, &docNum, &date, &nit, &account, &desc, &amount, &movType, &action); err != nil {
 			continue
 		}
 		records = append(records, PendingRecord{
 			ID: id, Key: key, SyncAction: action,
 			Data: map[string]interface{}{
-				"tipo_comprobante": tipoComp,
-				"numero_doc":       numDoc,
-				"fecha":            fecha,
+				"tipo_comprobante": voucherType,
+				"numero_doc":       docNum,
+				"fecha":            date,
 				"nit_tercero":      nit,
-				"cuenta_contable":  cuenta,
+				"cuenta_contable":  account,
 				"descripcion":      desc,
-				"valor":            valor,
-				"tipo_mov":         tipoMov,
+				"valor":            amount,
+				"tipo_mov":         movType,
 			},
 		})
 	}
@@ -1348,7 +1348,7 @@ func (db *DB) GetAllCarteraHashes() map[string]string {
 	return db.getAllHashes("cartera", "record_key")
 }
 
-func (db *DB) UpsertCartera(key, tipoRegistro, empresa, secuencia, tipoDoc, nitTercero, cuentaContable, fecha, descripcion, tipoMov, hash string) string {
+func (db *DB) UpsertCartera(key, recordType, company, sequence, docType, thirdPartyNit, ledgerAccount, date, description, movType, hash string) string {
 	var existingHash string
 	err := db.conn.QueryRow(`SELECT hash FROM cartera WHERE record_key=?`, key).Scan(&existingHash)
 	now := time.Now().Format(time.RFC3339)
@@ -1357,21 +1357,21 @@ func (db *DB) UpsertCartera(key, tipoRegistro, empresa, secuencia, tipoDoc, nitT
 		db.conn.Exec(
 			`INSERT INTO cartera (record_key, tipo_registro, empresa, secuencia, tipo_doc, nit_tercero, cuenta_contable, fecha, descripcion, tipo_mov, hash, sync_status, sync_action, updated_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'add', ?)`,
-			key, tipoRegistro, empresa, secuencia, tipoDoc, nitTercero, cuentaContable, fecha, descripcion, tipoMov, hash, now,
+			key, recordType, company, sequence, docType, thirdPartyNit, ledgerAccount, date, description, movType, hash, now,
 		)
 		return "add"
 	}
 
 	if existingHash != hash {
 		db.trackChanges("cartera", key, map[string]string{
-			"tipo_registro": tipoRegistro, "empresa": empresa, "secuencia": secuencia,
-			"tipo_doc": tipoDoc, "nit_tercero": nitTercero, "cuenta_contable": cuentaContable,
-			"fecha": fecha, "descripcion": descripcion, "tipo_mov": tipoMov,
+			"tipo_registro": recordType, "empresa": company, "secuencia": sequence,
+			"tipo_doc": docType, "nit_tercero": thirdPartyNit, "cuenta_contable": ledgerAccount,
+			"fecha": date, "descripcion": description, "tipo_mov": movType,
 		})
 		db.conn.Exec(
 			`UPDATE cartera SET tipo_registro=?, empresa=?, secuencia=?, tipo_doc=?, nit_tercero=?, cuenta_contable=?, fecha=?, descripcion=?, tipo_mov=?, hash=?, sync_status='pending', sync_action='edit', updated_at=?
 			 WHERE record_key=?`,
-			tipoRegistro, empresa, secuencia, tipoDoc, nitTercero, cuentaContable, fecha, descripcion, tipoMov, hash, now, key,
+			recordType, company, sequence, docType, thirdPartyNit, ledgerAccount, date, description, movType, hash, now, key,
 		)
 		return "edit"
 	}
@@ -1395,46 +1395,46 @@ func (db *DB) GetPendingCartera() []PendingRecord {
 	var records []PendingRecord
 	for rows.Next() {
 		var id int64
-		var key, tipoReg, empresa, nit, cuenta, fecha, desc, tipoMov, action string
-		if err := rows.Scan(&id, &key, &tipoReg, &empresa, &nit, &cuenta, &fecha, &desc, &tipoMov, &action); err != nil {
+		var key, recType, company, nit, account, date, desc, movType, action string
+		if err := rows.Scan(&id, &key, &recType, &company, &nit, &account, &date, &desc, &movType, &action); err != nil {
 			continue
 		}
 		records = append(records, PendingRecord{
 			ID: id, Key: key, SyncAction: action,
 			Data: map[string]interface{}{
 				"nit":             nit,
-				"cuenta_contable": cuenta,
-				"fecha":           fecha,
-				"tipo_movimiento": tipoMov,
+				"cuenta_contable": account,
+				"fecha":           date,
+				"tipo_movimiento": movType,
 				"descripcion":     desc,
-				"tipo_registro":   tipoReg,
+				"tipo_registro":   recType,
 			},
 		})
 	}
 	return records
 }
 
-// ==================== PLAN DE CUENTAS (Z03) ====================
+// ==================== CHART OF ACCOUNTS (Z03) ====================
 
-func (db *DB) UpsertPlanCuenta(codigoCuenta, nombre, empresa, naturaleza, hash string, activa, auxiliar bool) string {
+func (db *DB) UpsertPlanCuenta(accountCode, name, company, nature, hash string, active, auxiliary bool) string {
 	var existingHash string
-	err := db.conn.QueryRow(`SELECT hash FROM plan_cuentas WHERE codigo_cuenta=?`, codigoCuenta).Scan(&existingHash)
+	err := db.conn.QueryRow(`SELECT hash FROM plan_cuentas WHERE codigo_cuenta=?`, accountCode).Scan(&existingHash)
 	now := time.Now().Format(time.RFC3339)
 
-	activaInt := 0
-	if activa {
-		activaInt = 1
+	activeInt := 0
+	if active {
+		activeInt = 1
 	}
-	auxiliarInt := 0
-	if auxiliar {
-		auxiliarInt = 1
+	auxiliaryInt := 0
+	if auxiliary {
+		auxiliaryInt = 1
 	}
 
 	if err == sql.ErrNoRows {
 		db.conn.Exec(
 			`INSERT INTO plan_cuentas (codigo_cuenta, nombre, empresa, activa, auxiliar, naturaleza, hash, sync_status, sync_action, updated_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 'add', ?)`,
-			codigoCuenta, nombre, empresa, activaInt, auxiliarInt, naturaleza, hash, now,
+			accountCode, name, company, activeInt, auxiliaryInt, nature, hash, now,
 		)
 		return "add"
 	}
@@ -1443,7 +1443,7 @@ func (db *DB) UpsertPlanCuenta(codigoCuenta, nombre, empresa, naturaleza, hash s
 		db.conn.Exec(
 			`UPDATE plan_cuentas SET nombre=?, empresa=?, activa=?, auxiliar=?, naturaleza=?, hash=?, sync_status='pending', sync_action='edit', updated_at=?
 			 WHERE codigo_cuenta=?`,
-			nombre, empresa, activaInt, auxiliarInt, naturaleza, hash, now, codigoCuenta,
+			name, company, activeInt, auxiliaryInt, nature, hash, now, accountCode,
 		)
 		return "edit"
 	}
@@ -1478,29 +1478,29 @@ func (db *DB) GetPlanCuentas(limit, offset int, search string) ([]PlanCuentasRec
 	var records []PlanCuentasRecord
 	for rows.Next() {
 		var r PlanCuentasRecord
-		var activa, auxiliar int
-		if err := rows.Scan(&r.ID, &r.CodigoCuenta, &r.Nombre, &r.Empresa, &activa, &auxiliar, &r.Naturaleza, &r.Hash, &r.SyncStatus, &r.SyncAction, &r.SyncError, &r.UpdatedAt, &r.SyncedAt); err != nil {
+		var active, auxiliary int
+		if err := rows.Scan(&r.ID, &r.CodigoCuenta, &r.Nombre, &r.Empresa, &active, &auxiliary, &r.Naturaleza, &r.Hash, &r.SyncStatus, &r.SyncAction, &r.SyncError, &r.UpdatedAt, &r.SyncedAt); err != nil {
 			continue
 		}
-		r.Activa = activa == 1
-		r.Auxiliar = auxiliar == 1
+		r.Activa = active == 1
+		r.Auxiliar = auxiliary == 1
 		records = append(records, r)
 	}
 	return records, total
 }
 
-// ==================== ACTIVOS FIJOS (Z27) ====================
+// ==================== FIXED ASSETS (Z27) ====================
 
-func (db *DB) UpsertActivoFijo(codigo, nombre, empresa, nitResponsable, fechaAdquisicion, hash string) string {
+func (db *DB) UpsertActivoFijo(code, name, company, responsibleNit, acquisitionDate, hash string) string {
 	var existingHash string
-	err := db.conn.QueryRow(`SELECT hash FROM activos_fijos WHERE codigo=?`, codigo).Scan(&existingHash)
+	err := db.conn.QueryRow(`SELECT hash FROM activos_fijos WHERE codigo=?`, code).Scan(&existingHash)
 	now := time.Now().Format(time.RFC3339)
 
 	if err == sql.ErrNoRows {
 		db.conn.Exec(
 			`INSERT INTO activos_fijos (codigo, nombre, empresa, nit_responsable, fecha_adquisicion, hash, sync_status, sync_action, updated_at)
 			 VALUES (?, ?, ?, ?, ?, ?, 'pending', 'add', ?)`,
-			codigo, nombre, empresa, nitResponsable, fechaAdquisicion, hash, now,
+			code, name, company, responsibleNit, acquisitionDate, hash, now,
 		)
 		return "add"
 	}
@@ -1509,7 +1509,7 @@ func (db *DB) UpsertActivoFijo(codigo, nombre, empresa, nitResponsable, fechaAdq
 		db.conn.Exec(
 			`UPDATE activos_fijos SET nombre=?, empresa=?, nit_responsable=?, fecha_adquisicion=?, hash=?, sync_status='pending', sync_action='edit', updated_at=?
 			 WHERE codigo=?`,
-			nombre, empresa, nitResponsable, fechaAdquisicion, hash, now, codigo,
+			name, company, responsibleNit, acquisitionDate, hash, now, code,
 		)
 		return "edit"
 	}
@@ -1552,9 +1552,9 @@ func (db *DB) GetActivosFijos(limit, offset int, search string) ([]ActivoFijoRec
 	return records, total
 }
 
-// ==================== SALDOS TERCEROS (Z25) ====================
+// ==================== THIRD-PARTY BALANCES (Z25) ====================
 
-func (db *DB) UpsertSaldoTercero(key, cuentaContable, nitTercero, empresa, hash string, saldoAnterior, debito, credito, saldoFinal float64) string {
+func (db *DB) UpsertSaldoTercero(key, ledgerAccount, thirdPartyNit, company, hash string, prevBalance, debit, credit, finalBalance float64) string {
 	var existingHash string
 	err := db.conn.QueryRow(`SELECT hash FROM saldos_terceros WHERE record_key=?`, key).Scan(&existingHash)
 	now := time.Now().Format(time.RFC3339)
@@ -1563,7 +1563,7 @@ func (db *DB) UpsertSaldoTercero(key, cuentaContable, nitTercero, empresa, hash 
 		db.conn.Exec(
 			`INSERT INTO saldos_terceros (record_key, cuenta_contable, nit_tercero, empresa, saldo_anterior, debito, credito, saldo_final, hash, sync_status, sync_action, updated_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'add', ?)`,
-			key, cuentaContable, nitTercero, empresa, saldoAnterior, debito, credito, saldoFinal, hash, now,
+			key, ledgerAccount, thirdPartyNit, company, prevBalance, debit, credit, finalBalance, hash, now,
 		)
 		return "add"
 	}
@@ -1572,7 +1572,7 @@ func (db *DB) UpsertSaldoTercero(key, cuentaContable, nitTercero, empresa, hash 
 		db.conn.Exec(
 			`UPDATE saldos_terceros SET cuenta_contable=?, nit_tercero=?, empresa=?, saldo_anterior=?, debito=?, credito=?, saldo_final=?, hash=?, sync_status='pending', sync_action='edit', updated_at=?
 			 WHERE record_key=?`,
-			cuentaContable, nitTercero, empresa, saldoAnterior, debito, credito, saldoFinal, hash, now, key,
+			ledgerAccount, thirdPartyNit, company, prevBalance, debit, credit, finalBalance, hash, now, key,
 		)
 		return "edit"
 	}
@@ -1615,18 +1615,18 @@ func (db *DB) GetSaldosTerceros(limit, offset int, search string) ([]SaldoTercer
 	return records, total
 }
 
-// ==================== SALDOS CONSOLIDADOS (Z28) ====================
+// ==================== CONSOLIDATED BALANCES (Z28) ====================
 
-func (db *DB) UpsertSaldoConsolidado(cuentaContable, empresa, hash string, saldoAnterior, debito, credito, saldoFinal float64) string {
+func (db *DB) UpsertSaldoConsolidado(ledgerAccount, company, hash string, prevBalance, debit, credit, finalBalance float64) string {
 	var existingHash string
-	err := db.conn.QueryRow(`SELECT hash FROM saldos_consolidados WHERE cuenta_contable=?`, cuentaContable).Scan(&existingHash)
+	err := db.conn.QueryRow(`SELECT hash FROM saldos_consolidados WHERE cuenta_contable=?`, ledgerAccount).Scan(&existingHash)
 	now := time.Now().Format(time.RFC3339)
 
 	if err == sql.ErrNoRows {
 		db.conn.Exec(
 			`INSERT INTO saldos_consolidados (cuenta_contable, empresa, saldo_anterior, debito, credito, saldo_final, hash, sync_status, sync_action, updated_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 'add', ?)`,
-			cuentaContable, empresa, saldoAnterior, debito, credito, saldoFinal, hash, now,
+			ledgerAccount, company, prevBalance, debit, credit, finalBalance, hash, now,
 		)
 		return "add"
 	}
@@ -1635,7 +1635,7 @@ func (db *DB) UpsertSaldoConsolidado(cuentaContable, empresa, hash string, saldo
 		db.conn.Exec(
 			`UPDATE saldos_consolidados SET empresa=?, saldo_anterior=?, debito=?, credito=?, saldo_final=?, hash=?, sync_status='pending', sync_action='edit', updated_at=?
 			 WHERE cuenta_contable=?`,
-			empresa, saldoAnterior, debito, credito, saldoFinal, hash, now, cuentaContable,
+			company, prevBalance, debit, credit, finalBalance, hash, now, ledgerAccount,
 		)
 		return "edit"
 	}
@@ -1678,9 +1678,9 @@ func (db *DB) GetSaldosConsolidados(limit, offset int, search string) ([]SaldoCo
 	return records, total
 }
 
-// ==================== DOCUMENTOS (Z11) ====================
+// ==================== DOCUMENTS (Z11) ====================
 
-func (db *DB) UpsertDocumento(key, tipoComp, codigoComp, secuencia, nitTercero, cuentaContable, productoRef, bodega, centroCosto, fecha, descripcion, tipoMov, referencia, hash string) string {
+func (db *DB) UpsertDocumento(key, voucherType, voucherCode, sequence, thirdPartyNit, ledgerAccount, productRef, warehouse, costCenter, date, description, movType, reference, hash string) string {
 	var existingHash string
 	err := db.conn.QueryRow(`SELECT hash FROM documentos WHERE record_key=?`, key).Scan(&existingHash)
 	now := time.Now().Format(time.RFC3339)
@@ -1689,7 +1689,7 @@ func (db *DB) UpsertDocumento(key, tipoComp, codigoComp, secuencia, nitTercero, 
 		db.conn.Exec(
 			`INSERT INTO documentos (record_key, tipo_comprobante, codigo_comp, secuencia, nit_tercero, cuenta_contable, producto_ref, bodega, centro_costo, fecha, descripcion, tipo_mov, referencia, hash, sync_status, sync_action, updated_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'add', ?)`,
-			key, tipoComp, codigoComp, secuencia, nitTercero, cuentaContable, productoRef, bodega, centroCosto, fecha, descripcion, tipoMov, referencia, hash, now,
+			key, voucherType, voucherCode, sequence, thirdPartyNit, ledgerAccount, productRef, warehouse, costCenter, date, description, movType, reference, hash, now,
 		)
 		return "add"
 	}
@@ -1698,7 +1698,7 @@ func (db *DB) UpsertDocumento(key, tipoComp, codigoComp, secuencia, nitTercero, 
 		db.conn.Exec(
 			`UPDATE documentos SET tipo_comprobante=?, codigo_comp=?, secuencia=?, nit_tercero=?, cuenta_contable=?, producto_ref=?, bodega=?, centro_costo=?, fecha=?, descripcion=?, tipo_mov=?, referencia=?, hash=?, sync_status='pending', sync_action='edit', updated_at=?
 			 WHERE record_key=?`,
-			tipoComp, codigoComp, secuencia, nitTercero, cuentaContable, productoRef, bodega, centroCosto, fecha, descripcion, tipoMov, referencia, hash, now, key,
+			voucherType, voucherCode, sequence, thirdPartyNit, ledgerAccount, productRef, warehouse, costCenter, date, description, movType, reference, hash, now, key,
 		)
 		return "edit"
 	}
@@ -1741,9 +1741,9 @@ func (db *DB) GetDocumentos(limit, offset int, search string) ([]DocumentoRecord
 	return records, total
 }
 
-// ==================== TERCEROS AMPLIADOS (Z08A) ====================
+// ==================== EXTENDED THIRD PARTIES (Z08A) ====================
 
-func (db *DB) UpsertTerceroAmpliado(nit, nombre, empresa, tipoPersona, repLegal, direccion, email, hash string) string {
+func (db *DB) UpsertTerceroAmpliado(nit, name, company, personType, legalRep, address, email, hash string) string {
 	var existingHash string
 	err := db.conn.QueryRow(`SELECT hash FROM terceros_ampliados WHERE nit=?`, nit).Scan(&existingHash)
 	now := time.Now().Format(time.RFC3339)
@@ -1752,7 +1752,7 @@ func (db *DB) UpsertTerceroAmpliado(nit, nombre, empresa, tipoPersona, repLegal,
 		db.conn.Exec(
 			`INSERT INTO terceros_ampliados (nit, nombre, empresa, tipo_persona, representante_legal, direccion, email, hash, sync_status, sync_action, updated_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'add', ?)`,
-			nit, nombre, empresa, tipoPersona, repLegal, direccion, email, hash, now,
+			nit, name, company, personType, legalRep, address, email, hash, now,
 		)
 		return "add"
 	}
@@ -1761,7 +1761,7 @@ func (db *DB) UpsertTerceroAmpliado(nit, nombre, empresa, tipoPersona, repLegal,
 		db.conn.Exec(
 			`UPDATE terceros_ampliados SET nombre=?, empresa=?, tipo_persona=?, representante_legal=?, direccion=?, email=?, hash=?, sync_status='pending', sync_action='edit', updated_at=?
 			 WHERE nit=?`,
-			nombre, empresa, tipoPersona, repLegal, direccion, email, hash, now, nit,
+			name, company, personType, legalRep, address, email, hash, now, nit,
 		)
 		return "edit"
 	}
@@ -1804,9 +1804,9 @@ func (db *DB) GetTercerosAmpliados(limit, offset int, search string) ([]TerceroA
 	return records, total
 }
 
-// ==================== TRANSACCIONES DETALLE (Z07T) ====================
+// ==================== TRANSACTION DETAIL (Z07T) ====================
 
-func (db *DB) UpsertTransaccionDetalle(key, tipoComp, empresa, secuencia, nitTercero, cuentaContable, fechaDoc, fechaVenc, tipoMov, referencia, hash string, valor float64) string {
+func (db *DB) UpsertTransaccionDetalle(key, voucherType, company, sequence, thirdPartyNit, ledgerAccount, docDate, dueDate, movType, reference, hash string, amount float64) string {
 	var existingHash string
 	err := db.conn.QueryRow(`SELECT hash FROM transacciones_detalle WHERE record_key=?`, key).Scan(&existingHash)
 	now := time.Now().Format(time.RFC3339)
@@ -1815,7 +1815,7 @@ func (db *DB) UpsertTransaccionDetalle(key, tipoComp, empresa, secuencia, nitTer
 		db.conn.Exec(
 			`INSERT INTO transacciones_detalle (record_key, tipo_comprobante, empresa, secuencia, nit_tercero, cuenta_contable, fecha_documento, fecha_vencimiento, tipo_movimiento, valor, referencia, hash, sync_status, sync_action, updated_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'add', ?)`,
-			key, tipoComp, empresa, secuencia, nitTercero, cuentaContable, fechaDoc, fechaVenc, tipoMov, valor, referencia, hash, now,
+			key, voucherType, company, sequence, thirdPartyNit, ledgerAccount, docDate, dueDate, movType, amount, reference, hash, now,
 		)
 		return "add"
 	}
@@ -1824,7 +1824,7 @@ func (db *DB) UpsertTransaccionDetalle(key, tipoComp, empresa, secuencia, nitTer
 		db.conn.Exec(
 			`UPDATE transacciones_detalle SET tipo_comprobante=?, empresa=?, secuencia=?, nit_tercero=?, cuenta_contable=?, fecha_documento=?, fecha_vencimiento=?, tipo_movimiento=?, valor=?, referencia=?, hash=?, sync_status='pending', sync_action='edit', updated_at=?
 			 WHERE record_key=?`,
-			tipoComp, empresa, secuencia, nitTercero, cuentaContable, fechaDoc, fechaVenc, tipoMov, valor, referencia, hash, now, key,
+			voucherType, company, sequence, thirdPartyNit, ledgerAccount, docDate, dueDate, movType, amount, reference, hash, now, key,
 		)
 		return "edit"
 	}
@@ -1835,9 +1835,9 @@ func (db *DB) MarkDeletedTransaccionesDetalle(currentKeys map[string]bool) int {
 	return db.markDeleted("transacciones_detalle", "record_key", currentKeys)
 }
 
-// ==================== PERIODOS CONTABLES (Z26) ====================
+// ==================== ACCOUNTING PERIODS (Z26) ====================
 
-func (db *DB) UpsertPeriodoContable(key, empresa, numeroPeriodo, fechaInicio, fechaFin, estado, hash string, saldo1, saldo2, saldo3 float64) string {
+func (db *DB) UpsertPeriodoContable(key, company, periodNumber, startDate, endDate, status, hash string, saldo1, saldo2, saldo3 float64) string {
 	var existingHash string
 	err := db.conn.QueryRow(`SELECT hash FROM periodos_contables WHERE record_key=?`, key).Scan(&existingHash)
 	now := time.Now().Format(time.RFC3339)
@@ -1846,7 +1846,7 @@ func (db *DB) UpsertPeriodoContable(key, empresa, numeroPeriodo, fechaInicio, fe
 		db.conn.Exec(
 			`INSERT INTO periodos_contables (record_key, empresa, numero_periodo, fecha_inicio, fecha_fin, estado, saldo1, saldo2, saldo3, hash, sync_status, sync_action, updated_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'add', ?)`,
-			key, empresa, numeroPeriodo, fechaInicio, fechaFin, estado, saldo1, saldo2, saldo3, hash, now,
+			key, company, periodNumber, startDate, endDate, status, saldo1, saldo2, saldo3, hash, now,
 		)
 		return "add"
 	}
@@ -1855,7 +1855,7 @@ func (db *DB) UpsertPeriodoContable(key, empresa, numeroPeriodo, fechaInicio, fe
 		db.conn.Exec(
 			`UPDATE periodos_contables SET empresa=?, numero_periodo=?, fecha_inicio=?, fecha_fin=?, estado=?, saldo1=?, saldo2=?, saldo3=?, hash=?, sync_status='pending', sync_action='edit', updated_at=?
 			 WHERE record_key=?`,
-			empresa, numeroPeriodo, fechaInicio, fechaFin, estado, saldo1, saldo2, saldo3, hash, now, key,
+			company, periodNumber, startDate, endDate, status, saldo1, saldo2, saldo3, hash, now, key,
 		)
 		return "edit"
 	}
@@ -1866,9 +1866,9 @@ func (db *DB) MarkDeletedPeriodosContables(currentKeys map[string]bool) int {
 	return db.markDeleted("periodos_contables", "record_key", currentKeys)
 }
 
-// ==================== CONDICIONES DE PAGO (Z05) ====================
+// ==================== PAYMENT TERMS (Z05) ====================
 
-func (db *DB) UpsertCondicionPago(key, tipo, empresa, secuencia, tipoDoc, fecha, nit, tipoSecundario, fechaRegistro, hash string, valor float64) string {
+func (db *DB) UpsertCondicionPago(key, recType, company, sequence, docType, date, nit, secondaryType, regDate, hash string, amount float64) string {
 	var existingHash string
 	err := db.conn.QueryRow(`SELECT hash FROM condiciones_pago WHERE record_key=?`, key).Scan(&existingHash)
 	now := time.Now().Format(time.RFC3339)
@@ -1877,7 +1877,7 @@ func (db *DB) UpsertCondicionPago(key, tipo, empresa, secuencia, tipoDoc, fecha,
 		db.conn.Exec(
 			`INSERT INTO condiciones_pago (record_key, tipo, empresa, secuencia, tipo_doc, fecha, nit, tipo_secundario, valor, fecha_registro, hash, sync_status, sync_action, updated_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'add', ?)`,
-			key, tipo, empresa, secuencia, tipoDoc, fecha, nit, tipoSecundario, valor, fechaRegistro, hash, now,
+			key, recType, company, sequence, docType, date, nit, secondaryType, amount, regDate, hash, now,
 		)
 		return "add"
 	}
@@ -1886,7 +1886,7 @@ func (db *DB) UpsertCondicionPago(key, tipo, empresa, secuencia, tipoDoc, fecha,
 		db.conn.Exec(
 			`UPDATE condiciones_pago SET tipo=?, empresa=?, secuencia=?, tipo_doc=?, fecha=?, nit=?, tipo_secundario=?, valor=?, fecha_registro=?, hash=?, sync_status='pending', sync_action='edit', updated_at=?
 			 WHERE record_key=?`,
-			tipo, empresa, secuencia, tipoDoc, fecha, nit, tipoSecundario, valor, fechaRegistro, hash, now, key,
+			recType, company, sequence, docType, date, nit, secondaryType, amount, regDate, hash, now, key,
 		)
 		return "edit"
 	}
@@ -1897,9 +1897,9 @@ func (db *DB) MarkDeletedCondicionesPago(currentKeys map[string]bool) int {
 	return db.markDeleted("condiciones_pago", "record_key", currentKeys)
 }
 
-// ==================== LIBROS AUXILIARES (Z07) ====================
+// ==================== AUXILIARY LEDGERS (Z07) ====================
 
-func (db *DB) UpsertLibroAuxiliar(key, empresa, cuentaContable, tipoComp, codigoComp, fechaDoc, nitTercero, hash string, saldo, debito, credito float64) string {
+func (db *DB) UpsertLibroAuxiliar(key, company, ledgerAccount, voucherType, voucherCode, docDate, thirdPartyNit, hash string, balance, debit, credit float64) string {
 	var existingHash string
 	err := db.conn.QueryRow(`SELECT hash FROM libros_auxiliares WHERE record_key=?`, key).Scan(&existingHash)
 	now := time.Now().Format(time.RFC3339)
@@ -1908,7 +1908,7 @@ func (db *DB) UpsertLibroAuxiliar(key, empresa, cuentaContable, tipoComp, codigo
 		db.conn.Exec(
 			`INSERT INTO libros_auxiliares (record_key, empresa, cuenta_contable, tipo_comprobante, codigo_comprobante, fecha_documento, nit_tercero, saldo, debito, credito, hash, sync_status, sync_action, updated_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'add', ?)`,
-			key, empresa, cuentaContable, tipoComp, codigoComp, fechaDoc, nitTercero, saldo, debito, credito, hash, now,
+			key, company, ledgerAccount, voucherType, voucherCode, docDate, thirdPartyNit, balance, debit, credit, hash, now,
 		)
 		return "add"
 	}
@@ -1917,7 +1917,7 @@ func (db *DB) UpsertLibroAuxiliar(key, empresa, cuentaContable, tipoComp, codigo
 		db.conn.Exec(
 			`UPDATE libros_auxiliares SET empresa=?, cuenta_contable=?, tipo_comprobante=?, codigo_comprobante=?, fecha_documento=?, nit_tercero=?, saldo=?, debito=?, credito=?, hash=?, sync_status='pending', sync_action='edit', updated_at=?
 			 WHERE record_key=?`,
-			empresa, cuentaContable, tipoComp, codigoComp, fechaDoc, nitTercero, saldo, debito, credito, hash, now, key,
+			company, ledgerAccount, voucherType, voucherCode, docDate, thirdPartyNit, balance, debit, credit, hash, now, key,
 		)
 		return "edit"
 	}
@@ -1928,18 +1928,18 @@ func (db *DB) MarkDeletedLibrosAuxiliares(currentKeys map[string]bool) int {
 	return db.markDeleted("libros_auxiliares", "record_key", currentKeys)
 }
 
-// ==================== CODIGOS DANE (ZDANE) ====================
+// ==================== DANE CODES (ZDANE) ====================
 
-func (db *DB) UpsertCodigoDane(codigo, nombre, hash string) string {
+func (db *DB) UpsertCodigoDane(code, name, hash string) string {
 	var existingHash string
-	err := db.conn.QueryRow(`SELECT hash FROM codigos_dane WHERE codigo=?`, codigo).Scan(&existingHash)
+	err := db.conn.QueryRow(`SELECT hash FROM codigos_dane WHERE codigo=?`, code).Scan(&existingHash)
 	now := time.Now().Format(time.RFC3339)
 
 	if err == sql.ErrNoRows {
 		db.conn.Exec(
 			`INSERT INTO codigos_dane (codigo, nombre, hash, sync_status, sync_action, updated_at)
 			 VALUES (?, ?, ?, 'pending', 'add', ?)`,
-			codigo, nombre, hash, now,
+			code, name, hash, now,
 		)
 		return "add"
 	}
@@ -1948,7 +1948,7 @@ func (db *DB) UpsertCodigoDane(codigo, nombre, hash string) string {
 		db.conn.Exec(
 			`UPDATE codigos_dane SET nombre=?, hash=?, sync_status='pending', sync_action='edit', updated_at=?
 			 WHERE codigo=?`,
-			nombre, hash, now, codigo,
+			name, hash, now, code,
 		)
 		return "edit"
 	}
@@ -1959,18 +1959,18 @@ func (db *DB) MarkDeletedCodigosDane(currentKeys map[string]bool) int {
 	return db.markDeleted("codigos_dane", "codigo", currentKeys)
 }
 
-// ==================== ACTIVIDADES ICA (ZICA) ====================
+// ==================== ICA ACTIVITIES (ZICA) ====================
 
-func (db *DB) UpsertActividadICA(codigo, nombre, tarifa, hash string) string {
+func (db *DB) UpsertActividadICA(code, name, rate, hash string) string {
 	var existingHash string
-	err := db.conn.QueryRow(`SELECT hash FROM actividades_ica WHERE codigo=?`, codigo).Scan(&existingHash)
+	err := db.conn.QueryRow(`SELECT hash FROM actividades_ica WHERE codigo=?`, code).Scan(&existingHash)
 	now := time.Now().Format(time.RFC3339)
 
 	if err == sql.ErrNoRows {
 		db.conn.Exec(
 			`INSERT INTO actividades_ica (codigo, nombre, tarifa, hash, sync_status, sync_action, updated_at)
 			 VALUES (?, ?, ?, ?, 'pending', 'add', ?)`,
-			codigo, nombre, tarifa, hash, now,
+			code, name, rate, hash, now,
 		)
 		return "add"
 	}
@@ -1979,7 +1979,7 @@ func (db *DB) UpsertActividadICA(codigo, nombre, tarifa, hash string) string {
 		db.conn.Exec(
 			`UPDATE actividades_ica SET nombre=?, tarifa=?, hash=?, sync_status='pending', sync_action='edit', updated_at=?
 			 WHERE codigo=?`,
-			nombre, tarifa, hash, now, codigo,
+			name, rate, hash, now, code,
 		)
 		return "edit"
 	}
@@ -1990,9 +1990,9 @@ func (db *DB) MarkDeletedActividadesICA(currentKeys map[string]bool) int {
 	return db.markDeleted("actividades_ica", "codigo", currentKeys)
 }
 
-// ==================== CONCEPTOS PILA (ZPILA) ====================
+// ==================== PILA CONCEPTS (ZPILA) ====================
 
-func (db *DB) UpsertConceptoPILA(key, tipo, fondo, concepto, flags, tipoBase, baseCalculo, hash string) string {
+func (db *DB) UpsertConceptoPILA(key, recType, fund, concept, flags, baseType, calcBase, hash string) string {
 	var existingHash string
 	err := db.conn.QueryRow(`SELECT hash FROM conceptos_pila WHERE record_key=?`, key).Scan(&existingHash)
 	now := time.Now().Format(time.RFC3339)
@@ -2001,7 +2001,7 @@ func (db *DB) UpsertConceptoPILA(key, tipo, fondo, concepto, flags, tipoBase, ba
 		db.conn.Exec(
 			`INSERT INTO conceptos_pila (record_key, tipo, fondo, concepto, flags, tipo_base, base_calculo, hash, sync_status, sync_action, updated_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'add', ?)`,
-			key, tipo, fondo, concepto, flags, tipoBase, baseCalculo, hash, now,
+			key, recType, fund, concept, flags, baseType, calcBase, hash, now,
 		)
 		return "add"
 	}
@@ -2010,7 +2010,7 @@ func (db *DB) UpsertConceptoPILA(key, tipo, fondo, concepto, flags, tipoBase, ba
 		db.conn.Exec(
 			`UPDATE conceptos_pila SET tipo=?, fondo=?, concepto=?, flags=?, tipo_base=?, base_calculo=?, hash=?, sync_status='pending', sync_action='edit', updated_at=?
 			 WHERE record_key=?`,
-			tipo, fondo, concepto, flags, tipoBase, baseCalculo, hash, now, key,
+			recType, fund, concept, flags, baseType, calcBase, hash, now, key,
 		)
 		return "edit"
 	}
@@ -2023,7 +2023,7 @@ func (db *DB) MarkDeletedConceptosPILA(currentKeys map[string]bool) int {
 
 // ==================== ACTIVOS FIJOS DETALLE (Z27 detail) ====================
 
-func (db *DB) UpsertActivoFijoDetalle(key, grupo, secuencia, nombre, nitResponsable, codigo, fecha, hash string, valorCompra float64) string {
+func (db *DB) UpsertActivoFijoDetalle(key, group, sequence, name, responsibleNit, code, date, hash string, purchaseValue float64) string {
 	var existingHash string
 	err := db.conn.QueryRow(`SELECT hash FROM activos_fijos_detalle WHERE record_key=?`, key).Scan(&existingHash)
 	now := time.Now().Format(time.RFC3339)
@@ -2032,7 +2032,7 @@ func (db *DB) UpsertActivoFijoDetalle(key, grupo, secuencia, nombre, nitResponsa
 		db.conn.Exec(
 			`INSERT INTO activos_fijos_detalle (record_key, grupo, secuencia, nombre, nit_responsable, codigo, fecha, valor_compra, hash, sync_status, sync_action, updated_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'add', ?)`,
-			key, grupo, secuencia, nombre, nitResponsable, codigo, fecha, valorCompra, hash, now,
+			key, group, sequence, name, responsibleNit, code, date, purchaseValue, hash, now,
 		)
 		return "add"
 	}
@@ -2041,7 +2041,7 @@ func (db *DB) UpsertActivoFijoDetalle(key, grupo, secuencia, nombre, nitResponsa
 		db.conn.Exec(
 			`UPDATE activos_fijos_detalle SET grupo=?, secuencia=?, nombre=?, nit_responsable=?, codigo=?, fecha=?, valor_compra=?, hash=?, sync_status='pending', sync_action='edit', updated_at=?
 			 WHERE record_key=?`,
-			grupo, secuencia, nombre, nitResponsable, codigo, fecha, valorCompra, hash, now, key,
+			group, sequence, name, responsibleNit, code, date, purchaseValue, hash, now, key,
 		)
 		return "edit"
 	}
@@ -2054,7 +2054,7 @@ func (db *DB) MarkDeletedActivosFijosDetalle(currentKeys map[string]bool) int {
 
 // ==================== AUDIT TRAIL TERCEROS (Z11N) ====================
 
-func (db *DB) UpsertAuditTrailTercero(key, fechaCambio, nitTercero, timestamp, usuario, fechaPeriodo, tipoDoc, nombre, nitRepresentante, nombreRepresentante, direccion, email, hash string) string {
+func (db *DB) UpsertAuditTrailTercero(key, changeDate, thirdPartyNit, timestamp, user, periodDate, docType, name, repNit, repName, address, email, hash string) string {
 	var existingHash string
 	err := db.conn.QueryRow(`SELECT hash FROM audit_trail_terceros WHERE record_key=?`, key).Scan(&existingHash)
 	now := time.Now().Format(time.RFC3339)
@@ -2063,7 +2063,7 @@ func (db *DB) UpsertAuditTrailTercero(key, fechaCambio, nitTercero, timestamp, u
 		db.conn.Exec(
 			`INSERT INTO audit_trail_terceros (record_key, fecha_cambio, nit_tercero, timestamp, usuario, fecha_periodo, tipo_doc, nombre, nit_representante, nombre_representante, direccion, email, hash, sync_status, sync_action, updated_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'add', ?)`,
-			key, fechaCambio, nitTercero, timestamp, usuario, fechaPeriodo, tipoDoc, nombre, nitRepresentante, nombreRepresentante, direccion, email, hash, now,
+			key, changeDate, thirdPartyNit, timestamp, user, periodDate, docType, name, repNit, repName, address, email, hash, now,
 		)
 		return "add"
 	}
@@ -2072,7 +2072,7 @@ func (db *DB) UpsertAuditTrailTercero(key, fechaCambio, nitTercero, timestamp, u
 		db.conn.Exec(
 			`UPDATE audit_trail_terceros SET fecha_cambio=?, nit_tercero=?, timestamp=?, usuario=?, fecha_periodo=?, tipo_doc=?, nombre=?, nit_representante=?, nombre_representante=?, direccion=?, email=?, hash=?, sync_status='pending', sync_action='edit', updated_at=?
 			 WHERE record_key=?`,
-			fechaCambio, nitTercero, timestamp, usuario, fechaPeriodo, tipoDoc, nombre, nitRepresentante, nombreRepresentante, direccion, email, hash, now, key,
+			changeDate, thirdPartyNit, timestamp, user, periodDate, docType, name, repNit, repName, address, email, hash, now, key,
 		)
 		return "edit"
 	}
@@ -2111,16 +2111,16 @@ func (db *DB) GetActivosFijosDetalle(page int, search string) ([]map[string]inte
 	var records []map[string]interface{}
 	for rows.Next() {
 		var id int64
-		var recordKey, grupo, secuencia, nombre, nitResponsable, codigo, fecha string
-		var valorCompra float64
+		var recordKey, group, sequence, name, responsibleNit, code, date string
+		var purchaseValue float64
 		var hash, syncStatus, syncAction, syncError, updatedAt, syncedAt string
-		if err := rows.Scan(&id, &recordKey, &grupo, &secuencia, &nombre, &nitResponsable, &codigo, &fecha, &valorCompra, &hash, &syncStatus, &syncAction, &syncError, &updatedAt, &syncedAt); err != nil {
+		if err := rows.Scan(&id, &recordKey, &group, &sequence, &name, &responsibleNit, &code, &date, &purchaseValue, &hash, &syncStatus, &syncAction, &syncError, &updatedAt, &syncedAt); err != nil {
 			continue
 		}
 		records = append(records, map[string]interface{}{
-			"id": id, "record_key": recordKey, "grupo": grupo, "secuencia": secuencia,
-			"nombre": nombre, "nit_responsable": nitResponsable, "codigo": codigo,
-			"fecha": fecha, "valor_compra": valorCompra, "hash": hash,
+			"id": id, "record_key": recordKey, "grupo": group, "secuencia": sequence,
+			"nombre": name, "nit_responsable": responsibleNit, "codigo": code,
+			"fecha": date, "valor_compra": purchaseValue, "hash": hash,
 			"sync_status": syncStatus, "sync_action": syncAction, "sync_error": syncError,
 			"updated_at": updatedAt, "synced_at": syncedAt,
 		})
@@ -2141,17 +2141,17 @@ func (db *DB) GetPendingActivosFijosDetalle() []PendingRecord {
 	var records []PendingRecord
 	for rows.Next() {
 		var id int64
-		var key, grupo, secuencia, nombre, nitResponsable, codigo, fecha, action string
-		var valorCompra float64
-		if err := rows.Scan(&id, &key, &grupo, &secuencia, &nombre, &nitResponsable, &codigo, &fecha, &valorCompra, &action); err != nil {
+		var key, group, sequence, name, responsibleNit, code, date, action string
+		var purchaseValue float64
+		if err := rows.Scan(&id, &key, &group, &sequence, &name, &responsibleNit, &code, &date, &purchaseValue, &action); err != nil {
 			continue
 		}
 		records = append(records, PendingRecord{
 			ID: id, Key: key, SyncAction: action,
 			Data: map[string]interface{}{
-				"record_key": key, "grupo": grupo, "secuencia": secuencia,
-				"nombre": nombre, "nit_responsable": nitResponsable, "codigo": codigo,
-				"fecha": fecha, "valor_compra": valorCompra,
+				"record_key": key, "grupo": group, "secuencia": sequence,
+				"nombre": name, "nit_responsable": responsibleNit, "codigo": code,
+				"fecha": date, "valor_compra": purchaseValue,
 			},
 		})
 	}
@@ -2186,18 +2186,18 @@ func (db *DB) GetAuditTrailTerceros(page int, search string) ([]map[string]inter
 	var records []map[string]interface{}
 	for rows.Next() {
 		var id int64
-		var recordKey, fechaCambio, nitTercero, timestamp, usuario, fechaPeriodo, tipoDoc string
-		var nombre, nitRepresentante, nombreRepresentante, direccion, email string
+		var recordKey, changeDate, thirdPartyNit, timestamp, user, periodDate, docType string
+		var name, repNit, repName, address, email string
 		var hash, syncStatus, syncAction, syncError, updatedAt, syncedAt string
-		if err := rows.Scan(&id, &recordKey, &fechaCambio, &nitTercero, &timestamp, &usuario, &fechaPeriodo, &tipoDoc, &nombre, &nitRepresentante, &nombreRepresentante, &direccion, &email, &hash, &syncStatus, &syncAction, &syncError, &updatedAt, &syncedAt); err != nil {
+		if err := rows.Scan(&id, &recordKey, &changeDate, &thirdPartyNit, &timestamp, &user, &periodDate, &docType, &name, &repNit, &repName, &address, &email, &hash, &syncStatus, &syncAction, &syncError, &updatedAt, &syncedAt); err != nil {
 			continue
 		}
 		records = append(records, map[string]interface{}{
-			"id": id, "record_key": recordKey, "fecha_cambio": fechaCambio,
-			"nit_tercero": nitTercero, "timestamp": timestamp, "usuario": usuario,
-			"fecha_periodo": fechaPeriodo, "tipo_doc": tipoDoc, "nombre": nombre,
-			"nit_representante": nitRepresentante, "nombre_representante": nombreRepresentante,
-			"direccion": direccion, "email": email, "hash": hash,
+			"id": id, "record_key": recordKey, "fecha_cambio": changeDate,
+			"nit_tercero": thirdPartyNit, "timestamp": timestamp, "usuario": user,
+			"fecha_periodo": periodDate, "tipo_doc": docType, "nombre": name,
+			"nit_representante": repNit, "nombre_representante": repName,
+			"direccion": address, "email": email, "hash": hash,
 			"sync_status": syncStatus, "sync_action": syncAction, "sync_error": syncError,
 			"updated_at": updatedAt, "synced_at": syncedAt,
 		})
@@ -2218,18 +2218,18 @@ func (db *DB) GetPendingAuditTrailTerceros() []PendingRecord {
 	var records []PendingRecord
 	for rows.Next() {
 		var id int64
-		var key, fechaCambio, nitTercero, timestamp, usuario, fechaPeriodo, tipoDoc string
-		var nombre, nitRepresentante, nombreRepresentante, direccion, email, action string
-		if err := rows.Scan(&id, &key, &fechaCambio, &nitTercero, &timestamp, &usuario, &fechaPeriodo, &tipoDoc, &nombre, &nitRepresentante, &nombreRepresentante, &direccion, &email, &action); err != nil {
+		var key, changeDate, thirdPartyNit, timestamp, user, periodDate, docType string
+		var name, repNit, repName, address, email, action string
+		if err := rows.Scan(&id, &key, &changeDate, &thirdPartyNit, &timestamp, &user, &periodDate, &docType, &name, &repNit, &repName, &address, &email, &action); err != nil {
 			continue
 		}
 		records = append(records, PendingRecord{
 			ID: id, Key: key, SyncAction: action,
 			Data: map[string]interface{}{
-				"record_key": key, "fecha_cambio": fechaCambio, "nit_tercero": nitTercero,
-				"timestamp": timestamp, "usuario": usuario, "fecha_periodo": fechaPeriodo,
-				"tipo_doc": tipoDoc, "nombre": nombre, "nit_representante": nitRepresentante,
-				"nombre_representante": nombreRepresentante, "direccion": direccion, "email": email,
+				"record_key": key, "fecha_cambio": changeDate, "nit_tercero": thirdPartyNit,
+				"timestamp": timestamp, "usuario": user, "fecha_periodo": periodDate,
+				"tipo_doc": docType, "nombre": name, "nit_representante": repNit,
+				"nombre_representante": repName, "direccion": address, "email": email,
 			},
 		})
 	}
@@ -2238,16 +2238,16 @@ func (db *DB) GetPendingAuditTrailTerceros() []PendingRecord {
 
 // ==================== CLASIFICACION CUENTAS (Z279CP) ====================
 
-func (db *DB) UpsertClasificacionCuenta(codigoCuenta, codigoGrupo, codigoDetalle, descripcion, hash string) string {
+func (db *DB) UpsertClasificacionCuenta(accountCode, groupCode, detailCode, description, hash string) string {
 	var existingHash string
-	err := db.conn.QueryRow(`SELECT hash FROM clasificacion_cuentas WHERE codigo_cuenta=?`, codigoCuenta).Scan(&existingHash)
+	err := db.conn.QueryRow(`SELECT hash FROM clasificacion_cuentas WHERE codigo_cuenta=?`, accountCode).Scan(&existingHash)
 	now := time.Now().Format(time.RFC3339)
 
 	if err == sql.ErrNoRows {
 		db.conn.Exec(
 			`INSERT INTO clasificacion_cuentas (codigo_cuenta, codigo_grupo, codigo_detalle, descripcion, hash, sync_status, sync_action, updated_at)
 			 VALUES (?, ?, ?, ?, ?, 'pending', 'add', ?)`,
-			codigoCuenta, codigoGrupo, codigoDetalle, descripcion, hash, now,
+			accountCode, groupCode, detailCode, description, hash, now,
 		)
 		return "add"
 	}
@@ -2256,7 +2256,7 @@ func (db *DB) UpsertClasificacionCuenta(codigoCuenta, codigoGrupo, codigoDetalle
 		db.conn.Exec(
 			`UPDATE clasificacion_cuentas SET codigo_grupo=?, codigo_detalle=?, descripcion=?, hash=?, sync_status='pending', sync_action='edit', updated_at=?
 			 WHERE codigo_cuenta=?`,
-			codigoGrupo, codigoDetalle, descripcion, hash, now, codigoCuenta,
+			groupCode, detailCode, description, hash, now, accountCode,
 		)
 		return "edit"
 	}
@@ -2269,7 +2269,7 @@ func (db *DB) MarkDeletedClasificacionCuentas(currentKeys map[string]bool) int {
 
 // ==================== MOVIMIENTOS INVENTARIO ====================
 
-func (db *DB) UpsertMovimientoInventario(key, empresa, grupo, codigoProducto, tipoComprobante, codigoComp, secuencia, tipoDoc, fecha, cantidad, valor, tipoMov, hash string) string {
+func (db *DB) UpsertMovimientoInventario(key, company, group, productCode, voucherType, voucherCode, sequence, docType, date, quantity, amount, movType, hash string) string {
 	var existingHash string
 	err := db.conn.QueryRow(`SELECT hash FROM movimientos_inventario WHERE record_key=?`, key).Scan(&existingHash)
 	now := time.Now().Format(time.RFC3339)
@@ -2278,7 +2278,7 @@ func (db *DB) UpsertMovimientoInventario(key, empresa, grupo, codigoProducto, ti
 		db.conn.Exec(
 			`INSERT INTO movimientos_inventario (record_key, empresa, grupo, codigo_producto, tipo_comprobante, codigo_comp, secuencia, tipo_doc, fecha, cantidad, valor, tipo_mov, hash, sync_status, sync_action, updated_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'add', ?)`,
-			key, empresa, grupo, codigoProducto, tipoComprobante, codigoComp, secuencia, tipoDoc, fecha, cantidad, valor, tipoMov, hash, now,
+			key, company, group, productCode, voucherType, voucherCode, sequence, docType, date, quantity, amount, movType, hash, now,
 		)
 		return "add"
 	}
@@ -2287,7 +2287,7 @@ func (db *DB) UpsertMovimientoInventario(key, empresa, grupo, codigoProducto, ti
 		db.conn.Exec(
 			`UPDATE movimientos_inventario SET empresa=?, grupo=?, codigo_producto=?, tipo_comprobante=?, codigo_comp=?, secuencia=?, tipo_doc=?, fecha=?, cantidad=?, valor=?, tipo_mov=?, hash=?, sync_status='pending', sync_action='edit', updated_at=?
 			 WHERE record_key=?`,
-			empresa, grupo, codigoProducto, tipoComprobante, codigoComp, secuencia, tipoDoc, fecha, cantidad, valor, tipoMov, hash, now, key,
+			company, group, productCode, voucherType, voucherCode, sequence, docType, date, quantity, amount, movType, hash, now, key,
 		)
 		return "edit"
 	}
@@ -2300,7 +2300,7 @@ func (db *DB) MarkDeletedMovimientosInventario(currentKeys map[string]bool) int 
 
 // ==================== SALDOS INVENTARIO ====================
 
-func (db *DB) UpsertSaldoInventario(key, empresa, grupo, codigoProducto, hash string, saldoInicial, entradas, salidas, saldoFinal float64) string {
+func (db *DB) UpsertSaldoInventario(key, company, group, productCode, hash string, initBalance, entries, withdrawals, finalBalance float64) string {
 	var existingHash string
 	err := db.conn.QueryRow(`SELECT hash FROM saldos_inventario WHERE record_key=?`, key).Scan(&existingHash)
 	now := time.Now().Format(time.RFC3339)
@@ -2309,7 +2309,7 @@ func (db *DB) UpsertSaldoInventario(key, empresa, grupo, codigoProducto, hash st
 		db.conn.Exec(
 			`INSERT INTO saldos_inventario (record_key, empresa, grupo, codigo_producto, saldo_inicial, entradas, salidas, saldo_final, hash, sync_status, sync_action, updated_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'add', ?)`,
-			key, empresa, grupo, codigoProducto, saldoInicial, entradas, salidas, saldoFinal, hash, now,
+			key, company, group, productCode, initBalance, entries, withdrawals, finalBalance, hash, now,
 		)
 		return "add"
 	}
@@ -2318,7 +2318,7 @@ func (db *DB) UpsertSaldoInventario(key, empresa, grupo, codigoProducto, hash st
 		db.conn.Exec(
 			`UPDATE saldos_inventario SET empresa=?, grupo=?, codigo_producto=?, saldo_inicial=?, entradas=?, salidas=?, saldo_final=?, hash=?, sync_status='pending', sync_action='edit', updated_at=?
 			 WHERE record_key=?`,
-			empresa, grupo, codigoProducto, saldoInicial, entradas, salidas, saldoFinal, hash, now, key,
+			company, group, productCode, initBalance, entries, withdrawals, finalBalance, hash, now, key,
 		)
 		return "edit"
 	}
@@ -2376,16 +2376,16 @@ func (db *DB) GetPendingMovimientosInventario() []PendingRecord {
 	var records []PendingRecord
 	for rows.Next() {
 		var id int64
-		var key, empresa, grupo, codigo, tipoComp, codComp, seq, tipoDoc, fecha, cant, valor, tipoMov, action string
-		if err := rows.Scan(&id, &key, &empresa, &grupo, &codigo, &tipoComp, &codComp, &seq, &tipoDoc, &fecha, &cant, &valor, &tipoMov, &action); err != nil {
+		var key, company, group, code, voucherType, voucherCode, seq, docType, date, qty, amount, movType, action string
+		if err := rows.Scan(&id, &key, &company, &group, &code, &voucherType, &voucherCode, &seq, &docType, &date, &qty, &amount, &movType, &action); err != nil {
 			continue
 		}
 		records = append(records, PendingRecord{
 			ID: id, Key: key, SyncAction: action,
 			Data: map[string]interface{}{
-				"record_key": key, "empresa": empresa, "grupo": grupo, "codigo_producto": codigo,
-				"tipo_comprobante": tipoComp, "codigo_comp": codComp, "secuencia": seq,
-				"tipo_doc": tipoDoc, "fecha": fecha, "cantidad": cant, "valor": valor, "tipo_mov": tipoMov,
+				"record_key": key, "empresa": company, "grupo": group, "codigo_producto": code,
+				"tipo_comprobante": voucherType, "codigo_comp": voucherCode, "secuencia": seq,
+				"tipo_doc": docType, "fecha": date, "cantidad": qty, "valor": amount, "tipo_mov": movType,
 			},
 		})
 	}
@@ -2439,16 +2439,16 @@ func (db *DB) GetPendingSaldosInventario() []PendingRecord {
 	var records []PendingRecord
 	for rows.Next() {
 		var id int64
-		var key, empresa, grupo, codigo, action string
-		var saldoIni, entradas, salidas, saldoFin float64
-		if err := rows.Scan(&id, &key, &empresa, &grupo, &codigo, &saldoIni, &entradas, &salidas, &saldoFin, &action); err != nil {
+		var key, company, group, code, action string
+		var initBal, entries, withdrawals, finalBal float64
+		if err := rows.Scan(&id, &key, &company, &group, &code, &initBal, &entries, &withdrawals, &finalBal, &action); err != nil {
 			continue
 		}
 		records = append(records, PendingRecord{
 			ID: id, Key: key, SyncAction: action,
 			Data: map[string]interface{}{
-				"record_key": key, "empresa": empresa, "grupo": grupo, "codigo_producto": codigo,
-				"saldo_inicial": saldoIni, "entradas": entradas, "salidas": salidas, "saldo_final": saldoFin,
+				"record_key": key, "empresa": company, "grupo": group, "codigo_producto": code,
+				"saldo_inicial": initBal, "entradas": entries, "salidas": withdrawals, "saldo_final": finalBal,
 			},
 		})
 	}
@@ -2457,7 +2457,7 @@ func (db *DB) GetPendingSaldosInventario() []PendingRecord {
 
 // ==================== HISTORIAL (Z18YYYY) ====================
 
-func (db *DB) UpsertHistorial(key, tipoRegistro, subTipo, empresa, fecha, nombreOrigen, nombreDestin, nitOrigen, hash string) string {
+func (db *DB) UpsertHistorial(key, recordType, subType, company, date, originName, destName, originNit, hash string) string {
 	var existingHash string
 	err := db.conn.QueryRow(`SELECT hash FROM historial WHERE record_key=?`, key).Scan(&existingHash)
 	now := time.Now().Format(time.RFC3339)
@@ -2466,7 +2466,7 @@ func (db *DB) UpsertHistorial(key, tipoRegistro, subTipo, empresa, fecha, nombre
 		db.conn.Exec(
 			`INSERT INTO historial (record_key, tipo_registro, sub_tipo, empresa, fecha, nombre_origen, nombre_destin, nit_origen, hash, sync_status, sync_action, updated_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'add', ?)`,
-			key, tipoRegistro, subTipo, empresa, fecha, nombreOrigen, nombreDestin, nitOrigen, hash, now,
+			key, recordType, subType, company, date, originName, destName, originNit, hash, now,
 		)
 		return "add"
 	}
@@ -2475,7 +2475,7 @@ func (db *DB) UpsertHistorial(key, tipoRegistro, subTipo, empresa, fecha, nombre
 		db.conn.Exec(
 			`UPDATE historial SET tipo_registro=?, sub_tipo=?, empresa=?, fecha=?, nombre_origen=?, nombre_destin=?, nit_origen=?, hash=?, sync_status='pending', sync_action='edit', updated_at=?
 			 WHERE record_key=?`,
-			tipoRegistro, subTipo, empresa, fecha, nombreOrigen, nombreDestin, nitOrigen, hash, now, key,
+			recordType, subType, company, date, originName, destName, originNit, hash, now, key,
 		)
 		return "edit"
 	}
@@ -2488,7 +2488,7 @@ func (db *DB) MarkDeletedHistorial(currentKeys map[string]bool) int {
 
 // ==================== MAESTROS (Z06) ====================
 
-func (db *DB) UpsertMaestro(key, tipo, codigo, nombre, responsable, direccion, email, hash string) string {
+func (db *DB) UpsertMaestro(key, recType, code, name, responsible, address, email, hash string) string {
 	var existingHash string
 	err := db.conn.QueryRow(`SELECT hash FROM maestros WHERE record_key=?`, key).Scan(&existingHash)
 	now := time.Now().Format(time.RFC3339)
@@ -2497,7 +2497,7 @@ func (db *DB) UpsertMaestro(key, tipo, codigo, nombre, responsable, direccion, e
 		db.conn.Exec(
 			`INSERT INTO maestros (record_key, tipo, codigo, nombre, responsable, direccion, email, hash, sync_status, sync_action, updated_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'add', ?)`,
-			key, tipo, codigo, nombre, responsable, direccion, email, hash, now,
+			key, recType, code, name, responsible, address, email, hash, now,
 		)
 		return "add"
 	}
@@ -2506,7 +2506,7 @@ func (db *DB) UpsertMaestro(key, tipo, codigo, nombre, responsable, direccion, e
 		db.conn.Exec(
 			`UPDATE maestros SET tipo=?, codigo=?, nombre=?, responsable=?, direccion=?, email=?, hash=?, sync_status='pending', sync_action='edit', updated_at=?
 			 WHERE record_key=?`,
-			tipo, codigo, nombre, responsable, direccion, email, hash, now, key,
+			recType, code, name, responsible, address, email, hash, now, key,
 		)
 		return "edit"
 	}
@@ -2744,7 +2744,7 @@ func (db *DB) ExportSyncHistoryCSV(table string) ([]byte, error) {
 	defer rows.Close()
 
 	var buf strings.Builder
-	buf.WriteString("tabla,key,accion,data,estado,error,fecha\n")
+	buf.WriteString("table,key,action,data,status,error,date\n")
 	for rows.Next() {
 		var tbl, key, action, data, status, errMsg, created string
 		if err := rows.Scan(&tbl, &key, &action, &data, &status, &errMsg, &created); err != nil {
@@ -2764,7 +2764,7 @@ func (db *DB) ExportLogsCSV() ([]byte, error) {
 	defer rows.Close()
 
 	var buf strings.Builder
-	buf.WriteString("nivel,fuente,mensaje,fecha\n")
+	buf.WriteString("level,source,message,date\n")
 	for rows.Next() {
 		var level, source, msg, created string
 		if err := rows.Scan(&level, &source, &msg, &created); err != nil {
@@ -3597,6 +3597,7 @@ func (db *DB) ClearAll() error {
 		"periodos_contables", "condiciones_pago", "libros_auxiliares",
 		"codigos_dane", "actividades_ica", "conceptos_pila",
 		"activos_fijos_detalle", "audit_trail_terceros", "clasificacion_cuentas",
+		"movimientos_inventario", "saldos_inventario", "historial", "maestros",
 		"sync_history",
 	}
 	for _, t := range tables {
@@ -3739,11 +3740,11 @@ func stripLimitOffset(query string) string {
 func (db *DB) UpdateRecord(table string, id int64, fields map[string]interface{}) error {
 	allowed := map[string]bool{"clients": true, "products": true, "movements": true, "cartera": true}
 	if !allowed[table] {
-		return fmt.Errorf("tabla no valida: %s", table)
+		return fmt.Errorf("invalid table: %s", table)
 	}
 
 	if len(fields) == 0 {
-		return fmt.Errorf("no hay campos para actualizar")
+		return fmt.Errorf("no fields to update")
 	}
 
 	setClauses := []string{}
@@ -3765,7 +3766,7 @@ func (db *DB) UpdateRecord(table string, id int64, fields map[string]interface{}
 func (db *DB) DeleteRecord(table string, id int64) error {
 	allowed := map[string]bool{"clients": true, "products": true, "movements": true, "cartera": true}
 	if !allowed[table] {
-		return fmt.Errorf("tabla no valida: %s", table)
+		return fmt.Errorf("invalid table: %s", table)
 	}
 	_, err := db.conn.Exec(fmt.Sprintf("DELETE FROM %s WHERE id = ?", table), id)
 	return err
@@ -3775,7 +3776,7 @@ func (db *DB) DeleteRecord(table string, id int64) error {
 func (db *DB) GetRecordByID(table string, id int64) (map[string]interface{}, error) {
 	allowed := map[string]bool{"clients": true, "products": true, "movements": true, "cartera": true}
 	if !allowed[table] {
-		return nil, fmt.Errorf("tabla no valida: %s", table)
+		return nil, fmt.Errorf("invalid table: %s", table)
 	}
 	rows, err := db.conn.Query(fmt.Sprintf("SELECT * FROM %s WHERE id = ?", table), id)
 	if err != nil {
@@ -3784,7 +3785,7 @@ func (db *DB) GetRecordByID(table string, id int64) (map[string]interface{}, err
 	defer rows.Close()
 	cols, _ := rows.Columns()
 	if !rows.Next() {
-		return nil, fmt.Errorf("registro no encontrado")
+		return nil, fmt.Errorf("record not found")
 	}
 	values := make([]interface{}, len(cols))
 	ptrs := make([]interface{}, len(cols))

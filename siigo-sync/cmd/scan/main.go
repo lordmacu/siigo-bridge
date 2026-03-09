@@ -38,7 +38,7 @@ func main() {
 	}
 	sort.Strings(files)
 
-	fmt.Printf("%-20s %8s %8s %6s %s\n", "ARCHIVO", "REC_SIZE", "RECORDS", "KEYS", "MUESTRA_CLAVE")
+	fmt.Printf("%-20s %8s %8s %6s %s\n", "FILE", "REC_SIZE", "RECORDS", "KEYS", "KEY_SAMPLE")
 	fmt.Println(strings.Repeat("-", 90))
 
 	for _, name := range files {

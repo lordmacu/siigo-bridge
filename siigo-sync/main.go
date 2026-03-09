@@ -151,11 +151,11 @@ func sendChanges(cfg *config.Config, file string, result *gosync.DetectResult, c
 	case file == "Z49":
 		return sendMovimientosChanges(cfg, result, client)
 	case len(file) >= 3 && file[:3] == "Z09":
-		anio := ""
+		year := ""
 		if len(file) > 3 {
-			anio = file[3:]
+			year = file[3:]
 		}
-		return sendCarteraChanges(cfg, anio, result, client)
+		return sendCarteraChanges(cfg, year, result, client)
 	}
 	return nil
 }
@@ -176,14 +176,14 @@ func sendTercerosChanges(cfg *config.Config, result *gosync.DetectResult, client
 
 	sent := 0
 	for _, t := range clientes {
-		key := t.TipoClave + "-" + t.Empresa + "-" + t.Codigo
+		key := t.KeyType + "-" + t.Company + "-" + t.Code
 		if !changedKeys[key] {
 			continue
 		}
 		data := t.ToFinearomClient()
-		nit := t.NumeroDoc
+		nit := t.DocNumber
 		if err := client.Sync("clients", "add", nit, data); err != nil {
-			log.Printf("[Z17] Error syncing client %s (%s): %v", t.Nombre, t.NumeroDoc, err)
+			log.Printf("[Z17] Error syncing client %s (%s): %v", t.Name, t.DocNumber, err)
 			continue
 		}
 		sent++
@@ -207,7 +207,7 @@ func sendProductosChanges(cfg *config.Config, result *gosync.DetectResult, clien
 
 	sent := 0
 	for _, p := range productos {
-		key := p.Codigo
+		key := p.Code
 		if key == "" {
 			key = p.Hash
 		}
@@ -216,7 +216,7 @@ func sendProductosChanges(cfg *config.Config, result *gosync.DetectResult, clien
 		}
 		data := p.ToFinearomProduct()
 		if err := client.Sync("products", "add", key, data); err != nil {
-			log.Printf("[Z04] Error syncing product %s: %v", p.Nombre, err)
+			log.Printf("[Z04] Error syncing product %s: %v", p.Name, err)
 			continue
 		}
 		sent++
@@ -240,7 +240,7 @@ func sendMovimientosChanges(cfg *config.Config, result *gosync.DetectResult, cli
 
 	sent := 0
 	for _, m := range movimientos {
-		key := m.TipoComprobante + "-" + m.NumeroDoc + "-" + m.NombreTercero
+		key := m.VoucherType + "-" + m.DocNumber + "-" + m.ThirdPartyName
 		if key == "--" {
 			key = m.Hash
 		}
@@ -248,20 +248,20 @@ func sendMovimientosChanges(cfg *config.Config, result *gosync.DetectResult, cli
 			continue
 		}
 
-		desc := m.Descripcion
-		if m.Descripcion2 != "" {
-			desc = desc + " " + m.Descripcion2
+		desc := m.Description
+		if m.Description2 != "" {
+			desc = desc + " " + m.Description2
 		}
 		data := map[string]interface{}{
-			"tipo_comprobante": m.TipoComprobante,
-			"numero_doc":      m.NumeroDoc,
-			"nombre_tercero":  m.NombreTercero,
+			"tipo_comprobante": m.VoucherType,
+			"numero_doc":      m.DocNumber,
+			"nombre_tercero":  m.ThirdPartyName,
 			"descripcion":     desc,
 			"siigo_sync_hash": m.Hash,
 		}
-		movKey := m.TipoComprobante + "-" + m.NumeroDoc
+		movKey := m.VoucherType + "-" + m.DocNumber
 		if err := client.Sync("movements", "add", movKey, data); err != nil {
-			log.Printf("[Z49] Error syncing movement %s: %v", m.NumeroDoc, err)
+			log.Printf("[Z49] Error syncing movement %s: %v", m.DocNumber, err)
 			continue
 		}
 		sent++
@@ -271,8 +271,8 @@ func sendMovimientosChanges(cfg *config.Config, result *gosync.DetectResult, cli
 	return nil
 }
 
-func sendCarteraChanges(cfg *config.Config, anio string, result *gosync.DetectResult, client *api.Client) error {
-	cartera, err := parsers.ParseCartera(cfg.Siigo.DataPath, anio)
+func sendCarteraChanges(cfg *config.Config, year string, result *gosync.DetectResult, client *api.Client) error {
+	cartera, err := parsers.ParseCartera(cfg.Siigo.DataPath, year)
 	if err != nil {
 		return err
 	}
@@ -286,28 +286,28 @@ func sendCarteraChanges(cfg *config.Config, anio string, result *gosync.DetectRe
 
 	sent := 0
 	for _, c := range cartera {
-		key := c.TipoRegistro + "-" + c.Empresa + "-" + c.Secuencia
+		key := c.RecordType + "-" + c.Company + "-" + c.Sequence
 		if !changedKeys[key] {
 			continue
 		}
 		data := c.ToFinearomCartera()
-		carteraKey := c.TipoRegistro + "-" + c.Empresa + "-" + c.Secuencia
+		carteraKey := c.RecordType + "-" + c.Company + "-" + c.Sequence
 		if err := client.Sync("cartera", "add", carteraKey, data); err != nil {
-			log.Printf("[Z09%s] Error syncing cartera %s (%s): %v", anio, c.Secuencia, c.NitTercero, err)
+			log.Printf("[Z09%s] Error syncing cartera %s (%s): %v", year, c.Sequence, c.ThirdPartyNit, err)
 			continue
 		}
 		sent++
 	}
-	log.Printf("[Z09%s] Sent %d cartera entries to Finearom", anio, sent)
+	log.Printf("[Z09%s] Sent %d cartera entries to Finearom", year, sent)
 	return nil
 }
 
-// formatFechaISO converts YYYYMMDD to YYYY-MM-DD
-func formatFechaISO(fecha string) string {
-	if len(fecha) != 8 {
-		return fecha
+// formatDateISO converts YYYYMMDD to YYYY-MM-DD
+func formatDateISO(date string) string {
+	if len(date) != 8 {
+		return date
 	}
-	return fecha[:4] + "-" + fecha[4:6] + "-" + fecha[6:8]
+	return date[:4] + "-" + date[4:6] + "-" + date[6:8]
 }
 
 func init() {

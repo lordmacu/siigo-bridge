@@ -12,12 +12,12 @@ import (
 
 // ActivoFijo represents a fixed asset from Siigo Z27YYYY.
 type ActivoFijo struct {
-	Empresa          string `json:"empresa"`           // company code (5 chars)
-	Codigo           string `json:"codigo"`            // asset code (6 chars)
-	Nombre           string `json:"nombre"`            // asset name (50 chars)
-	NitResponsable   string `json:"nit_responsable"`   // NIT of responsible person (13 chars)
-	FechaAdquisicion string `json:"fecha_adquisicion"` // YYYYMMDD
-	Hash             string `json:"hash"`
+	Company         string `json:"empresa"`           // company code (5 chars)
+	Code            string `json:"codigo"`            // asset code (6 chars)
+	Name            string `json:"nombre"`            // asset name (50 chars)
+	ResponsibleNit  string `json:"nit_responsable"`   // NIT of responsible person (13 chars)
+	AcquisitionDate string `json:"fecha_adquisicion"` // YYYYMMDD
+	Hash            string `json:"hash"`
 }
 
 // FindLatestZ27 finds the most recent Z27YYYY file.
@@ -65,16 +65,16 @@ func ParseActivosFijosFile(path, year string) ([]ActivoFijo, string, error) {
 	}
 
 	extfh := isam.ExtfhAvailable()
-	var activos []ActivoFijo
+	var assets []ActivoFijo
 	for _, rec := range records {
 		a := parseActivoRecord(rec, extfh)
-		if a.Codigo == "" || a.Nombre == "" {
+		if a.Code == "" || a.Name == "" {
 			continue
 		}
-		activos = append(activos, a)
+		assets = append(assets, a)
 	}
 
-	return activos, year, nil
+	return assets, year, nil
 }
 
 func parseActivoRecord(rec []byte, extfh bool) ActivoFijo {
@@ -91,52 +91,52 @@ func parseActivoRecord(rec []byte, extfh bool) ActivoFijo {
 // parseActivoEXTFH extracts Z27YYYY records using EXTFH offsets.
 // Z27YYYY structure (2048 bytes) verified via hex dump:
 //
-//	[0:5]     empresa (5 chars)
-//	[5:11]    codigo (6 chars)
-//	[11:61]   nombre (50 chars)
+//	[0:5]     company (5 chars)
+//	[5:11]    code (6 chars)
+//	[11:61]   name (50 chars)
 //	[61:74]   nit_responsable (13 chars)
-//	[74:84]   campo numerico
-//	[84:104]  espacios
-//	[104:118] campo numerico
-//	[118:122] espacios
-//	[122:130] fecha_adquisicion (YYYYMMDD)
+//	[74:84]   numeric field
+//	[84:104]  spaces
+//	[104:118] numeric field
+//	[118:122] spaces
+//	[122:130] acquisition date (YYYYMMDD)
 func parseActivoEXTFH(rec []byte, hash [32]byte) ActivoFijo {
-	empresa := strings.TrimSpace(isam.ExtractField(rec, 0, 5))
-	codigo := strings.TrimSpace(isam.ExtractField(rec, 5, 6))
-	nombre := strings.TrimSpace(isam.ExtractField(rec, 11, 50))
+	company := strings.TrimSpace(isam.ExtractField(rec, 0, 5))
+	code := strings.TrimSpace(isam.ExtractField(rec, 5, 6))
+	name := strings.TrimSpace(isam.ExtractField(rec, 11, 50))
 
-	if nombre == "" || codigo == "" {
+	if name == "" || code == "" {
 		return ActivoFijo{}
 	}
 
 	nit := strings.TrimSpace(isam.ExtractField(rec, 61, 13))
 	nit = strings.TrimLeft(nit, "0")
 
-	fecha := ""
+	date := ""
 	if len(rec) >= 130 {
-		fechaRaw := isam.ExtractField(rec, 122, 8)
-		if looksLikeDate(fechaRaw) {
-			fecha = fechaRaw
+		dateRaw := isam.ExtractField(rec, 122, 8)
+		if looksLikeDate(dateRaw) {
+			date = dateRaw
 		}
 	}
 
 	return ActivoFijo{
-		Empresa:          empresa,
-		Codigo:           codigo,
-		Nombre:           nombre,
-		NitResponsable:   nit,
-		FechaAdquisicion: fecha,
-		Hash:             fmt.Sprintf("%x", hash[:8]),
+		Company:         company,
+		Code:            code,
+		Name:            name,
+		ResponsibleNit:  nit,
+		AcquisitionDate: date,
+		Hash:            fmt.Sprintf("%x", hash[:8]),
 	}
 }
 
 func parseActivoHeuristic(rec []byte, hash [32]byte) ActivoFijo {
-	nombre := findDescripcion(rec, 11)
-	if nombre == "" {
+	name := findDescripcion(rec, 11)
+	if name == "" {
 		return ActivoFijo{}
 	}
 	return ActivoFijo{
-		Nombre: nombre,
-		Hash:   fmt.Sprintf("%x", hash[:8]),
+		Name: name,
+		Hash: fmt.Sprintf("%x", hash[:8]),
 	}
 }

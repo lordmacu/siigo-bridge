@@ -15,9 +15,9 @@ type fileEntry struct {
 
 func main() {
 	files := []fileEntry{
-		{`C:\DEMOS01\Z03CA`, "plan de cuentas?"},
-		{`C:\DEMOS01\Z052013`, "nomina?"},
-		{`C:\DEMOS01\Z072013`, "libros auxiliares?"},
+		{`C:\DEMOS01\Z03CA`, "chart of accounts?"},
+		{`C:\DEMOS01\Z052013`, "payroll?"},
+		{`C:\DEMOS01\Z072013`, "auxiliary ledgers?"},
 		{`C:\DEMOS01\Z082013`, "?"},
 		{`C:\DEMOS01\Z102013`, "?"},
 		{`C:\DEMOS01\Z112013`, "?"},
@@ -26,9 +26,9 @@ func main() {
 		{`C:\DEMOS01\Z162013`, "?"},
 		{`C:\DEMOS01\Z19`, "?"},
 		{`C:\DEMOS01\Z24`, "?"},
-		{`C:\DEMOS01\Z06CP`, "comprobantes"},
-		{`C:\DEMOS01\Z17B`, "terceros extended?"},
-		{`C:\DEMOS01\Z17T`, "terceros extended?"},
+		{`C:\DEMOS01\Z06CP`, "vouchers"},
+		{`C:\DEMOS01\Z17B`, "third parties extended?"},
+		{`C:\DEMOS01\Z17T`, "third parties extended?"},
 		{`C:\DEMOS01\Z51`, "?"},
 	}
 

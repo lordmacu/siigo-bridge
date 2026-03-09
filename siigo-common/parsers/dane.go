@@ -9,9 +9,9 @@ import (
 
 // CodigoDane represents a Colombian municipality from the ZDANE file.
 type CodigoDane struct {
-	Codigo string `json:"codigo"` // 5-digit DANE code
-	Nombre string `json:"nombre"` // municipality name
-	Hash   string `json:"hash"`
+	Code string `json:"codigo"` // 5-digit DANE code
+	Name string `json:"nombre"` // municipality name
+	Hash string `json:"hash"`
 }
 
 // ParseDane reads the ZDANE file and returns DANE municipality codes.
@@ -22,22 +22,22 @@ func ParseDane(dataPath string) ([]CodigoDane, error) {
 		return nil, err
 	}
 
-	var codigos []CodigoDane
+	var codes []CodigoDane
 	for _, rec := range records {
 		if len(rec) < 6 {
 			continue
 		}
 
-		codigo := strings.TrimSpace(isam.ExtractField(rec, 0, 5))
-		nombre := strings.TrimSpace(isam.ExtractField(rec, 5, 40))
+		code := strings.TrimSpace(isam.ExtractField(rec, 0, 5))
+		name := strings.TrimSpace(isam.ExtractField(rec, 5, 40))
 
-		if codigo == "" || nombre == "" {
+		if code == "" || name == "" {
 			continue
 		}
 
-		// Validate codigo is numeric
+		// Validate code is numeric
 		allDigits := true
-		for _, c := range codigo {
+		for _, c := range code {
 			if c < '0' || c > '9' {
 				allDigits = false
 				break
@@ -48,12 +48,12 @@ func ParseDane(dataPath string) ([]CodigoDane, error) {
 		}
 
 		hash := sha256.Sum256(rec)
-		codigos = append(codigos, CodigoDane{
-			Codigo: codigo,
-			Nombre: nombre,
-			Hash:   fmt.Sprintf("%x", hash[:8]),
+		codes = append(codes, CodigoDane{
+			Code: code,
+			Name: name,
+			Hash: fmt.Sprintf("%x", hash[:8]),
 		})
 	}
 
-	return codigos, nil
+	return codes, nil
 }

@@ -8,46 +8,46 @@ import (
 func main() {
 	dataPath := `C:\DEMOS01\`
 
-	// === TERCEROS ===
-	fmt.Println("=== TERCEROS (Z17) - DETALLE ===")
+	// === THIRD PARTIES ===
+	fmt.Println("=== THIRD PARTIES (Z17) - DETAIL ===")
 	all, err := parsers.ParseTerceros(dataPath)
 	if err != nil {
 		fmt.Printf("ERROR: %v\n", err)
 	}
-	fmt.Printf("Total terceros: %d\n", len(all))
+	fmt.Printf("Total third parties: %d\n", len(all))
 
 	clientes, _ := parsers.ParseTercerosClientes(dataPath)
-	fmt.Printf("Clientes (G): %d\n", len(clientes))
+	fmt.Printf("Clients (G): %d\n", len(clientes))
 
-	// Validar campos
+	// Validate fields
 	emptyNombre, emptyDoc, emptyTipo := 0, 0, 0
 	tiposClave := map[string]int{}
 	tiposDoc := map[string]int{}
 	for _, t := range all {
-		if t.Nombre == "" { emptyNombre++ }
-		if t.NumeroDoc == "" { emptyDoc++ }
-		if t.TipoClave == "" { emptyTipo++ }
-		tiposClave[t.TipoClave]++
-		tiposDoc[t.TipoDoc]++
+		if t.Name == "" { emptyNombre++ }
+		if t.DocNumber == "" { emptyDoc++ }
+		if t.KeyType == "" { emptyTipo++ }
+		tiposClave[t.KeyType]++
+		tiposDoc[t.DocType]++
 	}
-	fmt.Printf("Campos vacios: nombre=%d, documento=%d, tipo_clave=%d\n", emptyNombre, emptyDoc, emptyTipo)
-	fmt.Println("Tipos clave:", tiposClave)
-	fmt.Println("Tipos doc:", tiposDoc)
+	fmt.Printf("Empty fields: name=%d, document=%d, key_type=%d\n", emptyNombre, emptyDoc, emptyTipo)
+	fmt.Println("Key types:", tiposClave)
+	fmt.Println("Doc types:", tiposDoc)
 
-	fmt.Println("\nPrimeros 10 terceros:")
+	fmt.Println("\nFirst 10 third parties:")
 	for i, t := range all {
 		if i >= 10 { break }
-		fmt.Printf("  [%d] clave:%s emp:%s tipo_doc:%s doc:%-13s fecha:%s | %s\n",
-			i+1, t.TipoClave, t.Empresa, t.TipoDoc, t.NumeroDoc, t.FechaCreacion, t.Nombre)
-		if t.TipoCtaPref != "" {
-			fmt.Printf("       tipo_cta:%s\n", t.TipoCtaPref)
+		fmt.Printf("  [%d] key:%s comp:%s doc_type:%s doc:%-13s date:%s | %s\n",
+			i+1, t.KeyType, t.Company, t.DocType, t.DocNumber, t.CreationDate, t.Name)
+		if t.PreferredAcctType != "" {
+			fmt.Printf("       acct_type:%s\n", t.PreferredAcctType)
 		}
 	}
 	fmt.Println()
 
-	// === MOVIMIENTOS (Z49 = document headers, NOT detailed transactions) ===
-	fmt.Println("=== MOVIMIENTOS (Z49) - ENCABEZADOS DE DOCUMENTOS ===")
-	fmt.Println("NOTA: Z49 solo contiene tipo+numero+nombre+descripcion. NO tiene fechas/cuentas/valores.")
+	// === MOVEMENTS (Z49 = document headers, NOT detailed transactions) ===
+	fmt.Println("=== MOVEMENTS (Z49) - DOCUMENT HEADERS ===")
+	fmt.Println("NOTE: Z49 only contains type+number+name+description. Does NOT have dates/accounts/values.")
 	movs, err := parsers.ParseMovimientos(dataPath)
 	if err != nil {
 		fmt.Printf("ERROR: %v\n", err)
@@ -57,12 +57,12 @@ func main() {
 	emptyTipoC, emptyNumDoc, emptyDesc, emptyNombre := 0, 0, 0, 0
 	tiposComp := map[string]int{}
 	for _, m := range movs {
-		if m.TipoComprobante == "" { emptyTipoC++ }
-		if m.NumeroDoc == "" { emptyNumDoc++ }
-		if m.Descripcion == "" && m.Descripcion2 == "" { emptyDesc++ }
-		if m.NombreTercero == "" { emptyNombre++ }
-		if m.TipoComprobante != "" {
-			tiposComp[m.TipoComprobante[:min(2, len(m.TipoComprobante))]]++
+		if m.VoucherType == "" { emptyTipoC++ }
+		if m.DocNumber == "" { emptyNumDoc++ }
+		if m.Description == "" && m.Description2 == "" { emptyDesc++ }
+		if m.ThirdPartyName == "" { emptyNombre++ }
+		if m.VoucherType != "" {
+			tiposComp[m.VoucherType[:min(2, len(m.VoucherType))]]++
 		}
 	}
 	fmt.Printf("Campos vacios: tipo_comp=%d, num_doc=%d, descripcion=%d, nombre=%d\n",
@@ -70,22 +70,22 @@ func main() {
 	fmt.Println("Tipos comprobante:", tiposComp)
 
 	// Show first 10 records WITH tipo_comprobante (skip space/0-type index records)
-	fmt.Println("\nPrimeros 10 movimientos con comprobante:")
+	fmt.Println("\nFirst 10 movimientos con comprobante:")
 	shown := 0
 	for _, m := range movs {
 		if shown >= 10 { break }
-		if m.TipoComprobante == "" { continue }
+		if m.VoucherType == "" { continue }
 		shown++
-		desc := m.Descripcion
-		if m.Descripcion2 != "" {
+		desc := m.Description
+		if m.Description2 != "" {
 			if desc != "" {
-				desc += " | " + m.Descripcion2
+				desc += " | " + m.Description2
 			} else {
-				desc = m.Descripcion2
+				desc = m.Description2
 			}
 		}
 		fmt.Printf("  [%d] tipo:%-6s doc:%-11s nombre:%-25s | %s\n",
-			shown, m.TipoComprobante, m.NumeroDoc, m.NombreTercero, desc)
+			shown, m.VoucherType, m.DocNumber, m.ThirdPartyName, desc)
 	}
 	fmt.Println()
 
@@ -95,10 +95,10 @@ func main() {
 	if err != nil {
 		fmt.Printf("ERROR: %v\n", err)
 	}
-	fmt.Printf("Archivo: Z04%s, Total: %d\n", year, len(prods))
+	fmt.Printf("File: Z04%s, Total: %d\n", year, len(prods))
 	for _, p := range prods {
 		fmt.Printf("  cod:%-8s grupo:%s emp:%s | %-40s | corto:%-30s ref:%s\n",
-			p.Codigo, p.Grupo, p.Empresa, p.Nombre, p.NombreCorto, p.Referencia)
+			p.Code, p.Group, p.Company, p.Name, p.ShortName, p.Reference)
 	}
 	fmt.Println()
 
@@ -116,23 +116,23 @@ func main() {
 		ctypes := map[string]int{}
 		dmov := map[string]int{}
 		for _, c := range cart {
-			if c.TipoRegistro == "" { emptyTipoR++ }
-			if c.Empresa == "" { emptyEmp++ }
-			if c.Secuencia == "" { emptySec++ }
-			if c.NitTercero == "" { emptyNitC++ }
-			ctypes[c.TipoRegistro]++
-			if c.TipoMov != "" { dmov[c.TipoMov]++ }
+			if c.RecordType == "" { emptyTipoR++ }
+			if c.Company == "" { emptyEmp++ }
+			if c.Sequence == "" { emptySec++ }
+			if c.ThirdPartyNit == "" { emptyNitC++ }
+			ctypes[c.RecordType]++
+			if c.MovType != "" { dmov[c.MovType]++ }
 		}
 		fmt.Printf("Campos vacios: tipo_reg=%d, empresa=%d, secuencia=%d, nit=%d\n",
 			emptyTipoR, emptyEmp, emptySec, emptyNitC)
 		fmt.Println("Tipos registro:", ctypes)
 		fmt.Println("Tipos D/C:", dmov)
 
-		fmt.Println("\nPrimeros 10 registros cartera:")
+		fmt.Println("\nFirst 10 records cartera records:")
 		for i, c := range cart {
 			if i >= 10 { break }
 			fmt.Printf("  [%d] tipo:%s emp:%s sec:%-6s nit:%-13s fecha:%s mov:%s cuenta:%s | %s\n",
-				i+1, c.TipoRegistro, c.Empresa, c.Secuencia, c.NitTercero, c.Fecha, c.TipoMov, c.CuentaContable, c.Descripcion)
+				i+1, c.RecordType, c.Company, c.Sequence, c.ThirdPartyNit, c.Date, c.MovType, c.LedgerAccount, c.Description)
 		}
 		fmt.Println()
 	}
@@ -146,7 +146,7 @@ func main() {
 		fmt.Printf("Total: %d municipios\n", len(codigos))
 		for i, c := range codigos {
 			if i >= 5 { break }
-			fmt.Printf("  %s: %s\n", c.Codigo, c.Nombre)
+			fmt.Printf("  %s: %s\n", c.Code, c.Name)
 		}
 	}
 	fmt.Println()
@@ -160,7 +160,7 @@ func main() {
 		fmt.Printf("Total: %d actividades\n", len(actividades))
 		for i, a := range actividades {
 			if i >= 5 { break }
-			fmt.Printf("  %s: %-50s tarifa:%s\n", a.Codigo, a.Nombre, a.Tarifa)
+			fmt.Printf("  %s: %-50s tarifa:%s\n", a.Code, a.Name, a.Rate)
 		}
 	}
 	fmt.Println()
@@ -175,7 +175,7 @@ func main() {
 		for i, c := range conceptos {
 			if i >= 5 { break }
 			fmt.Printf("  %s %s-%s flags:%s base:%s calc:%s\n",
-				c.Tipo, c.Fondo, c.Concepto, c.Flags, c.TipoBase, c.BaseCalculo)
+				c.RecType, c.Fund, c.Concept, c.Flags, c.BaseType, c.CalcBase)
 		}
 	}
 	fmt.Println()
@@ -186,13 +186,13 @@ func main() {
 	if err != nil {
 		fmt.Printf("ERROR: %v\n", err)
 	} else {
-		fmt.Printf("Archivo: Z07%s, Total: %d\n", yearLib, len(libros))
+		fmt.Printf("File: Z07%s, Total: %d\n", yearLib, len(libros))
 		for i, l := range libros {
 			if i >= 5 { break }
 			fmt.Printf("  tipo:%s-%s cuenta:%-9s nit:%-10s fecha:%s saldo:%.2f | sec:%s-%s\n",
-				l.TipoComprobante, l.CodigoComprobante, l.CuentaContable,
-				l.NitTercero, l.FechaDocumento, l.Saldo,
-				l.TipoCompSec, l.CodigoCompSec)
+				l.VoucherType, l.VoucherCode, l.LedgerAccount,
+				l.ThirdPartyNit, l.DocDate, l.Balance,
+				l.SecVoucherType, l.SecVoucherCode)
 		}
 	}
 	fmt.Println()
@@ -207,8 +207,8 @@ func main() {
 		for i, t := range trans {
 			if i >= 5 { break }
 			fmt.Printf("  %s emp:%s nit:%-12s cta:%-9s fecha:%s mov:%s val:%.0f\n",
-				t.TipoComprobante, t.Empresa, t.NitTercero, t.CuentaContable,
-				t.FechaDocumento, t.TipoMovimiento, t.Valor)
+				t.VoucherType, t.Company, t.ThirdPartyNit, t.LedgerAccount,
+				t.DocDate, t.MovType, t.Amount)
 		}
 	}
 	fmt.Println()
@@ -219,11 +219,11 @@ func main() {
 	if err != nil {
 		fmt.Printf("ERROR: %v\n", err)
 	} else {
-		fmt.Printf("Archivo: Z26%s, Total: %d periodos\n", yearPer, len(periodos))
+		fmt.Printf("File: Z26%s, Total: %d periodos\n", yearPer, len(periodos))
 		for i, p := range periodos {
 			if i >= 5 { break }
 			fmt.Printf("  periodo:%s emp:%s inicio:%s fin:%s estado:%s\n",
-				p.NumeroPeriodo, p.Empresa, p.FechaInicio, p.FechaFin, p.Estado)
+				p.PeriodNumber, p.Company, p.StartDate, p.EndDate, p.Status)
 		}
 	}
 	fmt.Println()
@@ -234,11 +234,11 @@ func main() {
 	if err != nil {
 		fmt.Printf("ERROR: %v\n", err)
 	} else {
-		fmt.Printf("Archivo: Z05%s, Total: %d registros\n", yearCond, len(conds))
+		fmt.Printf("File: Z05%s, Total: %d records\n", yearCond, len(conds))
 		for i, c := range conds {
 			if i >= 5 { break }
 			fmt.Printf("  tipo:%s emp:%s sec:%s nit:%-12s fecha:%s sec2:%s val:%.2f\n",
-				c.Tipo, c.Empresa, c.Secuencia, c.NIT, c.Fecha, c.TipoSecundario, c.Valor)
+				c.RecType, c.Company, c.Sequence, c.NIT, c.Date, c.SecondaryType, c.Amount)
 		}
 	}
 	fmt.Println()
@@ -249,10 +249,10 @@ func main() {
 	if err != nil {
 		fmt.Printf("ERROR: %v\n", err)
 	} else {
-		fmt.Printf("Archivo: Z27%s, Total: %d activos\n", yearAct, len(activos))
+		fmt.Printf("File: Z27%s, Total: %d activos\n", yearAct, len(activos))
 		for _, a := range activos {
 			fmt.Printf("  grupo:%s seq:%s nit:%-13s fecha:%s val:%.2f | %s\n",
-				a.Grupo, a.Secuencia, a.NitResponsable, a.Fecha, a.ValorCompra, a.Nombre)
+				a.Group, a.Sequence, a.ResponsibleNit, a.Date, a.PurchaseValue, a.Name)
 		}
 	}
 	fmt.Println()
@@ -263,11 +263,11 @@ func main() {
 	if err != nil {
 		fmt.Printf("ERROR: %v\n", err)
 	} else {
-		fmt.Printf("Archivo: Z11N%s, Total: %d registros\n", yearAudit, len(audit))
+		fmt.Printf("File: Z11N%s, Total: %d records\n", yearAudit, len(audit))
 		for i, a := range audit {
 			if i >= 10 { break }
 			fmt.Printf("  fecha:%s nit:%-12s tipo:%s usuario:%s | %s\n",
-				a.FechaCambio, a.NitTercero, a.TipoDoc, a.Usuario, a.Nombre)
+				a.ChangeDate, a.ThirdPartyNit, a.DocType, a.User, a.Name)
 		}
 	}
 	fmt.Println()
@@ -278,11 +278,11 @@ func main() {
 	if err != nil {
 		fmt.Printf("ERROR: %v\n", err)
 	} else {
-		fmt.Printf("Archivo: Z279CP%s, Total: %d clasificaciones\n", yearClasif, len(clasif))
+		fmt.Printf("File: Z279CP%s, Total: %d clasificaciones\n", yearClasif, len(clasif))
 		for i, c := range clasif {
 			if i >= 10 { break }
 			fmt.Printf("  cuenta:%s grupo:%s detalle:%s | %s\n",
-				c.CodigoCuenta, c.CodigoGrupo, c.CodigoDetalle, c.Descripcion)
+				c.AccountCode, c.GroupCode, c.DetailCode, c.Description)
 		}
 	}
 	fmt.Println()

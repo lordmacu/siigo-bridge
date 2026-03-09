@@ -65,11 +65,11 @@ func DetectChanges(dataPath string, filename string, state *SyncState) (*DetectR
 	case filename == "Z49":
 		return detectMovimientosChanges(dataPath, fileState, modTime)
 	case len(filename) >= 3 && filename[:3] == "Z09":
-		anio := ""
+		year := ""
 		if len(filename) > 3 {
-			anio = filename[3:]
+			year = filename[3:]
 		}
-		return detectCarteraChanges(dataPath, anio, fileState, modTime)
+		return detectCarteraChanges(dataPath, year, fileState, modTime)
 	default:
 		return nil, fmt.Errorf("unknown file type: %s", filename)
 	}
@@ -90,7 +90,7 @@ func detectTercerosChanges(dataPath string, fileState *FileState, modTime int64)
 	// Build current hash map
 	currentHashes := make(map[string]string)
 	for _, t := range terceros {
-		key := t.TipoClave + "-" + t.Empresa + "-" + t.Codigo
+		key := t.KeyType + "-" + t.Company + "-" + t.Code
 		currentHashes[key] = t.Hash
 	}
 
@@ -116,7 +116,7 @@ func detectProductosChanges(dataPath string, fileState *FileState, modTime int64
 
 	currentHashes := make(map[string]string)
 	for _, p := range productos {
-		key := p.Codigo
+		key := p.Code
 		if key == "" {
 			key = p.Hash
 		}
@@ -144,7 +144,7 @@ func detectMovimientosChanges(dataPath string, fileState *FileState, modTime int
 
 	currentHashes := make(map[string]string)
 	for _, m := range movimientos {
-		key := m.TipoComprobante + "-" + m.NumeroDoc + "-" + m.NombreTercero
+		key := m.VoucherType + "-" + m.DocNumber + "-" + m.ThirdPartyName
 		if key == "--" {
 			key = m.Hash
 		}
@@ -158,13 +158,13 @@ func detectMovimientosChanges(dataPath string, fileState *FileState, modTime int
 	return result, nil
 }
 
-func detectCarteraChanges(dataPath string, anio string, fileState *FileState, modTime int64) (*DetectResult, error) {
-	cartera, err := parsers.ParseCartera(dataPath, anio)
+func detectCarteraChanges(dataPath string, year string, fileState *FileState, modTime int64) (*DetectResult, error) {
+	cartera, err := parsers.ParseCartera(dataPath, year)
 	if err != nil {
 		return nil, err
 	}
 
-	filename := "Z09" + anio
+	filename := "Z09" + year
 	result := &DetectResult{
 		FileName:    filename,
 		NewHashes:   make(map[string]string),
@@ -173,7 +173,7 @@ func detectCarteraChanges(dataPath string, anio string, fileState *FileState, mo
 
 	currentHashes := make(map[string]string)
 	for _, c := range cartera {
-		key := c.TipoRegistro + "-" + c.Empresa + "-" + c.Secuencia
+		key := c.RecordType + "-" + c.Company + "-" + c.Sequence
 		currentHashes[key] = c.Hash
 	}
 

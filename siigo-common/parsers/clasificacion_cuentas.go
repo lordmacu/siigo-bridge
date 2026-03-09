@@ -13,11 +13,11 @@ import (
 // ClasificacionCuenta represents an account classification/reporting category from Z279CPYY.
 // Z279CPYY files map account codes to descriptions for reporting purposes.
 type ClasificacionCuenta struct {
-	CodigoCuenta  string `json:"codigo_cuenta"`  // primary account code (4 chars)
-	CodigoGrupo   string `json:"codigo_grupo"`   // secondary group code (4 chars)
-	CodigoDetalle string `json:"codigo_detalle"` // tertiary detail code (4 chars)
-	Descripcion   string `json:"descripcion"`    // description text (up to 114 chars)
-	Hash          string `json:"hash"`
+	AccountCode string `json:"codigo_cuenta"`  // primary account code (4 chars)
+	GroupCode   string `json:"codigo_grupo"`   // secondary group code (4 chars)
+	DetailCode  string `json:"codigo_detalle"` // tertiary detail code (4 chars)
+	Description string `json:"descripcion"`    // description text (up to 114 chars)
+	Hash        string `json:"hash"`
 }
 
 // FindLatestZ279CP finds the most recent Z279CPYY file in the data directory.
@@ -60,16 +60,16 @@ func ParseClasificacionCuentasFile(path, year string) ([]ClasificacionCuenta, st
 	}
 
 	extfh := isam.ExtfhAvailable()
-	var cuentas []ClasificacionCuenta
+	var accounts []ClasificacionCuenta
 	for _, rec := range records {
 		c := parseClasificacionRecord(rec, extfh)
-		if c.CodigoCuenta == "" || c.Descripcion == "" {
+		if c.AccountCode == "" || c.Description == "" {
 			continue
 		}
-		cuentas = append(cuentas, c)
+		accounts = append(accounts, c)
 	}
 
-	return cuentas, year, nil
+	return accounts, year, nil
 }
 
 func parseClasificacionRecord(rec []byte, extfh bool) ClasificacionCuenta {
@@ -88,27 +88,27 @@ func parseClasificacionRecord(rec []byte, extfh bool) ClasificacionCuenta {
 // parseClasificacionEXTFH extracts Z279CPYY records using EXTFH offsets.
 // Z279CPYY structure (128 bytes) verified via sample data:
 //
-//	[0:4]     codigo_cuenta (4 chars, primary account code e.g. "1110")
+//	[0:4]     account code (4 chars, primary account code e.g. "1110")
 //	[4:6]     unknown code (2 chars, skipped)
-//	[6:10]    codigo_grupo (4 chars, secondary group code e.g. "1211")
-//	[10:14]   codigo_detalle (4 chars, tertiary detail code e.g. "1006")
-//	[14:128]  descripcion (114 chars, space-padded)
+//	[6:10]    group code (4 chars, secondary group code e.g. "1211")
+//	[10:14]   detail code (4 chars, tertiary detail code e.g. "1006")
+//	[14:128]  description (114 chars, space-padded)
 func parseClasificacionEXTFH(rec []byte, hash [32]byte) ClasificacionCuenta {
-	codigoCuenta := strings.TrimSpace(isam.ExtractField(rec, 0, 4))
-	codigoGrupo := strings.TrimSpace(isam.ExtractField(rec, 6, 4))
-	codigoDetalle := strings.TrimSpace(isam.ExtractField(rec, 10, 4))
-	descripcion := strings.TrimSpace(isam.ExtractField(rec, 14, 114))
+	accountCode := strings.TrimSpace(isam.ExtractField(rec, 0, 4))
+	groupCode := strings.TrimSpace(isam.ExtractField(rec, 6, 4))
+	detailCode := strings.TrimSpace(isam.ExtractField(rec, 10, 4))
+	description := strings.TrimSpace(isam.ExtractField(rec, 14, 114))
 
-	if codigoCuenta == "" || descripcion == "" {
+	if accountCode == "" || description == "" {
 		return ClasificacionCuenta{}
 	}
 
 	return ClasificacionCuenta{
-		CodigoCuenta:  codigoCuenta,
-		CodigoGrupo:   codigoGrupo,
-		CodigoDetalle: codigoDetalle,
-		Descripcion:   descripcion,
-		Hash:          fmt.Sprintf("%x", hash[:8]),
+		AccountCode: accountCode,
+		GroupCode:   groupCode,
+		DetailCode:  detailCode,
+		Description: description,
+		Hash:        fmt.Sprintf("%x", hash[:8]),
 	}
 }
 
@@ -120,20 +120,20 @@ func parseClasificacionBinary(rec []byte, hash [32]byte) ClasificacionCuenta {
 		return ClasificacionCuenta{}
 	}
 
-	codigoCuenta := strings.TrimSpace(isam.ExtractField(rec, off+0, 4))
-	codigoGrupo := strings.TrimSpace(isam.ExtractField(rec, off+6, 4))
-	codigoDetalle := strings.TrimSpace(isam.ExtractField(rec, off+10, 4))
-	descripcion := strings.TrimSpace(isam.ExtractField(rec, off+14, 114))
+	accountCode := strings.TrimSpace(isam.ExtractField(rec, off+0, 4))
+	groupCode := strings.TrimSpace(isam.ExtractField(rec, off+6, 4))
+	detailCode := strings.TrimSpace(isam.ExtractField(rec, off+10, 4))
+	description := strings.TrimSpace(isam.ExtractField(rec, off+14, 114))
 
-	if codigoCuenta == "" || descripcion == "" {
+	if accountCode == "" || description == "" {
 		return ClasificacionCuenta{}
 	}
 
 	return ClasificacionCuenta{
-		CodigoCuenta:  codigoCuenta,
-		CodigoGrupo:   codigoGrupo,
-		CodigoDetalle: codigoDetalle,
-		Descripcion:   descripcion,
-		Hash:          fmt.Sprintf("%x", hash[:8]),
+		AccountCode: accountCode,
+		GroupCode:   groupCode,
+		DetailCode:  detailCode,
+		Description: description,
+		Hash:        fmt.Sprintf("%x", hash[:8]),
 	}
 }

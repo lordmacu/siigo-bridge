@@ -67,7 +67,7 @@ func (b *Bot) sendSync(msg string) {
 		"parse_mode": {"HTML"},
 	})
 	if err != nil {
-		log.Printf("[Telegram] Error enviando: %v", err)
+		log.Printf("[Telegram] Error sending message: %v", err)
 		return
 	}
 	resp.Body.Close()
@@ -89,13 +89,13 @@ func (b *Bot) StopPolling() {
 }
 
 func (b *Bot) pollLoop() {
-	log.Println("[Telegram] Polling iniciado")
+	log.Println("[Telegram] Polling started")
 	client := &http.Client{Timeout: 35 * time.Second}
 
 	for {
 		select {
 		case <-b.stopCh:
-			log.Println("[Telegram] Polling detenido")
+			log.Println("[Telegram] Polling stopped")
 			return
 		default:
 		}
@@ -125,7 +125,7 @@ func (b *Bot) pollLoop() {
 			} else if cmd == "/help" || cmd == "/start" {
 				b.sendSync(b.helpMessage())
 			} else {
-				b.sendSync("Comando no reconocido. Usa /help para ver los disponibles.")
+				b.sendSync("Unrecognized command. Use /help to see available commands.")
 			}
 		}
 	}
@@ -178,7 +178,7 @@ func (b *Bot) NotifyServerStarted(localURL string) {
 	if !b.cfg.IsNotifyEnabled("server_start") {
 		return
 	}
-	b.Send(fmt.Sprintf("🟢 <b>Servidor iniciado</b>\n\n🖥 %s", localURL))
+	b.Send(fmt.Sprintf("🟢 <b>Server started</b>\n\n🖥 %s", localURL))
 }
 
 func (b *Bot) NotifySyncCycleComplete(adds, edits, errors, pending int) {
@@ -188,7 +188,7 @@ func (b *Bot) NotifySyncCycleComplete(adds, edits, errors, pending int) {
 	if !b.cfg.IsNotifyEnabled("sync_complete") {
 		return
 	}
-	b.Send(fmt.Sprintf("🔄 <b>Sync completado</b>\n\n✅ Nuevos: %d\n📝 Editados: %d\n❌ Errores: %d\n⏳ Pendientes: %d", adds, edits, errors, pending))
+	b.Send(fmt.Sprintf("🔄 <b>Sync completed</b>\n\n✅ Added: %d\n📝 Edited: %d\n❌ Errors: %d\n⏳ Pending: %d", adds, edits, errors, pending))
 }
 
 func (b *Bot) NotifySyncErrors(table string, count int, lastError string) {
@@ -198,14 +198,14 @@ func (b *Bot) NotifySyncErrors(table string, count int, lastError string) {
 	if !b.cfg.IsNotifyEnabled("sync_errors") {
 		return
 	}
-	b.Send(fmt.Sprintf("⚠️ <b>Errores en %s</b>\n\n%d registros fallaron\nUltimo error: <code>%s</code>", table, count, truncate(lastError, 200)))
+	b.Send(fmt.Sprintf("⚠️ <b>Errors in %s</b>\n\n%d records failed\nLast error: <code>%s</code>", table, count, truncate(lastError, 200)))
 }
 
 func (b *Bot) NotifyLoginFailed(apiURL string, err string) {
 	if !b.cfg.IsNotifyEnabled("login_failed") {
 		return
 	}
-	b.Send(fmt.Sprintf("🔴 <b>Login fallido</b>\n\n🌐 %s\n❌ %s", apiURL, truncate(err, 200)))
+	b.Send(fmt.Sprintf("🔴 <b>Login failed</b>\n\n🌐 %s\n❌ %s", apiURL, truncate(err, 200)))
 }
 
 func (b *Bot) NotifyMaxRetriesExhausted(table string, count int) {
@@ -215,14 +215,14 @@ func (b *Bot) NotifyMaxRetriesExhausted(table string, count int) {
 	if !b.cfg.IsNotifyEnabled("max_retries") {
 		return
 	}
-	b.Send(fmt.Sprintf("🚨 <b>Reintentos agotados</b>\n\n📋 %s: %d registros alcanzaron el maximo de reintentos", table, count))
+	b.Send(fmt.Sprintf("🚨 <b>Max retries exhausted</b>\n\n📋 %s: %d records reached max retry limit", table, count))
 }
 
 func (b *Bot) NotifyDBCleared() {
 	if !b.cfg.IsNotifyEnabled("db_cleared") {
 		return
 	}
-	b.Send("🗑 <b>Base de datos vaciada</b>\n\nUn usuario vacio todas las tablas de SQLite.")
+	b.Send("🗑 <b>Database cleared</b>\n\nA user cleared all SQLite tables.")
 }
 
 func (b *Bot) NotifyChangesDetected(table string, adds, edits, deletes int) {
@@ -232,7 +232,7 @@ func (b *Bot) NotifyChangesDetected(table string, adds, edits, deletes int) {
 	if !b.cfg.IsNotifyEnabled("changes") {
 		return
 	}
-	b.Send(fmt.Sprintf("📊 <b>Cambios en %s</b>\n\n➕ %d nuevos\n📝 %d editados\n🗑 %d eliminados", table, adds, edits, deletes))
+	b.Send(fmt.Sprintf("📊 <b>Changes in %s</b>\n\n➕ %d added\n📝 %d edited\n🗑 %d deleted", table, adds, edits, deletes))
 }
 
 func truncate(s string, max int) string {
