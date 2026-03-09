@@ -25,6 +25,8 @@ var validTables = map[string]bool{
 	"libros_auxiliares": true, "codigos_dane": true, "actividades_ica": true,
 	"conceptos_pila": true, "activos_fijos_detalle": true, "audit_trail_terceros": true,
 	"clasificacion_cuentas": true,
+	"movimientos_inventario": true, "saldos_inventario": true,
+	"historial": true, "maestros": true,
 	"sync_history": true, "logs": true,
 }
 
@@ -386,6 +388,46 @@ type ClasificacionCuentaRecord struct {
 	SyncError     string `json:"sync_error"`
 	UpdatedAt     string `json:"updated_at"`
 	SyncedAt      string `json:"synced_at"`
+}
+
+type MovimientoInventarioRecord struct {
+	ID              int64  `json:"id"`
+	RecordKey       string `json:"record_key"`
+	Empresa         string `json:"empresa"`
+	Grupo           string `json:"grupo"`
+	CodigoProducto  string `json:"codigo_producto"`
+	TipoComprobante string `json:"tipo_comprobante"`
+	CodigoComp      string `json:"codigo_comp"`
+	Secuencia       string `json:"secuencia"`
+	TipoDoc         string `json:"tipo_doc"`
+	Fecha           string `json:"fecha"`
+	Cantidad        string `json:"cantidad"`
+	Valor           string `json:"valor"`
+	TipoMov         string `json:"tipo_mov"`
+	Hash            string `json:"hash"`
+	SyncStatus      string `json:"sync_status"`
+	SyncAction      string `json:"sync_action"`
+	SyncError       string `json:"sync_error"`
+	UpdatedAt       string `json:"updated_at"`
+	SyncedAt        string `json:"synced_at"`
+}
+
+type SaldoInventarioRecord struct {
+	ID             int64   `json:"id"`
+	RecordKey      string  `json:"record_key"`
+	Empresa        string  `json:"empresa"`
+	Grupo          string  `json:"grupo"`
+	CodigoProducto string  `json:"codigo_producto"`
+	SaldoInicial   float64 `json:"saldo_inicial"`
+	Entradas       float64 `json:"entradas"`
+	Salidas        float64 `json:"salidas"`
+	SaldoFinal     float64 `json:"saldo_final"`
+	Hash           string  `json:"hash"`
+	SyncStatus     string  `json:"sync_status"`
+	SyncAction     string  `json:"sync_action"`
+	SyncError      string  `json:"sync_error"`
+	UpdatedAt      string  `json:"updated_at"`
+	SyncedAt       string  `json:"synced_at"`
 }
 
 // PendingRecord is a generic record ready to send to the API
@@ -904,6 +946,9 @@ func (db *DB) migrate() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_audit_trail_terceros_status ON audit_trail_terceros(sync_status)`,
 		`CREATE INDEX IF NOT EXISTS idx_audit_trail_terceros_nit ON audit_trail_terceros(nit_tercero)`,
+		// Migration: add direccion and email to audit_trail_terceros
+		`ALTER TABLE audit_trail_terceros ADD COLUMN direccion TEXT DEFAULT ''`,
+		`ALTER TABLE audit_trail_terceros ADD COLUMN email TEXT DEFAULT ''`,
 
 		// Clasificacion Cuentas table (from Z279CPYY)
 		`CREATE TABLE IF NOT EXISTS clasificacion_cuentas (
@@ -920,6 +965,93 @@ func (db *DB) migrate() error {
 			synced_at DATETIME
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_clasificacion_cuentas_status ON clasificacion_cuentas(sync_status)`,
+
+		// Movimientos Inventario table (from Z16YYYY)
+		`CREATE TABLE IF NOT EXISTS movimientos_inventario (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			record_key TEXT NOT NULL UNIQUE,
+			empresa TEXT DEFAULT '',
+			grupo TEXT DEFAULT '',
+			codigo_producto TEXT DEFAULT '',
+			tipo_comprobante TEXT DEFAULT '',
+			codigo_comp TEXT DEFAULT '',
+			secuencia TEXT DEFAULT '',
+			tipo_doc TEXT DEFAULT '',
+			fecha TEXT DEFAULT '',
+			cantidad TEXT DEFAULT '',
+			valor TEXT DEFAULT '',
+			tipo_mov TEXT DEFAULT '',
+			hash TEXT NOT NULL,
+			sync_status TEXT DEFAULT 'pending',
+			sync_action TEXT DEFAULT 'add',
+			sync_error TEXT,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			synced_at DATETIME
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_movimientos_inventario_status ON movimientos_inventario(sync_status)`,
+		`CREATE INDEX IF NOT EXISTS idx_movimientos_inventario_producto ON movimientos_inventario(codigo_producto)`,
+		`CREATE INDEX IF NOT EXISTS idx_movimientos_inventario_fecha ON movimientos_inventario(fecha)`,
+
+		// Saldos Inventario table (from Z15YYYY)
+		`CREATE TABLE IF NOT EXISTS saldos_inventario (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			record_key TEXT NOT NULL UNIQUE,
+			empresa TEXT DEFAULT '',
+			grupo TEXT DEFAULT '',
+			codigo_producto TEXT DEFAULT '',
+			saldo_inicial REAL DEFAULT 0,
+			entradas REAL DEFAULT 0,
+			salidas REAL DEFAULT 0,
+			saldo_final REAL DEFAULT 0,
+			hash TEXT NOT NULL,
+			sync_status TEXT DEFAULT 'pending',
+			sync_action TEXT DEFAULT 'add',
+			sync_error TEXT,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			synced_at DATETIME
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_saldos_inventario_status ON saldos_inventario(sync_status)`,
+		`CREATE INDEX IF NOT EXISTS idx_saldos_inventario_producto ON saldos_inventario(codigo_producto)`,
+
+		// Historial (Z18YYYY - document history)
+		`CREATE TABLE IF NOT EXISTS historial (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			record_key TEXT NOT NULL UNIQUE,
+			tipo_registro TEXT DEFAULT '',
+			sub_tipo TEXT DEFAULT '',
+			empresa TEXT DEFAULT '',
+			fecha TEXT DEFAULT '',
+			nombre_origen TEXT DEFAULT '',
+			nombre_destin TEXT DEFAULT '',
+			nit_origen TEXT DEFAULT '',
+			hash TEXT NOT NULL,
+			sync_status TEXT DEFAULT 'pending',
+			sync_action TEXT DEFAULT 'add',
+			sync_error TEXT,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			synced_at DATETIME
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_historial_status ON historial(sync_status)`,
+
+		// Maestros (Z06 - master configuration)
+		`CREATE TABLE IF NOT EXISTS maestros (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			record_key TEXT NOT NULL UNIQUE,
+			tipo TEXT DEFAULT '',
+			codigo TEXT DEFAULT '',
+			nombre TEXT DEFAULT '',
+			responsable TEXT DEFAULT '',
+			direccion TEXT DEFAULT '',
+			email TEXT DEFAULT '',
+			hash TEXT NOT NULL,
+			sync_status TEXT DEFAULT 'pending',
+			sync_action TEXT DEFAULT 'add',
+			sync_error TEXT,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			synced_at DATETIME
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_maestros_status ON maestros(sync_status)`,
+		`CREATE INDEX IF NOT EXISTS idx_maestros_tipo ON maestros(tipo)`,
 
 		// Missing relationship indexes on ORIGINAL tables
 		// movements → plan_cuentas, fecha
@@ -1922,25 +2054,25 @@ func (db *DB) MarkDeletedActivosFijosDetalle(currentKeys map[string]bool) int {
 
 // ==================== AUDIT TRAIL TERCEROS (Z11N) ====================
 
-func (db *DB) UpsertAuditTrailTercero(key, fechaCambio, nitTercero, timestamp, usuario, fechaPeriodo, tipoDoc, nombre, nitRepresentante, nombreRepresentante, hash string) string {
+func (db *DB) UpsertAuditTrailTercero(key, fechaCambio, nitTercero, timestamp, usuario, fechaPeriodo, tipoDoc, nombre, nitRepresentante, nombreRepresentante, direccion, email, hash string) string {
 	var existingHash string
 	err := db.conn.QueryRow(`SELECT hash FROM audit_trail_terceros WHERE record_key=?`, key).Scan(&existingHash)
 	now := time.Now().Format(time.RFC3339)
 
 	if err == sql.ErrNoRows {
 		db.conn.Exec(
-			`INSERT INTO audit_trail_terceros (record_key, fecha_cambio, nit_tercero, timestamp, usuario, fecha_periodo, tipo_doc, nombre, nit_representante, nombre_representante, hash, sync_status, sync_action, updated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'add', ?)`,
-			key, fechaCambio, nitTercero, timestamp, usuario, fechaPeriodo, tipoDoc, nombre, nitRepresentante, nombreRepresentante, hash, now,
+			`INSERT INTO audit_trail_terceros (record_key, fecha_cambio, nit_tercero, timestamp, usuario, fecha_periodo, tipo_doc, nombre, nit_representante, nombre_representante, direccion, email, hash, sync_status, sync_action, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'add', ?)`,
+			key, fechaCambio, nitTercero, timestamp, usuario, fechaPeriodo, tipoDoc, nombre, nitRepresentante, nombreRepresentante, direccion, email, hash, now,
 		)
 		return "add"
 	}
 
 	if existingHash != hash {
 		db.conn.Exec(
-			`UPDATE audit_trail_terceros SET fecha_cambio=?, nit_tercero=?, timestamp=?, usuario=?, fecha_periodo=?, tipo_doc=?, nombre=?, nit_representante=?, nombre_representante=?, hash=?, sync_status='pending', sync_action='edit', updated_at=?
+			`UPDATE audit_trail_terceros SET fecha_cambio=?, nit_tercero=?, timestamp=?, usuario=?, fecha_periodo=?, tipo_doc=?, nombre=?, nit_representante=?, nombre_representante=?, direccion=?, email=?, hash=?, sync_status='pending', sync_action='edit', updated_at=?
 			 WHERE record_key=?`,
-			fechaCambio, nitTercero, timestamp, usuario, fechaPeriodo, tipoDoc, nombre, nitRepresentante, nombreRepresentante, hash, now, key,
+			fechaCambio, nitTercero, timestamp, usuario, fechaPeriodo, tipoDoc, nombre, nitRepresentante, nombreRepresentante, direccion, email, hash, now, key,
 		)
 		return "edit"
 	}
@@ -1949,6 +2081,159 @@ func (db *DB) UpsertAuditTrailTercero(key, fechaCambio, nitTercero, timestamp, u
 
 func (db *DB) MarkDeletedAuditTrailTerceros(currentKeys map[string]bool) int {
 	return db.markDeleted("audit_trail_terceros", "record_key", currentKeys)
+}
+
+// ==================== ACTIVOS FIJOS DETALLE GET ====================
+
+func (db *DB) GetActivosFijosDetalle(page int, search string) ([]map[string]interface{}, int, error) {
+	limit := 50
+	offset := (page - 1) * limit
+	where := "1=1"
+	args := []interface{}{}
+	if search != "" {
+		like := "%" + strings.ToLower(search) + "%"
+		where = "(LOWER(nombre) LIKE ? OR LOWER(nit_responsable) LIKE ? OR LOWER(codigo) LIKE ? OR LOWER(record_key) LIKE ?)"
+		args = append(args, like, like, like, like)
+	}
+	var total int
+	db.conn.QueryRow("SELECT COUNT(*) FROM activos_fijos_detalle WHERE "+where, args...).Scan(&total)
+
+	queryArgs := append(args, limit, offset)
+	rows, err := db.conn.Query(
+		"SELECT id, record_key, COALESCE(grupo,''), COALESCE(secuencia,''), COALESCE(nombre,''), COALESCE(nit_responsable,''), COALESCE(codigo,''), COALESCE(fecha,''), COALESCE(valor_compra,0), hash, sync_status, COALESCE(sync_action,''), COALESCE(sync_error,''), updated_at, COALESCE(synced_at,'') FROM activos_fijos_detalle WHERE "+where+" ORDER BY id LIMIT ? OFFSET ?",
+		queryArgs...,
+	)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	var records []map[string]interface{}
+	for rows.Next() {
+		var id int64
+		var recordKey, grupo, secuencia, nombre, nitResponsable, codigo, fecha string
+		var valorCompra float64
+		var hash, syncStatus, syncAction, syncError, updatedAt, syncedAt string
+		if err := rows.Scan(&id, &recordKey, &grupo, &secuencia, &nombre, &nitResponsable, &codigo, &fecha, &valorCompra, &hash, &syncStatus, &syncAction, &syncError, &updatedAt, &syncedAt); err != nil {
+			continue
+		}
+		records = append(records, map[string]interface{}{
+			"id": id, "record_key": recordKey, "grupo": grupo, "secuencia": secuencia,
+			"nombre": nombre, "nit_responsable": nitResponsable, "codigo": codigo,
+			"fecha": fecha, "valor_compra": valorCompra, "hash": hash,
+			"sync_status": syncStatus, "sync_action": syncAction, "sync_error": syncError,
+			"updated_at": updatedAt, "synced_at": syncedAt,
+		})
+	}
+	return records, total, nil
+}
+
+func (db *DB) GetPendingActivosFijosDetalle() []PendingRecord {
+	rows, err := db.conn.Query(
+		`SELECT id, record_key, COALESCE(grupo,''), COALESCE(secuencia,''), COALESCE(nombre,''), COALESCE(nit_responsable,''), COALESCE(codigo,''), COALESCE(fecha,''), COALESCE(valor_compra,0), sync_action
+		 FROM activos_fijos_detalle WHERE sync_status='pending' ORDER BY id`,
+	)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	var records []PendingRecord
+	for rows.Next() {
+		var id int64
+		var key, grupo, secuencia, nombre, nitResponsable, codigo, fecha, action string
+		var valorCompra float64
+		if err := rows.Scan(&id, &key, &grupo, &secuencia, &nombre, &nitResponsable, &codigo, &fecha, &valorCompra, &action); err != nil {
+			continue
+		}
+		records = append(records, PendingRecord{
+			ID: id, Key: key, SyncAction: action,
+			Data: map[string]interface{}{
+				"record_key": key, "grupo": grupo, "secuencia": secuencia,
+				"nombre": nombre, "nit_responsable": nitResponsable, "codigo": codigo,
+				"fecha": fecha, "valor_compra": valorCompra,
+			},
+		})
+	}
+	return records
+}
+
+// ==================== AUDIT TRAIL TERCEROS GET ====================
+
+func (db *DB) GetAuditTrailTerceros(page int, search string) ([]map[string]interface{}, int, error) {
+	limit := 50
+	offset := (page - 1) * limit
+	where := "1=1"
+	args := []interface{}{}
+	if search != "" {
+		like := "%" + strings.ToLower(search) + "%"
+		where = "(LOWER(nombre) LIKE ? OR LOWER(nit_tercero) LIKE ? OR LOWER(nombre_representante) LIKE ? OR LOWER(email) LIKE ? OR LOWER(direccion) LIKE ?)"
+		args = append(args, like, like, like, like, like)
+	}
+	var total int
+	db.conn.QueryRow("SELECT COUNT(*) FROM audit_trail_terceros WHERE "+where, args...).Scan(&total)
+
+	queryArgs := append(args, limit, offset)
+	rows, err := db.conn.Query(
+		"SELECT id, record_key, COALESCE(fecha_cambio,''), COALESCE(nit_tercero,''), COALESCE(timestamp,''), COALESCE(usuario,''), COALESCE(fecha_periodo,''), COALESCE(tipo_doc,''), COALESCE(nombre,''), COALESCE(nit_representante,''), COALESCE(nombre_representante,''), COALESCE(direccion,''), COALESCE(email,''), hash, sync_status, COALESCE(sync_action,''), COALESCE(sync_error,''), updated_at, COALESCE(synced_at,'') FROM audit_trail_terceros WHERE "+where+" ORDER BY id LIMIT ? OFFSET ?",
+		queryArgs...,
+	)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	var records []map[string]interface{}
+	for rows.Next() {
+		var id int64
+		var recordKey, fechaCambio, nitTercero, timestamp, usuario, fechaPeriodo, tipoDoc string
+		var nombre, nitRepresentante, nombreRepresentante, direccion, email string
+		var hash, syncStatus, syncAction, syncError, updatedAt, syncedAt string
+		if err := rows.Scan(&id, &recordKey, &fechaCambio, &nitTercero, &timestamp, &usuario, &fechaPeriodo, &tipoDoc, &nombre, &nitRepresentante, &nombreRepresentante, &direccion, &email, &hash, &syncStatus, &syncAction, &syncError, &updatedAt, &syncedAt); err != nil {
+			continue
+		}
+		records = append(records, map[string]interface{}{
+			"id": id, "record_key": recordKey, "fecha_cambio": fechaCambio,
+			"nit_tercero": nitTercero, "timestamp": timestamp, "usuario": usuario,
+			"fecha_periodo": fechaPeriodo, "tipo_doc": tipoDoc, "nombre": nombre,
+			"nit_representante": nitRepresentante, "nombre_representante": nombreRepresentante,
+			"direccion": direccion, "email": email, "hash": hash,
+			"sync_status": syncStatus, "sync_action": syncAction, "sync_error": syncError,
+			"updated_at": updatedAt, "synced_at": syncedAt,
+		})
+	}
+	return records, total, nil
+}
+
+func (db *DB) GetPendingAuditTrailTerceros() []PendingRecord {
+	rows, err := db.conn.Query(
+		`SELECT id, record_key, COALESCE(fecha_cambio,''), COALESCE(nit_tercero,''), COALESCE(timestamp,''), COALESCE(usuario,''), COALESCE(fecha_periodo,''), COALESCE(tipo_doc,''), COALESCE(nombre,''), COALESCE(nit_representante,''), COALESCE(nombre_representante,''), COALESCE(direccion,''), COALESCE(email,''), sync_action
+		 FROM audit_trail_terceros WHERE sync_status='pending' ORDER BY id`,
+	)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	var records []PendingRecord
+	for rows.Next() {
+		var id int64
+		var key, fechaCambio, nitTercero, timestamp, usuario, fechaPeriodo, tipoDoc string
+		var nombre, nitRepresentante, nombreRepresentante, direccion, email, action string
+		if err := rows.Scan(&id, &key, &fechaCambio, &nitTercero, &timestamp, &usuario, &fechaPeriodo, &tipoDoc, &nombre, &nitRepresentante, &nombreRepresentante, &direccion, &email, &action); err != nil {
+			continue
+		}
+		records = append(records, PendingRecord{
+			ID: id, Key: key, SyncAction: action,
+			Data: map[string]interface{}{
+				"record_key": key, "fecha_cambio": fechaCambio, "nit_tercero": nitTercero,
+				"timestamp": timestamp, "usuario": usuario, "fecha_periodo": fechaPeriodo,
+				"tipo_doc": tipoDoc, "nombre": nombre, "nit_representante": nitRepresentante,
+				"nombre_representante": nombreRepresentante, "direccion": direccion, "email": email,
+			},
+		})
+	}
+	return records
 }
 
 // ==================== CLASIFICACION CUENTAS (Z279CP) ====================
@@ -1980,6 +2265,309 @@ func (db *DB) UpsertClasificacionCuenta(codigoCuenta, codigoGrupo, codigoDetalle
 
 func (db *DB) MarkDeletedClasificacionCuentas(currentKeys map[string]bool) int {
 	return db.markDeleted("clasificacion_cuentas", "codigo_cuenta", currentKeys)
+}
+
+// ==================== MOVIMIENTOS INVENTARIO ====================
+
+func (db *DB) UpsertMovimientoInventario(key, empresa, grupo, codigoProducto, tipoComprobante, codigoComp, secuencia, tipoDoc, fecha, cantidad, valor, tipoMov, hash string) string {
+	var existingHash string
+	err := db.conn.QueryRow(`SELECT hash FROM movimientos_inventario WHERE record_key=?`, key).Scan(&existingHash)
+	now := time.Now().Format(time.RFC3339)
+
+	if err == sql.ErrNoRows {
+		db.conn.Exec(
+			`INSERT INTO movimientos_inventario (record_key, empresa, grupo, codigo_producto, tipo_comprobante, codigo_comp, secuencia, tipo_doc, fecha, cantidad, valor, tipo_mov, hash, sync_status, sync_action, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'add', ?)`,
+			key, empresa, grupo, codigoProducto, tipoComprobante, codigoComp, secuencia, tipoDoc, fecha, cantidad, valor, tipoMov, hash, now,
+		)
+		return "add"
+	}
+
+	if existingHash != hash {
+		db.conn.Exec(
+			`UPDATE movimientos_inventario SET empresa=?, grupo=?, codigo_producto=?, tipo_comprobante=?, codigo_comp=?, secuencia=?, tipo_doc=?, fecha=?, cantidad=?, valor=?, tipo_mov=?, hash=?, sync_status='pending', sync_action='edit', updated_at=?
+			 WHERE record_key=?`,
+			empresa, grupo, codigoProducto, tipoComprobante, codigoComp, secuencia, tipoDoc, fecha, cantidad, valor, tipoMov, hash, now, key,
+		)
+		return "edit"
+	}
+	return ""
+}
+
+func (db *DB) MarkDeletedMovimientosInventario(currentKeys map[string]bool) int {
+	return db.markDeleted("movimientos_inventario", "record_key", currentKeys)
+}
+
+// ==================== SALDOS INVENTARIO ====================
+
+func (db *DB) UpsertSaldoInventario(key, empresa, grupo, codigoProducto, hash string, saldoInicial, entradas, salidas, saldoFinal float64) string {
+	var existingHash string
+	err := db.conn.QueryRow(`SELECT hash FROM saldos_inventario WHERE record_key=?`, key).Scan(&existingHash)
+	now := time.Now().Format(time.RFC3339)
+
+	if err == sql.ErrNoRows {
+		db.conn.Exec(
+			`INSERT INTO saldos_inventario (record_key, empresa, grupo, codigo_producto, saldo_inicial, entradas, salidas, saldo_final, hash, sync_status, sync_action, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'add', ?)`,
+			key, empresa, grupo, codigoProducto, saldoInicial, entradas, salidas, saldoFinal, hash, now,
+		)
+		return "add"
+	}
+
+	if existingHash != hash {
+		db.conn.Exec(
+			`UPDATE saldos_inventario SET empresa=?, grupo=?, codigo_producto=?, saldo_inicial=?, entradas=?, salidas=?, saldo_final=?, hash=?, sync_status='pending', sync_action='edit', updated_at=?
+			 WHERE record_key=?`,
+			empresa, grupo, codigoProducto, saldoInicial, entradas, salidas, saldoFinal, hash, now, key,
+		)
+		return "edit"
+	}
+	return ""
+}
+
+func (db *DB) MarkDeletedSaldosInventario(currentKeys map[string]bool) int {
+	return db.markDeleted("saldos_inventario", "record_key", currentKeys)
+}
+
+// ==================== MOVIMIENTOS INVENTARIO (Z16) GET ====================
+
+func (db *DB) GetMovimientosInventario(limit, offset int, search string) ([]MovimientoInventarioRecord, int) {
+	where := "1=1"
+	args := []interface{}{}
+	if search != "" {
+		like := "%" + strings.ToLower(search) + "%"
+		where = "(LOWER(codigo_producto) LIKE ? OR LOWER(empresa) LIKE ? OR LOWER(fecha) LIKE ? OR LOWER(tipo_comprobante) LIKE ?)"
+		args = append(args, like, like, like, like)
+	}
+	var total int
+	db.conn.QueryRow("SELECT COUNT(*) FROM movimientos_inventario WHERE "+where, args...).Scan(&total)
+
+	queryArgs := append(args, limit, offset)
+	rows, err := db.conn.Query(
+		"SELECT id, record_key, COALESCE(empresa,''), COALESCE(grupo,''), COALESCE(codigo_producto,''), COALESCE(tipo_comprobante,''), COALESCE(codigo_comp,''), COALESCE(secuencia,''), COALESCE(tipo_doc,''), COALESCE(fecha,''), COALESCE(cantidad,''), COALESCE(valor,''), COALESCE(tipo_mov,''), hash, sync_status, COALESCE(sync_action,''), COALESCE(sync_error,''), updated_at, COALESCE(synced_at,'') FROM movimientos_inventario WHERE "+where+" ORDER BY id LIMIT ? OFFSET ?",
+		queryArgs...,
+	)
+	if err != nil {
+		return nil, 0
+	}
+	defer rows.Close()
+
+	var records []MovimientoInventarioRecord
+	for rows.Next() {
+		var r MovimientoInventarioRecord
+		if err := rows.Scan(&r.ID, &r.RecordKey, &r.Empresa, &r.Grupo, &r.CodigoProducto, &r.TipoComprobante, &r.CodigoComp, &r.Secuencia, &r.TipoDoc, &r.Fecha, &r.Cantidad, &r.Valor, &r.TipoMov, &r.Hash, &r.SyncStatus, &r.SyncAction, &r.SyncError, &r.UpdatedAt, &r.SyncedAt); err != nil {
+			continue
+		}
+		records = append(records, r)
+	}
+	return records, total
+}
+
+func (db *DB) GetPendingMovimientosInventario() []PendingRecord {
+	rows, err := db.conn.Query(
+		`SELECT id, record_key, COALESCE(empresa,''), COALESCE(grupo,''), COALESCE(codigo_producto,''), COALESCE(tipo_comprobante,''), COALESCE(codigo_comp,''), COALESCE(secuencia,''), COALESCE(tipo_doc,''), COALESCE(fecha,''), COALESCE(cantidad,''), COALESCE(valor,''), COALESCE(tipo_mov,''), sync_action
+		 FROM movimientos_inventario WHERE sync_status='pending' ORDER BY id`,
+	)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	var records []PendingRecord
+	for rows.Next() {
+		var id int64
+		var key, empresa, grupo, codigo, tipoComp, codComp, seq, tipoDoc, fecha, cant, valor, tipoMov, action string
+		if err := rows.Scan(&id, &key, &empresa, &grupo, &codigo, &tipoComp, &codComp, &seq, &tipoDoc, &fecha, &cant, &valor, &tipoMov, &action); err != nil {
+			continue
+		}
+		records = append(records, PendingRecord{
+			ID: id, Key: key, SyncAction: action,
+			Data: map[string]interface{}{
+				"record_key": key, "empresa": empresa, "grupo": grupo, "codigo_producto": codigo,
+				"tipo_comprobante": tipoComp, "codigo_comp": codComp, "secuencia": seq,
+				"tipo_doc": tipoDoc, "fecha": fecha, "cantidad": cant, "valor": valor, "tipo_mov": tipoMov,
+			},
+		})
+	}
+	return records
+}
+
+// ==================== SALDOS INVENTARIO (Z15) GET ====================
+
+func (db *DB) GetSaldosInventario(limit, offset int, search string) ([]SaldoInventarioRecord, int) {
+	where := "1=1"
+	args := []interface{}{}
+	if search != "" {
+		like := "%" + strings.ToLower(search) + "%"
+		where = "(LOWER(codigo_producto) LIKE ? OR LOWER(empresa) LIKE ? OR LOWER(grupo) LIKE ?)"
+		args = append(args, like, like, like)
+	}
+	var total int
+	db.conn.QueryRow("SELECT COUNT(*) FROM saldos_inventario WHERE "+where, args...).Scan(&total)
+
+	queryArgs := append(args, limit, offset)
+	rows, err := db.conn.Query(
+		"SELECT id, record_key, COALESCE(empresa,''), COALESCE(grupo,''), COALESCE(codigo_producto,''), saldo_inicial, entradas, salidas, saldo_final, hash, sync_status, COALESCE(sync_action,''), COALESCE(sync_error,''), updated_at, COALESCE(synced_at,'') FROM saldos_inventario WHERE "+where+" ORDER BY id LIMIT ? OFFSET ?",
+		queryArgs...,
+	)
+	if err != nil {
+		return nil, 0
+	}
+	defer rows.Close()
+
+	var records []SaldoInventarioRecord
+	for rows.Next() {
+		var r SaldoInventarioRecord
+		if err := rows.Scan(&r.ID, &r.RecordKey, &r.Empresa, &r.Grupo, &r.CodigoProducto, &r.SaldoInicial, &r.Entradas, &r.Salidas, &r.SaldoFinal, &r.Hash, &r.SyncStatus, &r.SyncAction, &r.SyncError, &r.UpdatedAt, &r.SyncedAt); err != nil {
+			continue
+		}
+		records = append(records, r)
+	}
+	return records, total
+}
+
+func (db *DB) GetPendingSaldosInventario() []PendingRecord {
+	rows, err := db.conn.Query(
+		`SELECT id, record_key, COALESCE(empresa,''), COALESCE(grupo,''), COALESCE(codigo_producto,''), saldo_inicial, entradas, salidas, saldo_final, sync_action
+		 FROM saldos_inventario WHERE sync_status='pending' ORDER BY id`,
+	)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	var records []PendingRecord
+	for rows.Next() {
+		var id int64
+		var key, empresa, grupo, codigo, action string
+		var saldoIni, entradas, salidas, saldoFin float64
+		if err := rows.Scan(&id, &key, &empresa, &grupo, &codigo, &saldoIni, &entradas, &salidas, &saldoFin, &action); err != nil {
+			continue
+		}
+		records = append(records, PendingRecord{
+			ID: id, Key: key, SyncAction: action,
+			Data: map[string]interface{}{
+				"record_key": key, "empresa": empresa, "grupo": grupo, "codigo_producto": codigo,
+				"saldo_inicial": saldoIni, "entradas": entradas, "salidas": salidas, "saldo_final": saldoFin,
+			},
+		})
+	}
+	return records
+}
+
+// ==================== HISTORIAL (Z18YYYY) ====================
+
+func (db *DB) UpsertHistorial(key, tipoRegistro, subTipo, empresa, fecha, nombreOrigen, nombreDestin, nitOrigen, hash string) string {
+	var existingHash string
+	err := db.conn.QueryRow(`SELECT hash FROM historial WHERE record_key=?`, key).Scan(&existingHash)
+	now := time.Now().Format(time.RFC3339)
+
+	if err == sql.ErrNoRows {
+		db.conn.Exec(
+			`INSERT INTO historial (record_key, tipo_registro, sub_tipo, empresa, fecha, nombre_origen, nombre_destin, nit_origen, hash, sync_status, sync_action, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'add', ?)`,
+			key, tipoRegistro, subTipo, empresa, fecha, nombreOrigen, nombreDestin, nitOrigen, hash, now,
+		)
+		return "add"
+	}
+
+	if existingHash != hash {
+		db.conn.Exec(
+			`UPDATE historial SET tipo_registro=?, sub_tipo=?, empresa=?, fecha=?, nombre_origen=?, nombre_destin=?, nit_origen=?, hash=?, sync_status='pending', sync_action='edit', updated_at=?
+			 WHERE record_key=?`,
+			tipoRegistro, subTipo, empresa, fecha, nombreOrigen, nombreDestin, nitOrigen, hash, now, key,
+		)
+		return "edit"
+	}
+	return ""
+}
+
+func (db *DB) MarkDeletedHistorial(currentKeys map[string]bool) int {
+	return db.markDeleted("historial", "record_key", currentKeys)
+}
+
+// ==================== MAESTROS (Z06) ====================
+
+func (db *DB) UpsertMaestro(key, tipo, codigo, nombre, responsable, direccion, email, hash string) string {
+	var existingHash string
+	err := db.conn.QueryRow(`SELECT hash FROM maestros WHERE record_key=?`, key).Scan(&existingHash)
+	now := time.Now().Format(time.RFC3339)
+
+	if err == sql.ErrNoRows {
+		db.conn.Exec(
+			`INSERT INTO maestros (record_key, tipo, codigo, nombre, responsable, direccion, email, hash, sync_status, sync_action, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'add', ?)`,
+			key, tipo, codigo, nombre, responsable, direccion, email, hash, now,
+		)
+		return "add"
+	}
+
+	if existingHash != hash {
+		db.conn.Exec(
+			`UPDATE maestros SET tipo=?, codigo=?, nombre=?, responsable=?, direccion=?, email=?, hash=?, sync_status='pending', sync_action='edit', updated_at=?
+			 WHERE record_key=?`,
+			tipo, codigo, nombre, responsable, direccion, email, hash, now, key,
+		)
+		return "edit"
+	}
+	return ""
+}
+
+func (db *DB) MarkDeletedMaestros(currentKeys map[string]bool) int {
+	return db.markDeleted("maestros", "record_key", currentKeys)
+}
+
+// GetGenericTable queries any valid table with pagination and search.
+func (db *DB) GetGenericTable(tableName string, limit, offset int, search string) ([]map[string]interface{}, int) {
+	if !isValidTable(tableName) {
+		return nil, 0
+	}
+
+	where := "1=1"
+	args := []interface{}{}
+	if search != "" {
+		// Search across all text columns using a subquery
+		like := "%" + strings.ToLower(search) + "%"
+		where = "CAST(record_key AS TEXT) LIKE ? OR CAST(nombre AS TEXT) LIKE ? OR CAST(codigo AS TEXT) LIKE ?"
+		args = append(args, like, like, like)
+	}
+
+	var total int
+	db.conn.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE %s", tableName, where), args...).Scan(&total)
+
+	queryArgs := append(args, limit, offset)
+	rows, err := db.conn.Query(
+		fmt.Sprintf("SELECT * FROM %s WHERE %s ORDER BY id LIMIT ? OFFSET ?", tableName, where),
+		queryArgs...,
+	)
+	if err != nil {
+		return nil, 0
+	}
+	defer rows.Close()
+
+	cols, _ := rows.Columns()
+	var records []map[string]interface{}
+	for rows.Next() {
+		vals := make([]interface{}, len(cols))
+		ptrs := make([]interface{}, len(cols))
+		for i := range vals {
+			ptrs[i] = &vals[i]
+		}
+		if err := rows.Scan(ptrs...); err != nil {
+			continue
+		}
+		row := make(map[string]interface{}, len(cols))
+		for i, col := range cols {
+			switch v := vals[i].(type) {
+			case []byte:
+				row[col] = string(v)
+			default:
+				row[col] = v
+			}
+		}
+		records = append(records, row)
+	}
+	return records, total
 }
 
 // ==================== GENERIC SYNC HELPERS ====================
@@ -3547,4 +4135,91 @@ func (db *DB) SetUserPref(username, key, value string) error {
 		username, key, value,
 	)
 	return err
+}
+
+// GetPendingGeneric returns pending records for any table that has sync_status/sync_action columns.
+// Used for tables that don't have a specific GetPending function.
+func (db *DB) GetPendingGeneric(tableName string) []PendingRecord {
+	if !isValidTable(tableName) {
+		return nil
+	}
+
+	// Get column names for this table
+	colRows, err := db.conn.Query(fmt.Sprintf("PRAGMA table_info(%s)", tableName))
+	if err != nil {
+		return nil
+	}
+	var columns []string
+	for colRows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull int
+		var dflt sql.NullString
+		var pk int
+		if err := colRows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			continue
+		}
+		columns = append(columns, name)
+	}
+	colRows.Close()
+
+	if len(columns) == 0 {
+		return nil
+	}
+
+	// Build SELECT with COALESCE for string columns, skip internal columns
+	skipCols := map[string]bool{"hash": true, "sync_status": true, "sync_error": true, "updated_at": true, "synced_at": true, "retry_count": true}
+	var selectCols []string
+	var dataCols []string
+	selectCols = append(selectCols, "id", "record_key", "sync_action")
+	for _, col := range columns {
+		if col == "id" || col == "record_key" || col == "sync_action" || skipCols[col] {
+			continue
+		}
+		selectCols = append(selectCols, fmt.Sprintf("COALESCE(CAST(%s AS TEXT),'')", col))
+		dataCols = append(dataCols, col)
+	}
+
+	query := fmt.Sprintf("SELECT %s FROM %s WHERE sync_status='pending' ORDER BY id",
+		strings.Join(selectCols, ", "), tableName)
+
+	rows, err := db.conn.Query(query)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	var records []PendingRecord
+	for rows.Next() {
+		// Prepare scan destinations
+		vals := make([]interface{}, len(selectCols))
+		ptrs := make([]interface{}, len(selectCols))
+		for i := range vals {
+			ptrs[i] = &vals[i]
+		}
+
+		if err := rows.Scan(ptrs...); err != nil {
+			continue
+		}
+
+		id, _ := vals[0].(int64)
+		key := fmt.Sprintf("%v", vals[1])
+		action := fmt.Sprintf("%v", vals[2])
+
+		data := map[string]interface{}{"record_key": key}
+		for i, col := range dataCols {
+			v := vals[i+3] // offset by id, record_key, sync_action
+			if s, ok := v.(string); ok {
+				data[col] = s
+			} else {
+				data[col] = fmt.Sprintf("%v", v)
+			}
+		}
+
+		records = append(records, PendingRecord{
+			ID: id, Key: key, SyncAction: action,
+			Data: data,
+		})
+	}
+	return records
 }

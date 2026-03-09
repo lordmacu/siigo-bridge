@@ -105,6 +105,10 @@ export default function App() {
           <Route path="/saldos-consolidados" element={guard('saldos_consolidados', <DataPage table="saldos_consolidados" title="Saldos Consolidados (Z28)" file="Z28" />)} />
           <Route path="/documentos" element={guard('documentos', <DataPage table="documentos" title="Documentos (Z11 - Facturas)" file="Z11" />)} />
           <Route path="/terceros-ampliados" element={guard('terceros_ampliados', <DataPage table="terceros_ampliados" title="Terceros Ampliados (Z08A)" file="Z08A" />)} />
+          <Route path="/movimientos-inventario" element={guard('movimientos_inventario', <DataPage table="movimientos_inventario" title="Movimientos Inventario (Z16)" file="Z16" />)} />
+          <Route path="/saldos-inventario" element={guard('saldos_inventario', <DataPage table="saldos_inventario" title="Saldos Inventario (Z15)" file="Z15" />)} />
+          <Route path="/activos-fijos-detalle" element={guard('activos_fijos_detalle', <DataPage table="activos_fijos_detalle" title="Activos Fijos Detalle (Z27A)" file="Z27A" />)} />
+          <Route path="/audit-trail-terceros" element={guard('audit_trail_terceros', <DataPage table="audit_trail_terceros" title="Audit Trail Terceros (Z11N)" file="Z11N" />)} />
           <Route path="/logs" element={guard('logs', <Logs />)} />
           <Route path="/errors" element={guard('errors', <ErrorSummary />)} />
           <Route path="/field-mappings" element={guard('field-mappings', <FieldMappings />)} />

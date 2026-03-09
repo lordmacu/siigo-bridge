@@ -16,6 +16,7 @@ type Config struct {
 	Webhooks        WebhookConfig         `json:"webhooks"`
 	FieldMappings   map[string][]FieldMap `json:"field_mappings,omitempty"`
 	SendEnabled     map[string]bool       `json:"send_enabled,omitempty"`
+	DetectEnabled   map[string]bool       `json:"detect_enabled,omitempty"`
 	AllowEditDelete bool                  `json:"allow_edit_delete"`
 	SetupComplete   bool                  `json:"setup_complete"`
 }
@@ -196,28 +197,67 @@ func Default() *Config {
 		},
 		FieldMappings: DefaultFieldMappings(),
 		SendEnabled:   DefaultSendEnabled(),
+		DetectEnabled: DefaultDetectEnabled(),
 	}
+}
+
+// allSyncTables is the canonical list of all tables that support detect and send.
+var allSyncTables = []string{
+	"clients", "products", "movements", "cartera",
+	"plan_cuentas", "activos_fijos", "saldos_terceros", "saldos_consolidados",
+	"documentos", "terceros_ampliados", "transacciones_detalle", "periodos_contables",
+	"condiciones_pago", "libros_auxiliares", "codigos_dane", "actividades_ica",
+	"conceptos_pila", "activos_fijos_detalle", "audit_trail_terceros",
+	"clasificacion_cuentas", "movimientos_inventario", "saldos_inventario",
+	"historial", "maestros",
+}
+
+// AllSyncTables returns the canonical list of all syncable tables.
+func AllSyncTables() []string {
+	return allSyncTables
 }
 
 // DefaultSendEnabled returns all modules disabled by default.
 // The user must explicitly enable sending from the web UI or bot.
 func DefaultSendEnabled() map[string]bool {
-	return map[string]bool{
-		"clients":   false,
-		"products":  false,
-		"movements": false,
-		"cartera":   false,
+	m := make(map[string]bool, len(allSyncTables))
+	for _, t := range allSyncTables {
+		m[t] = false
 	}
+	return m
+}
+
+// DefaultDetectEnabled returns all modules enabled by default.
+// Detection (ISAM → SQLite) runs for all tables unless explicitly disabled.
+func DefaultDetectEnabled() map[string]bool {
+	m := make(map[string]bool, len(allSyncTables))
+	for _, t := range allSyncTables {
+		m[t] = true
+	}
+	return m
 }
 
 // IsSendEnabled checks if sending is enabled for a given table
 func (c *Config) IsSendEnabled(table string) bool {
 	if c.SendEnabled == nil {
-		return false // if not configured, default to disabled
+		return false
 	}
 	enabled, ok := c.SendEnabled[table]
 	if !ok {
 		return false
+	}
+	return enabled
+}
+
+// IsDetectEnabled checks if detection (ISAM → SQLite) is enabled for a given table.
+// Defaults to true if not configured.
+func (c *Config) IsDetectEnabled(table string) bool {
+	if c.DetectEnabled == nil {
+		return true // default: detect everything
+	}
+	enabled, ok := c.DetectEnabled[table]
+	if !ok {
+		return true // default: enabled
 	}
 	return enabled
 }
@@ -289,6 +329,21 @@ func (c *Config) EnsureFieldMappings() {
 	}
 	if c.SendEnabled == nil {
 		c.SendEnabled = DefaultSendEnabled()
+	}
+	// Ensure all tables exist in SendEnabled (for configs created before expansion)
+	for _, t := range allSyncTables {
+		if _, ok := c.SendEnabled[t]; !ok {
+			c.SendEnabled[t] = false
+		}
+	}
+	if c.DetectEnabled == nil {
+		c.DetectEnabled = DefaultDetectEnabled()
+	}
+	// Ensure all tables exist in DetectEnabled
+	for _, t := range allSyncTables {
+		if _, ok := c.DetectEnabled[t]; !ok {
+			c.DetectEnabled[t] = true
+		}
 	}
 }
 

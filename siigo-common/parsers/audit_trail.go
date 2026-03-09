@@ -15,13 +15,15 @@ import (
 type AuditTrailTercero struct {
 	FechaCambio         string `json:"fecha_cambio"`          // YYYYMMDD when change was made
 	NitTercero          string `json:"nit_tercero"`           // 13-digit NIT of the tercero
-	Timestamp           string `json:"timestamp"`             // YYYYMMDDHHmmssCC full timestamp
-	Usuario             string `json:"usuario"`               // 8-char user who made the change
+	Timestamp           string `json:"timestamp"`             // 8-digit timestamp
+	Usuario             string `json:"usuario"`               // 5-char user/department
 	FechaPeriodo        string `json:"fecha_periodo"`         // YYYYMMDD period end date
-	TipoDoc             string `json:"tipo_doc"`              // NO=NIT, NP=NIT persona, NC=NIT compañía
-	Nombre              string `json:"nombre"`                // 48-char name of tercero
+	TipoDoc             string `json:"tipo_doc"`              // NO=natural, NC=compañía
+	Nombre              string `json:"nombre"`                // 40-char name of tercero
 	NitRepresentante    string `json:"nit_representante"`     // 13-digit NIT of legal representative
 	NombreRepresentante string `json:"nombre_representante"`  // 40-char name of representative
+	Direccion           string `json:"direccion"`             // address (40 chars)
+	Email               string `json:"email"`                 // email address
 	Hash                string `json:"hash"`
 }
 
@@ -100,23 +102,23 @@ func parseAuditTrailRecord(rec []byte, extfh bool) AuditTrailTercero {
 	return parseAuditTrailBinary(rec, hash)
 }
 
-// parseAuditTrailEXTFH extracts Z11NYYYY records using EXTFH offsets.
-// Z11NYYYY structure (846 bytes) — audit trail for terceros:
+// parseAuditTrailEXTFH extracts Z11NYYYY records using verified EXTFH offsets.
+// Z11NYYYY structure (846 bytes) — terceros enriched with contact info:
 //
-//	[0:8]     fecha_cambio (YYYYMMDD)
+//	[0:8]     fecha_cambio (YYYYMMDD, e.g. "20140725")
 //	[8:16]    padding/spaces
 //	[16:29]   nit_tercero (13 digits, zero-padded)
-//	[29:32]   unknown ("000")
-//	[32:48]   timestamp (YYYYMMDDHHmmssCC)
-//	[48:56]   usuario (8 chars)
-//	[56:64]   fecha_periodo (YYYYMMDD)
-//	[64:77]   nit_tercero2 (13 digits, duplicate)
-//	[77:80]   unknown ("000")
-//	[80:82]   tipo_doc (NO/NP/NC)
-//	[82:130]  nombre (48 chars)
-//	[130:143] padding
-//	[143:156] nit_representante (13 digits)
-//	[156:196] nombre_representante (40 chars)
+//	[33:41]   fecha2 (YYYYMMDD, duplicate)
+//	[41:49]   timestamp (8 chars, e.g. "14313444")
+//	[48:53]   usuario (5 chars, e.g. "ADMON")
+//	[56:64]   fecha_periodo (YYYYMMDD, e.g. "20141231")
+//	[64:77]   nit2 (13 digits, duplicate)
+//	[80:82]   tipo_doc (NO=natural, NC=compañía)
+//	[82:122]  nombre (40 chars)
+//	[142:158] nit_representante (16 chars, zero-padded)
+//	[158:198] nombre_representante (40 chars)
+//	[250:290] direccion (40 chars)
+//	[391:438] email (47 chars)
 func parseAuditTrailEXTFH(rec []byte, hash [32]byte) AuditTrailTercero {
 	fechaCambio := strings.TrimSpace(isam.ExtractField(rec, 0, 8))
 	if fechaCambio == "" || len(fechaCambio) < 8 {
@@ -129,8 +131,8 @@ func parseAuditTrailEXTFH(rec []byte, hash [32]byte) AuditTrailTercero {
 		return AuditTrailTercero{}
 	}
 
-	timestamp := strings.TrimSpace(isam.ExtractField(rec, 32, 16))
-	usuario := strings.TrimSpace(isam.ExtractField(rec, 48, 8))
+	timestamp := strings.TrimSpace(isam.ExtractField(rec, 41, 8))
+	usuario := strings.TrimSpace(isam.ExtractField(rec, 48, 5))
 	fechaPeriodo := strings.TrimSpace(isam.ExtractField(rec, 56, 8))
 
 	tipoDoc := ""
@@ -139,22 +141,35 @@ func parseAuditTrailEXTFH(rec []byte, hash [32]byte) AuditTrailTercero {
 	}
 
 	nombre := ""
-	if len(rec) >= 130 {
-		nombre = strings.TrimSpace(isam.ExtractField(rec, 82, 48))
+	if len(rec) >= 122 {
+		nombre = strings.TrimSpace(isam.ExtractField(rec, 82, 40))
 	}
 	if nombre == "" {
 		return AuditTrailTercero{}
 	}
 
 	nitRepresentante := ""
-	if len(rec) >= 156 {
-		repRaw := strings.TrimSpace(isam.ExtractField(rec, 143, 13))
+	if len(rec) >= 158 {
+		repRaw := strings.TrimSpace(isam.ExtractField(rec, 142, 16))
 		nitRepresentante = strings.TrimLeft(repRaw, "0")
 	}
 
 	nombreRepresentante := ""
-	if len(rec) >= 196 {
-		nombreRepresentante = strings.TrimSpace(isam.ExtractField(rec, 156, 40))
+	if len(rec) >= 198 {
+		nombreRepresentante = strings.TrimSpace(isam.ExtractField(rec, 158, 40))
+	}
+
+	direccion := ""
+	if len(rec) >= 290 {
+		direccion = strings.TrimSpace(isam.ExtractField(rec, 250, 40))
+	}
+
+	email := ""
+	if len(rec) >= 438 {
+		emailRaw := strings.TrimSpace(isam.ExtractField(rec, 391, 47))
+		if strings.Contains(emailRaw, "@") && strings.Contains(emailRaw, ".") {
+			email = emailRaw
+		}
 	}
 
 	return AuditTrailTercero{
@@ -167,13 +182,15 @@ func parseAuditTrailEXTFH(rec []byte, hash [32]byte) AuditTrailTercero {
 		Nombre:              nombre,
 		NitRepresentante:    nitRepresentante,
 		NombreRepresentante: nombreRepresentante,
+		Direccion:           direccion,
+		Email:               email,
 		Hash:                fmt.Sprintf("%x", hash[:8]),
 	}
 }
 
 // parseAuditTrailBinary extracts Z11NYYYY records in binary mode (+2 byte offset for record markers).
 func parseAuditTrailBinary(rec []byte, hash [32]byte) AuditTrailTercero {
-	const off = 2 // binary mode offset for record markers
+	const off = 2
 
 	if len(rec) < 100+off {
 		return AuditTrailTercero{}
@@ -190,8 +207,8 @@ func parseAuditTrailBinary(rec []byte, hash [32]byte) AuditTrailTercero {
 		return AuditTrailTercero{}
 	}
 
-	timestamp := strings.TrimSpace(isam.ExtractField(rec, 32+off, 16))
-	usuario := strings.TrimSpace(isam.ExtractField(rec, 48+off, 8))
+	timestamp := strings.TrimSpace(isam.ExtractField(rec, 41+off, 8))
+	usuario := strings.TrimSpace(isam.ExtractField(rec, 48+off, 5))
 	fechaPeriodo := strings.TrimSpace(isam.ExtractField(rec, 56+off, 8))
 
 	tipoDoc := ""
@@ -200,22 +217,35 @@ func parseAuditTrailBinary(rec []byte, hash [32]byte) AuditTrailTercero {
 	}
 
 	nombre := ""
-	if len(rec) >= 130+off {
-		nombre = strings.TrimSpace(isam.ExtractField(rec, 82+off, 48))
+	if len(rec) >= 122+off {
+		nombre = strings.TrimSpace(isam.ExtractField(rec, 82+off, 40))
 	}
 	if nombre == "" {
 		return AuditTrailTercero{}
 	}
 
 	nitRepresentante := ""
-	if len(rec) >= 156+off {
-		repRaw := strings.TrimSpace(isam.ExtractField(rec, 143+off, 13))
+	if len(rec) >= 158+off {
+		repRaw := strings.TrimSpace(isam.ExtractField(rec, 142+off, 16))
 		nitRepresentante = strings.TrimLeft(repRaw, "0")
 	}
 
 	nombreRepresentante := ""
-	if len(rec) >= 196+off {
-		nombreRepresentante = strings.TrimSpace(isam.ExtractField(rec, 156+off, 40))
+	if len(rec) >= 198+off {
+		nombreRepresentante = strings.TrimSpace(isam.ExtractField(rec, 158+off, 40))
+	}
+
+	direccion := ""
+	if len(rec) >= 290+off {
+		direccion = strings.TrimSpace(isam.ExtractField(rec, 250+off, 40))
+	}
+
+	email := ""
+	if len(rec) >= 438+off {
+		emailRaw := strings.TrimSpace(isam.ExtractField(rec, 391+off, 47))
+		if strings.Contains(emailRaw, "@") && strings.Contains(emailRaw, ".") {
+			email = emailRaw
+		}
 	}
 
 	return AuditTrailTercero{
@@ -228,6 +258,8 @@ func parseAuditTrailBinary(rec []byte, hash [32]byte) AuditTrailTercero {
 		Nombre:              nombre,
 		NitRepresentante:    nitRepresentante,
 		NombreRepresentante: nombreRepresentante,
+		Direccion:           direccion,
+		Email:               email,
 		Hash:                fmt.Sprintf("%x", hash[:8]),
 	}
 }

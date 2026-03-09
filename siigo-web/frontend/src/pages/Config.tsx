@@ -9,14 +9,42 @@ import FormGroup from '../components/FormGroup';
 import Alert from '../components/Alert';
 import TabBar from '../components/TabBar';
 
-type Tab = 'general' | 'api' | 'telegram' | 'integrations' | 'advanced';
+type Tab = 'general' | 'sync' | 'api' | 'telegram' | 'integrations' | 'advanced';
 
 const TAB_LABELS: Record<Tab, string> = {
   general: 'General',
+  sync: 'Sincronizacion',
   api: 'Servidor & API',
   telegram: 'Telegram',
   integrations: 'Integraciones',
   advanced: 'Avanzado',
+};
+
+const TABLE_LABELS: Record<string, string> = {
+  clients: 'Clientes (Z17)',
+  products: 'Productos (Z04)',
+  movements: 'Movimientos (Z49)',
+  cartera: 'Cartera (Z09)',
+  plan_cuentas: 'Plan de Cuentas (Z03)',
+  activos_fijos: 'Activos Fijos (Z27)',
+  saldos_terceros: 'Saldos Terceros (Z25)',
+  saldos_consolidados: 'Saldos Consolidados (Z28)',
+  documentos: 'Documentos (Z11)',
+  terceros_ampliados: 'Terceros Ampliados (Z08A)',
+  transacciones_detalle: 'Trans. Detalle (Z07T)',
+  periodos_contables: 'Periodos Contables (Z26)',
+  condiciones_pago: 'Condiciones Pago (Z05)',
+  libros_auxiliares: 'Libros Auxiliares (Z07)',
+  codigos_dane: 'Codigos DANE',
+  actividades_ica: 'Actividades ICA',
+  conceptos_pila: 'Conceptos PILA',
+  activos_fijos_detalle: 'Activos Fijos Det. (Z27A)',
+  audit_trail_terceros: 'Audit Trail (Z11N)',
+  clasificacion_cuentas: 'Clasif. Cuentas (Z279CP)',
+  movimientos_inventario: 'Mov. Inventario (Z16)',
+  saldos_inventario: 'Saldos Inventario (Z23)',
+  historial: 'Historial Docs (Z18)',
+  maestros: 'Maestros Config (Z06)',
 };
 
 interface WebhookDef {
@@ -63,6 +91,10 @@ export default function Config() {
   const [whHooks, setWhHooks] = useState<WebhookDef[]>([]);
   const [serverInfo, setServerInfo] = useState<{ lan_urls: string[]; tunnel_url: string } | null>(null);
 
+  // --- Sincronizacion ---
+  const [detectEnabled, setDetectEnabled] = useState<Record<string, boolean>>({});
+  const [sendEnabled, setSendEnabled] = useState<Record<string, boolean>>({});
+
   // --- Avanzado ---
   const [batchSize, setBatchSize] = useState(50);
   const [batchDelay, setBatchDelay] = useState(500);
@@ -101,6 +133,8 @@ export default function Config() {
       });
     }).catch(() => {});
     api.getAllowEditDelete().then(r => setAllowEditDelete(r.enabled === true)).catch(() => {});
+    api.getDetectEnabled().then(setDetectEnabled).catch(() => {});
+    api.getSendEnabled().then(setSendEnabled).catch(() => {});
     api.getWebhookConfig().then(cfg => {
       setWhEnabled(cfg.enabled === true);
       setWhHooks(cfg.hooks || []);
@@ -173,6 +207,73 @@ export default function Config() {
               <div className="config-actions">
                 <button className="btn-save" onClick={handleSaveGeneral}>Guardar</button>
               </div>
+            </>
+          )}
+
+          {/* ===== SINCRONIZACION ===== */}
+          {activeTab === 'sync' && (
+            <>
+              <SectionTitle>Control de Sincronizacion por Tabla</SectionTitle>
+              <p className="form-hint" style={{ marginBottom: 12 }}>
+                Controla que tablas se detectan (ISAM a SQLite) y cuales se envian al servidor (SQLite a Laravel).
+              </p>
+
+              <div className="sync-toggles-grid">
+                <div className="sync-toggles-header">
+                  <span className="sync-col-table">Tabla</span>
+                  <span className="sync-col-toggle">Deteccion (ISAM)</span>
+                  <span className="sync-col-toggle">Envio (Laravel)</span>
+                </div>
+                {Object.keys(TABLE_LABELS).map(table => (
+                  <div key={table} className="sync-toggles-row">
+                    <span className="sync-col-table">{TABLE_LABELS[table]}</span>
+                    <span className="sync-col-toggle">
+                      <Toggle checked={detectEnabled[table] !== false} onChange={async () => {
+                        const v = detectEnabled[table] === false;
+                        const updated = { ...detectEnabled, [table]: v };
+                        setDetectEnabled(updated);
+                        try {
+                          await api.saveDetectEnabled(updated);
+                          showToast('success', `${TABLE_LABELS[table]}: deteccion ${v ? 'activada' : 'desactivada'}`);
+                        } catch { showToast('error', 'Error al guardar'); }
+                      }} />
+                    </span>
+                    <span className="sync-col-toggle">
+                      <Toggle checked={sendEnabled[table] === true} onChange={async () => {
+                        const v = !sendEnabled[table];
+                        const updated = { ...sendEnabled, [table]: v };
+                        setSendEnabled(updated);
+                        try {
+                          await api.saveSendEnabled(updated);
+                          showToast('success', `${TABLE_LABELS[table]}: envio ${v ? 'activado' : 'desactivado'}`);
+                        } catch { showToast('error', 'Error al guardar'); }
+                      }} />
+                    </span>
+                  </div>
+                ))}
+              </div>
+
+              <div className="config-actions" style={{ marginTop: 16 }}>
+                <button className="btn-test" onClick={async () => {
+                  const allDetect: Record<string, boolean> = {};
+                  Object.keys(TABLE_LABELS).forEach(t => allDetect[t] = true);
+                  setDetectEnabled(allDetect);
+                  await api.saveDetectEnabled(allDetect);
+                  showToast('success', 'Todas las detecciones activadas');
+                }}>Activar toda deteccion</button>
+                <button className="btn-test" onClick={async () => {
+                  const allDetect: Record<string, boolean> = {};
+                  Object.keys(TABLE_LABELS).forEach(t => allDetect[t] = false);
+                  setDetectEnabled(allDetect);
+                  await api.saveDetectEnabled(allDetect);
+                  showToast('success', 'Todas las detecciones desactivadas');
+                }}>Desactivar toda deteccion</button>
+              </div>
+
+              <Alert variant="info" style={{ marginTop: 12 }}>
+                <strong>Deteccion:</strong> Lee archivos ISAM cada {interval}s y actualiza SQLite local.<br />
+                <strong>Envio:</strong> Envia registros pendientes a Laravel cada {sendInterval}s. Solo funciona si la deteccion tambien esta activa.
+              </Alert>
             </>
           )}
 

@@ -385,8 +385,14 @@ var apiPathToModule = map[string]string{
 	"/api/saldos-terceros":      "saldos_terceros",
 	"/api/saldos-consolidados":  "saldos_consolidados",
 	"/api/documentos":           "documentos",
-	"/api/terceros-ampliados":   "terceros_ampliados",
-	"/api/field-mappings":       "field-mappings",
+	"/api/terceros-ampliados":      "terceros_ampliados",
+	"/api/movimientos-inventario":  "movimientos_inventario",
+	"/api/saldos-inventario":       "saldos_inventario",
+	"/api/activos-fijos-detalle":   "activos_fijos_detalle",
+	"/api/audit-trail-terceros":    "audit_trail_terceros",
+	"/api/historial":               "historial",
+	"/api/maestros":                "maestros",
+	"/api/field-mappings":          "field-mappings",
 	"/api/error-summary":        "errors",
 	"/api/logs":                 "logs",
 	"/api/export-logs":          "logs",
@@ -573,6 +579,12 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/saldos-consolidados", s.permMiddleware(s.handleSaldosConsolidados))
 	mux.HandleFunc("/api/documentos", s.permMiddleware(s.handleDocumentos))
 	mux.HandleFunc("/api/terceros-ampliados", s.permMiddleware(s.handleTercerosAmpliados))
+	mux.HandleFunc("/api/movimientos-inventario", s.permMiddleware(s.handleMovimientosInventario))
+	mux.HandleFunc("/api/saldos-inventario", s.permMiddleware(s.handleSaldosInventario))
+	mux.HandleFunc("/api/activos-fijos-detalle", s.permMiddleware(s.handleActivosFijosDetalle))
+	mux.HandleFunc("/api/audit-trail-terceros", s.permMiddleware(s.handleAuditTrailTerceros))
+	mux.HandleFunc("/api/historial", s.authMiddleware(s.handleGenericTable("historial")))
+	mux.HandleFunc("/api/maestros", s.authMiddleware(s.handleGenericTable("maestros")))
 	mux.HandleFunc("/api/sync-history", s.authMiddleware(s.handleSyncHistory))
 	mux.HandleFunc("/api/logs", s.permMiddleware(s.handleLogs))
 	mux.HandleFunc("/api/sync-now", s.authMiddleware(s.handleSyncNow))
@@ -587,6 +599,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/refresh-cache", s.authMiddleware(s.handleRefreshCache))
 	mux.HandleFunc("/api/field-mappings", s.permMiddleware(s.handleFieldMappings))
 	mux.HandleFunc("/api/send-enabled", s.authMiddleware(s.handleSendEnabled))
+	mux.HandleFunc("/api/detect-enabled", s.authMiddleware(s.handleDetectEnabled))
 	mux.HandleFunc("/api/error-summary", s.permMiddleware(s.handleErrorSummary))
 	mux.HandleFunc("/api/export-history", s.authMiddleware(s.handleExportHistory))
 	mux.HandleFunc("/api/export-logs", s.permMiddleware(s.handleExportLogs))
@@ -618,6 +631,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// Swagger docs
 	mux.HandleFunc("/api/v1/docs", handleSwaggerUI)
 	mux.HandleFunc("/api/v1/swagger.json", handleSwaggerJSON)
+	mux.HandleFunc("/api/v1/postman", s.handlePostmanCollection)
 
 	// Public API v1 (JWT auth)
 	mux.HandleFunc("/api/v1/auth", s.handleV1Auth)
@@ -738,32 +752,48 @@ func (s *Server) doDetectCycle() {
 
 	s.db.AddLog("info", "DETECT", "--- Ciclo deteccion iniciado ---")
 
-	s.diffClientes()
-	s.diffProductos()
-	s.diffMovimientos()
-	s.diffCartera()
-	s.diffPlanCuentas()
-	s.diffActivosFijos()
-	s.diffSaldosTerceros()
-	s.diffSaldosConsolidados()
-	s.diffDocumentos()
-	s.diffTercerosAmpliados()
-	s.diffTransaccionesDetalle()
-	s.diffPeriodosContables()
-	s.diffCondicionesPago()
-	s.diffLibrosAuxiliares()
-	s.diffCodigosDane()
-	s.diffActividadesICA()
-	s.diffConceptosPILA()
-	s.diffActivosFijosDetalle()
-	s.diffAuditTrailTerceros()
-	s.diffClasificacionCuentas()
+	// Each diff only runs if detection is enabled for that table
+	type detectEntry struct {
+		table string
+		fn    func()
+	}
+	detects := []detectEntry{
+		{"clients", s.diffClientes},
+		{"products", s.diffProductos},
+		{"movements", s.diffMovimientos},
+		{"cartera", s.diffCartera},
+		{"plan_cuentas", s.diffPlanCuentas},
+		{"activos_fijos", s.diffActivosFijos},
+		{"saldos_terceros", s.diffSaldosTerceros},
+		{"saldos_consolidados", s.diffSaldosConsolidados},
+		{"documentos", s.diffDocumentos},
+		{"terceros_ampliados", s.diffTercerosAmpliados},
+		{"transacciones_detalle", s.diffTransaccionesDetalle},
+		{"periodos_contables", s.diffPeriodosContables},
+		{"condiciones_pago", s.diffCondicionesPago},
+		{"libros_auxiliares", s.diffLibrosAuxiliares},
+		{"codigos_dane", s.diffCodigosDane},
+		{"actividades_ica", s.diffActividadesICA},
+		{"conceptos_pila", s.diffConceptosPILA},
+		{"activos_fijos_detalle", s.diffActivosFijosDetalle},
+		{"audit_trail_terceros", s.diffAuditTrailTerceros},
+		{"clasificacion_cuentas", s.diffClasificacionCuentas},
+		{"movimientos_inventario", s.diffMovimientosInventario},
+		{"saldos_inventario", s.diffSaldosInventario},
+		{"historial", s.diffHistorial},
+		{"maestros", s.diffMaestros},
+	}
+	for _, d := range detects {
+		if s.cfg.IsDetectEnabled(d.table) {
+			d.fn()
+		}
+	}
 
 	s.db.AddLog("info", "DETECT", "--- Ciclo deteccion completado ---")
 
 	// Record sync stats for dashboard charts
 	stats := s.db.GetStats()
-	for _, table := range []string{"clients", "products", "movements", "cartera", "plan_cuentas", "activos_fijos", "saldos_terceros", "saldos_consolidados", "documentos", "terceros_ampliados", "transacciones_detalle", "periodos_contables", "condiciones_pago", "libros_auxiliares", "codigos_dane", "actividades_ica", "conceptos_pila", "activos_fijos_detalle", "audit_trail_terceros", "clasificacion_cuentas"} {
+	for _, table := range config.AllSyncTables() {
 		total, _ := stats[table+"_total"].(int)
 		pending, _ := stats[table+"_pending"].(int)
 		synced, _ := stats[table+"_synced"].(int)
@@ -787,7 +817,7 @@ func (s *Server) doSendCycle() {
 
 	// Skip entire cycle if no table has sending enabled
 	anyEnabled := false
-	tables := []string{"clients", "products", "movements", "cartera"}
+	tables := config.AllSyncTables()
 	for _, t := range tables {
 		if s.cfg.IsSendEnabled(t) {
 			anyEnabled = true
@@ -893,6 +923,10 @@ var setupTablesList = []setupTableDef{
 	{"activos_fijos_detalle", "Activos Fijos Detalle (Z27)"},
 	{"audit_trail_terceros", "Audit Trail Terceros (Z11N)"},
 	{"clasificacion_cuentas", "Clasificacion Cuentas (Z279CP)"},
+	{"movimientos_inventario", "Movimientos Inventario (Z16)"},
+	{"saldos_inventario", "Saldos Inventario (Z15)"},
+	{"historial", "Historial Documentos (Z18)"},
+	{"maestros", "Maestros Config (Z06)"},
 }
 
 func (s *Server) getDiffFunc(table string) func() {
@@ -937,6 +971,14 @@ func (s *Server) getDiffFunc(table string) func() {
 		return s.diffAuditTrailTerceros
 	case "clasificacion_cuentas":
 		return s.diffClasificacionCuentas
+	case "movimientos_inventario":
+		return s.diffMovimientosInventario
+	case "saldos_inventario":
+		return s.diffSaldosInventario
+	case "historial":
+		return s.diffHistorial
+	case "maestros":
+		return s.diffMaestros
 	}
 	return nil
 }
@@ -1619,7 +1661,7 @@ func (s *Server) diffAuditTrailTerceros() {
 			key = at.Hash
 		}
 		currentKeys[key] = true
-		action := s.db.UpsertAuditTrailTercero(key, at.FechaCambio, at.NitTercero, at.Timestamp, at.Usuario, at.FechaPeriodo, at.TipoDoc, at.Nombre, at.NitRepresentante, at.NombreRepresentante, at.Hash)
+		action := s.db.UpsertAuditTrailTercero(key, at.FechaCambio, at.NitTercero, at.Timestamp, at.Usuario, at.FechaPeriodo, at.TipoDoc, at.Nombre, at.NitRepresentante, at.NombreRepresentante, at.Direccion, at.Email, at.Hash)
 		switch action {
 		case "add":
 			adds++
@@ -1662,6 +1704,123 @@ func (s *Server) diffClasificacionCuentas() {
 	s.db.AddLog("info", source, fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(items)))
 }
 
+func (s *Server) diffMovimientosInventario() {
+	items, year, err := parsers.ParseMovimientosInventario(s.cfg.Siigo.DataPath)
+	if err != nil {
+		s.db.AddLog("error", "Z16", "Error parseando movimientos inventario: "+err.Error())
+		return
+	}
+
+	adds, edits := 0, 0
+	currentKeys := make(map[string]bool, len(items))
+
+	for _, m := range items {
+		if m.RecordKey == "" {
+			continue
+		}
+		currentKeys[m.RecordKey] = true
+		action := s.db.UpsertMovimientoInventario(m.RecordKey, m.Empresa, m.Grupo, m.CodigoProducto, m.TipoComprobante, m.CodigoComp, m.Secuencia, m.TipoDoc, m.Fecha, m.Cantidad, m.Valor, m.TipoMov, m.Hash)
+		switch action {
+		case "add":
+			adds++
+		case "edit":
+			edits++
+		}
+	}
+
+	deletes := s.db.MarkDeletedMovimientosInventario(currentKeys)
+	source := "Z16" + year
+	s.db.AddLog("info", source, fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(items)))
+}
+
+func (s *Server) diffSaldosInventario() {
+	items, year, err := parsers.ParseSaldosInventario(s.cfg.Siigo.DataPath)
+	if err != nil {
+		s.db.AddLog("error", "Z15", "Error parseando saldos inventario: "+err.Error())
+		return
+	}
+
+	adds, edits := 0, 0
+	currentKeys := make(map[string]bool, len(items))
+
+	for _, si := range items {
+		if si.RecordKey == "" {
+			continue
+		}
+		currentKeys[si.RecordKey] = true
+		action := s.db.UpsertSaldoInventario(si.RecordKey, si.Empresa, si.Grupo, si.CodigoProducto, si.Hash, si.SaldoInicial, si.Entradas, si.Salidas, si.SaldoFinal)
+		switch action {
+		case "add":
+			adds++
+		case "edit":
+			edits++
+		}
+	}
+
+	deletes := s.db.MarkDeletedSaldosInventario(currentKeys)
+	source := "Z15" + year
+	s.db.AddLog("info", source, fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(items)))
+}
+
+func (s *Server) diffHistorial() {
+	items, year, err := parsers.ParseHistorial(s.cfg.Siigo.DataPath)
+	if err != nil {
+		s.db.AddLog("error", "Z18", "Error parseando historial: "+err.Error())
+		return
+	}
+
+	adds, edits := 0, 0
+	currentKeys := make(map[string]bool, len(items))
+
+	for _, h := range items {
+		key := h.Empresa + "-" + h.SubTipo + "-" + h.Fecha + "-" + h.NitOrigen
+		if key == "---" {
+			continue
+		}
+		currentKeys[key] = true
+		action := s.db.UpsertHistorial(key, h.TipoRegistro, h.SubTipo, h.Empresa, h.Fecha, h.NombreOrigen, h.NombreDestin, h.NitOrigen, h.Hash)
+		switch action {
+		case "add":
+			adds++
+		case "edit":
+			edits++
+		}
+	}
+
+	deletes := s.db.MarkDeletedHistorial(currentKeys)
+	source := "Z18" + year
+	s.db.AddLog("info", source, fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(items)))
+}
+
+func (s *Server) diffMaestros() {
+	items, err := parsers.ParseMaestros(s.cfg.Siigo.DataPath)
+	if err != nil {
+		s.db.AddLog("error", "Z06", "Error parseando maestros: "+err.Error())
+		return
+	}
+
+	adds, edits := 0, 0
+	currentKeys := make(map[string]bool, len(items))
+
+	for _, m := range items {
+		key := m.Tipo + "-" + m.Codigo
+		if key == "-" {
+			continue
+		}
+		currentKeys[key] = true
+		action := s.db.UpsertMaestro(key, m.Tipo, m.Codigo, m.Nombre, m.Responsable, m.Direccion, m.Email, m.Hash)
+		switch action {
+		case "add":
+			adds++
+		case "edit":
+			edits++
+		}
+	}
+
+	deletes := s.db.MarkDeletedMaestros(currentKeys)
+	s.db.AddLog("info", "Z06", fmt.Sprintf("Diff: %d nuevos, %d editados, %d eliminados (de %d)", adds, edits, deletes, len(items)))
+}
+
 // ==================== SEND PENDING ====================
 
 func (s *Server) sendPending(tableName string) (int, int) {
@@ -1679,6 +1838,17 @@ func (s *Server) sendPending(tableName string) (int, int) {
 		pending = s.db.GetPendingMovements()
 	case "cartera":
 		pending = s.db.GetPendingCartera()
+	case "movimientos_inventario":
+		pending = s.db.GetPendingMovimientosInventario()
+	case "saldos_inventario":
+		pending = s.db.GetPendingSaldosInventario()
+	case "activos_fijos_detalle":
+		pending = s.db.GetPendingActivosFijosDetalle()
+	case "audit_trail_terceros":
+		pending = s.db.GetPendingAuditTrailTerceros()
+	default:
+		// Generic fallback for all other tables
+		pending = s.db.GetPendingGeneric(tableName)
 	}
 
 	if len(pending) == 0 {
@@ -1738,7 +1908,7 @@ func (s *Server) retryFailedRecords() {
 		baseDelay = 5 * time.Second
 	}
 
-	tables := []string{"clients", "products", "movements", "cartera"}
+	tables := []string{"clients", "products", "movements", "cartera", "movimientos_inventario", "saldos_inventario", "activos_fijos_detalle", "audit_trail_terceros"}
 	totalRequeued := 0
 	maxRetryCount := 0
 
@@ -1817,6 +1987,14 @@ func (s *Server) refreshCache(which string) {
 			}
 		}
 		cachedCartera = all
+	case "movimientos_inventario":
+		s.diffMovimientosInventario()
+	case "saldos_inventario":
+		s.diffSaldosInventario()
+	case "activos_fijos_detalle":
+		s.diffActivosFijosDetalle()
+	case "audit_trail_terceros":
+		s.diffAuditTrailTerceros()
 	}
 }
 
@@ -2141,6 +2319,50 @@ func (s *Server) handleTercerosAmpliados(w http.ResponseWriter, r *http.Request)
 	jsonResponse(w, map[string]interface{}{"data": records, "total": total})
 }
 
+func (s *Server) handleMovimientosInventario(w http.ResponseWriter, r *http.Request) {
+	page := getQueryInt(r, "page", 1)
+	search := r.URL.Query().Get("search")
+	limit := 50
+	offset := (page - 1) * limit
+	records, total := s.db.GetMovimientosInventario(limit, offset, search)
+	jsonResponse(w, map[string]interface{}{"data": records, "total": total})
+}
+
+func (s *Server) handleSaldosInventario(w http.ResponseWriter, r *http.Request) {
+	page := getQueryInt(r, "page", 1)
+	search := r.URL.Query().Get("search")
+	limit := 50
+	offset := (page - 1) * limit
+	records, total := s.db.GetSaldosInventario(limit, offset, search)
+	jsonResponse(w, map[string]interface{}{"data": records, "total": total})
+}
+
+func (s *Server) handleActivosFijosDetalle(w http.ResponseWriter, r *http.Request) {
+	page := getQueryInt(r, "page", 1)
+	search := r.URL.Query().Get("search")
+	records, total, _ := s.db.GetActivosFijosDetalle(page, search)
+	jsonResponse(w, map[string]interface{}{"data": records, "total": total})
+}
+
+func (s *Server) handleAuditTrailTerceros(w http.ResponseWriter, r *http.Request) {
+	page := getQueryInt(r, "page", 1)
+	search := r.URL.Query().Get("search")
+	records, total, _ := s.db.GetAuditTrailTerceros(page, search)
+	jsonResponse(w, map[string]interface{}{"data": records, "total": total})
+}
+
+// handleGenericTable returns a handler that queries any table with pagination and search.
+func (s *Server) handleGenericTable(tableName string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		page := getQueryInt(r, "page", 1)
+		search := r.URL.Query().Get("search")
+		limit := 50
+		offset := (page - 1) * limit
+		records, total := s.db.GetGenericTable(tableName, limit, offset, search)
+		jsonResponse(w, map[string]interface{}{"data": records, "total": total})
+	}
+}
+
 func (s *Server) handleSyncHistory(w http.ResponseWriter, r *http.Request) {
 	table := r.URL.Query().Get("table")
 	page := getQueryInt(r, "page", 1)
@@ -2229,6 +2451,7 @@ func (s *Server) handleSyncStatus(w http.ResponseWriter, r *http.Request) {
 		"detect_interval":  s.cfg.Sync.IntervalSeconds,
 		"send_interval":    s.cfg.Sync.SendIntervalSeconds,
 		"send_enabled":     s.cfg.SendEnabled,
+		"detect_enabled":   s.cfg.DetectEnabled,
 	})
 }
 
@@ -2364,6 +2587,27 @@ func (s *Server) handleSendEnabled(w http.ResponseWriter, r *http.Request) {
 
 	s.cfg.EnsureFieldMappings() // also ensures SendEnabled
 	jsonResponse(w, s.cfg.SendEnabled)
+}
+
+func (s *Server) handleDetectEnabled(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "POST" {
+		var body map[string]bool
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			jsonError(w, "JSON invalido: "+err.Error(), 400)
+			return
+		}
+		s.cfg.DetectEnabled = body
+		if err := s.cfg.Save("config.json"); err != nil {
+			jsonError(w, err.Error(), 500)
+			return
+		}
+		s.db.AddLog("info", "CONFIG", "Deteccion por modulo actualizado")
+		jsonResponse(w, map[string]string{"status": "ok"})
+		return
+	}
+
+	s.cfg.EnsureFieldMappings()
+	jsonResponse(w, s.cfg.DetectEnabled)
 }
 
 func (s *Server) handleErrorSummary(w http.ResponseWriter, r *http.Request) {
@@ -2793,7 +3037,11 @@ var odataTables = map[string]struct {
 	"conceptos_pila":        {EntityType: "ConceptoPILA", KeyProp: "record_key"},
 	"activos_fijos_detalle": {EntityType: "ActivoFijoDetalle", KeyProp: "record_key"},
 	"audit_trail_terceros":  {EntityType: "AuditTrailTercero", KeyProp: "record_key"},
-	"clasificacion_cuentas": {EntityType: "ClasificacionCuenta", KeyProp: "codigo_cuenta"},
+	"clasificacion_cuentas":    {EntityType: "ClasificacionCuenta", KeyProp: "codigo_cuenta"},
+	"movimientos_inventario":   {EntityType: "MovimientoInventario", KeyProp: "record_key"},
+	"saldos_inventario":        {EntityType: "SaldoInventario", KeyProp: "record_key"},
+	"historial":                {EntityType: "Historial", KeyProp: "record_key"},
+	"maestros":                 {EntityType: "Maestro", KeyProp: "record_key"},
 }
 
 // OData ordered table list (for consistent output, v1 API, and OData routing)
@@ -2804,6 +3052,8 @@ var odataTableOrder = []string{
 	"periodos_contables", "condiciones_pago", "libros_auxiliares",
 	"codigos_dane", "actividades_ica", "conceptos_pila",
 	"activos_fijos_detalle", "audit_trail_terceros", "clasificacion_cuentas",
+	"movimientos_inventario", "saldos_inventario",
+	"historial", "maestros",
 }
 
 // OData relationships for Power BI auto-detection
@@ -2836,6 +3086,9 @@ var odataRelations = []odataRelation{
 	{"activos_fijos_detalle", "nit_responsable", "clients", "nit", "Responsable"},
 	{"audit_trail_terceros", "nit_tercero", "clients", "nit", "Client"},
 	{"clasificacion_cuentas", "codigo_cuenta", "plan_cuentas", "codigo_cuenta", "CuentaContable"},
+	// Inventory tables
+	{"movimientos_inventario", "codigo_producto", "products", "code", "Producto"},
+	{"saldos_inventario", "codigo_producto", "products", "code", "Producto"},
 }
 
 func (s *Server) handleODataServiceDoc(w http.ResponseWriter, r *http.Request) {
@@ -3817,6 +4070,198 @@ func truncateStr(s string, max int) string {
 func handleSwaggerJSON(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	http.ServeFile(w, r, "swagger.json")
+}
+
+// handlePostmanCollection generates a Postman v2.1 collection dynamically from the current routes.
+func (s *Server) handlePostmanCollection(w http.ResponseWriter, r *http.Request) {
+	host := r.Host
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	if fwd := r.Header.Get("X-Forwarded-Proto"); fwd != "" {
+		scheme = fwd
+	}
+	baseURL := scheme + "://" + host
+
+	// Table metadata for descriptions
+	tableDescriptions := map[string]string{
+		"clients": "Clientes / Terceros (Z17)", "products": "Productos / Inventario (Z04)",
+		"movements": "Movimientos contables (Z49)", "cartera": "Cartera / CxC (Z09)",
+		"plan_cuentas": "Plan de Cuentas PUC (Z03)", "activos_fijos": "Activos Fijos (Z27)",
+		"saldos_terceros": "Saldos por Tercero BCD (Z25)", "saldos_consolidados": "Saldos Consolidados BCD (Z28)",
+		"documentos": "Documentos / Facturas (Z11)", "terceros_ampliados": "Terceros Ampliados (Z08A)",
+		"transacciones_detalle": "Transacciones Detalle (Z07T)", "periodos_contables": "Periodos Contables (Z26)",
+		"condiciones_pago": "Condiciones de Pago (Z05)", "libros_auxiliares": "Libros Auxiliares BCD (Z07)",
+		"codigos_dane": "Codigos DANE Municipios", "actividades_ica": "Actividades ICA",
+		"conceptos_pila": "Conceptos PILA", "activos_fijos_detalle": "Activos Fijos Detalle (Z27A)",
+		"audit_trail_terceros": "Audit Trail Terceros (Z11N)", "clasificacion_cuentas": "Clasificacion Cuentas (Z279CP)",
+		"movimientos_inventario": "Movimientos Inventario (Z16)", "saldos_inventario": "Saldos Inventario (Z23)",
+		"historial": "Historial Documentos (Z18)", "maestros": "Maestros Config (Z06)",
+	}
+
+	type pmKV struct {
+		Key   string `json:"key"`
+		Value string `json:"value"`
+		Type  string `json:"type,omitempty"`
+	}
+	type pmURL struct {
+		Raw   string   `json:"raw"`
+		Host  []string `json:"host"`
+		Path  []string `json:"path"`
+		Query []pmKV   `json:"query,omitempty"`
+	}
+	type pmBody struct {
+		Mode string `json:"mode"`
+		Raw  string `json:"raw"`
+		Opts map[string]interface{} `json:"options,omitempty"`
+	}
+	type pmReq struct {
+		Method string `json:"method"`
+		Header []pmKV `json:"header"`
+		URL    pmURL  `json:"url"`
+		Body   *pmBody `json:"body,omitempty"`
+	}
+	type pmItem struct {
+		Name    string   `json:"name"`
+		Request *pmReq   `json:"request,omitempty"`
+		Item    []pmItem `json:"item,omitempty"`
+	}
+	type pmCollection struct {
+		Info struct {
+			Name   string `json:"name"`
+			Schema string `json:"schema"`
+			Desc   string `json:"description"`
+		} `json:"info"`
+		Variable []pmKV   `json:"variable"`
+		Item     []pmItem `json:"item"`
+	}
+
+	makeURL := func(path string, query ...pmKV) pmURL {
+		return pmURL{
+			Raw:   "{{base_url}}" + path,
+			Host:  []string{"{{base_url}}"},
+			Path:  strings.Split(strings.TrimPrefix(path, "/"), "/"),
+			Query: query,
+		}
+	}
+	authHeader := []pmKV{
+		{Key: "Authorization", Value: "Bearer {{token}}", Type: "text"},
+		{Key: "Content-Type", Value: "application/json", Type: "text"},
+	}
+	jsonOpts := map[string]interface{}{"raw": map[string]string{"language": "json"}}
+
+	// --- Auth folder ---
+	authFolder := pmItem{Name: "Auth", Item: []pmItem{
+		{Name: "Login (API Key)", Request: &pmReq{Method: "POST", Header: authHeader, URL: makeURL("/api/v1/auth"),
+			Body: &pmBody{Mode: "raw", Raw: `{"api_key": "tu-clave-secreta"}`, Opts: jsonOpts}}},
+		{Name: "Login (Credentials)", Request: &pmReq{Method: "POST", Header: authHeader, URL: makeURL("/api/v1/auth"),
+			Body: &pmBody{Mode: "raw", Raw: `{"username": "admin", "password": "tu-password"}`, Opts: jsonOpts}}},
+		{Name: "Dashboard Login", Request: &pmReq{Method: "POST", Header: authHeader, URL: makeURL("/api/login"),
+			Body: &pmBody{Mode: "raw", Raw: `{"username": "admin", "password": "tu-password"}`, Opts: jsonOpts}}},
+	}}
+
+	// --- Stats folder ---
+	statsFolder := pmItem{Name: "Stats & Status", Item: []pmItem{
+		{Name: "Stats Summary", Request: &pmReq{Method: "GET", Header: authHeader, URL: makeURL("/api/v1/stats")}},
+		{Name: "Sync Status", Request: &pmReq{Method: "GET", Header: authHeader, URL: makeURL("/api/sync-status")}},
+		{Name: "Server Info", Request: &pmReq{Method: "GET", Header: authHeader, URL: makeURL("/api/server-info")}},
+		{Name: "ISAM Info", Request: &pmReq{Method: "GET", Header: authHeader, URL: makeURL("/api/isam-info")}},
+		{Name: "EXTFH Status", Request: &pmReq{Method: "GET", Header: authHeader, URL: makeURL("/api/extfh-status")}},
+	}}
+
+	// --- API v1 Data folders (one per table) ---
+	var dataItems []pmItem
+	for _, table := range odataTableOrder {
+		desc := tableDescriptions[table]
+		if desc == "" {
+			desc = table
+		}
+		folder := pmItem{Name: desc, Item: []pmItem{
+			{Name: "List " + table, Request: &pmReq{Method: "GET", Header: authHeader,
+				URL: makeURL("/api/v1/"+table, pmKV{Key: "page", Value: "1"}, pmKV{Key: "search", Value: ""})}},
+			{Name: "Detail " + table, Request: &pmReq{Method: "GET", Header: authHeader,
+				URL: makeURL("/api/v1/" + table + "/EXAMPLE_KEY")}},
+		}}
+		dataItems = append(dataItems, folder)
+	}
+	dataFolder := pmItem{Name: "API v1 - Data Tables (24)", Item: dataItems}
+
+	// --- OData folder ---
+	odataFolder := pmItem{Name: "OData v4 (Power BI)", Item: []pmItem{
+		{Name: "Service Document", Request: &pmReq{Method: "GET", Header: authHeader, URL: makeURL("/odata")}},
+		{Name: "Metadata (CSDL)", Request: &pmReq{Method: "GET", Header: authHeader, URL: makeURL("/odata/$metadata")}},
+		{Name: "Query clients (example)", Request: &pmReq{Method: "GET", Header: authHeader,
+			URL: makeURL("/odata/clients", pmKV{Key: "$top", Value: "10"}, pmKV{Key: "$count", Value: "true"})}},
+		{Name: "Filter example", Request: &pmReq{Method: "GET", Header: authHeader,
+			URL: makeURL("/odata/clients", pmKV{Key: "$filter", Value: "contains(nombre,'empresa')"}, pmKV{Key: "$top", Value: "50"})}},
+		{Name: "Entity by key", Request: &pmReq{Method: "GET", Header: authHeader,
+			URL: makeURL("/odata/clients('900123456')")}},
+		{Name: "Count only", Request: &pmReq{Method: "GET", Header: authHeader,
+			URL: makeURL("/odata/clients/$count")}},
+	}}
+
+	// --- Sync Control folder ---
+	syncFolder := pmItem{Name: "Sync Control", Item: []pmItem{
+		{Name: "Sync Now (trigger detect)", Request: &pmReq{Method: "POST", Header: authHeader, URL: makeURL("/api/sync-now")}},
+		{Name: "Pause Sync", Request: &pmReq{Method: "POST", Header: authHeader, URL: makeURL("/api/pause")}},
+		{Name: "Resume Sync", Request: &pmReq{Method: "POST", Header: authHeader, URL: makeURL("/api/resume")}},
+		{Name: "Resume Send (circuit breaker)", Request: &pmReq{Method: "POST", Header: authHeader, URL: makeURL("/api/send-resume")}},
+		{Name: "Retry Errors", Request: &pmReq{Method: "POST", Header: authHeader, URL: makeURL("/api/retry-errors"),
+			Body: &pmBody{Mode: "raw", Raw: `{"table": "clients"}`, Opts: jsonOpts}}},
+		{Name: "Get Send Enabled", Request: &pmReq{Method: "GET", Header: authHeader, URL: makeURL("/api/send-enabled")}},
+		{Name: "Set Send Enabled", Request: &pmReq{Method: "POST", Header: authHeader, URL: makeURL("/api/send-enabled"),
+			Body: &pmBody{Mode: "raw", Raw: `{"clients": true, "products": false}`, Opts: jsonOpts}}},
+		{Name: "Get Detect Enabled", Request: &pmReq{Method: "GET", Header: authHeader, URL: makeURL("/api/detect-enabled")}},
+		{Name: "Set Detect Enabled", Request: &pmReq{Method: "POST", Header: authHeader, URL: makeURL("/api/detect-enabled"),
+			Body: &pmBody{Mode: "raw", Raw: `{"clients": true, "historial": false}`, Opts: jsonOpts}}},
+	}}
+
+	// --- Config folder ---
+	configFolder := pmItem{Name: "Configuration", Item: []pmItem{
+		{Name: "Get Config", Request: &pmReq{Method: "GET", Header: authHeader, URL: makeURL("/api/config")}},
+		{Name: "Save Config", Request: &pmReq{Method: "POST", Header: authHeader, URL: makeURL("/api/config"),
+			Body: &pmBody{Mode: "raw", Raw: `{"data_path": "C:\\\\DEMOS01\\\\", "interval": 60}`, Opts: jsonOpts}}},
+		{Name: "Get Field Mappings", Request: &pmReq{Method: "GET", Header: authHeader, URL: makeURL("/api/field-mappings")}},
+		{Name: "Test Connection", Request: &pmReq{Method: "POST", Header: authHeader, URL: makeURL("/api/test-connection")}},
+		{Name: "Get Telegram Config", Request: &pmReq{Method: "GET", Header: authHeader, URL: makeURL("/api/telegram-config")}},
+		{Name: "Get Public API Config", Request: &pmReq{Method: "GET", Header: authHeader, URL: makeURL("/api/public-api-config")}},
+		{Name: "Allow Edit/Delete", Request: &pmReq{Method: "GET", Header: authHeader, URL: makeURL("/api/allow-edit-delete")}},
+	}}
+
+	// --- Data Management folder ---
+	mgmtFolder := pmItem{Name: "Data Management", Item: []pmItem{
+		{Name: "SQL Query", Request: &pmReq{Method: "POST", Header: authHeader, URL: makeURL("/api/query"),
+			Body: &pmBody{Mode: "raw", Raw: `{"query": "SELECT * FROM clients LIMIT 10", "limit": 10, "offset": 0}`, Opts: jsonOpts}}},
+		{Name: "Error Summary", Request: &pmReq{Method: "GET", Header: authHeader, URL: makeURL("/api/error-summary")}},
+		{Name: "Logs", Request: &pmReq{Method: "GET", Header: authHeader,
+			URL: makeURL("/api/logs", pmKV{Key: "page", Value: "1"})}},
+		{Name: "Sync History", Request: &pmReq{Method: "GET", Header: authHeader,
+			URL: makeURL("/api/sync-history", pmKV{Key: "table", Value: "clients"}, pmKV{Key: "page", Value: "1"})}},
+		{Name: "Clear Database", Request: &pmReq{Method: "POST", Header: authHeader, URL: makeURL("/api/clear-database")}},
+		{Name: "Backup URL", Request: &pmReq{Method: "GET", Header: authHeader, URL: makeURL("/api/backup")}},
+	}}
+
+	// --- Users folder ---
+	usersFolder := pmItem{Name: "User Management", Item: []pmItem{
+		{Name: "List Users", Request: &pmReq{Method: "GET", Header: authHeader, URL: makeURL("/api/users")}},
+		{Name: "Create User", Request: &pmReq{Method: "POST", Header: authHeader, URL: makeURL("/api/users"),
+			Body: &pmBody{Mode: "raw", Raw: `{"username": "nuevo", "password": "pass123", "role": "editor", "permissions": ["dashboard","clients","products"]}`, Opts: jsonOpts}}},
+	}}
+
+	col := pmCollection{}
+	col.Info.Name = "Siigo Sync API"
+	col.Info.Schema = "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	col.Info.Desc = fmt.Sprintf("Coleccion generada automaticamente desde Siigo Sync Middleware.\n\nBase URL: %s\n\n24 tablas de datos de Siigo Pyme con sync bidireccional, OData v4 para Power BI, y API REST completa.", baseURL)
+	col.Variable = []pmKV{
+		{Key: "base_url", Value: baseURL, Type: "string"},
+		{Key: "token", Value: "", Type: "string"},
+	}
+	col.Item = []pmItem{authFolder, statsFolder, dataFolder, odataFolder, syncFolder, configFolder, mgmtFolder, usersFolder}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Disposition", "attachment; filename=siigo-sync-postman.json")
+	json.NewEncoder(w).Encode(col)
 }
 
 func handleSwaggerUI(w http.ResponseWriter, r *http.Request) {

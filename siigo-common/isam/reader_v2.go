@@ -25,16 +25,17 @@ import (
 // ---------------------------------------------------------------------------
 
 // Record type codes (top 4 bits of the 2-byte record header)
+// Per Micro Focus spec: 0=null, 1=system, 2=pointer, 3=deleted, 4=normal, ...
 const (
-	RecTypeNull     = 0x0 // Null/padding
-	RecTypeSystem   = 0x1 // Free space (variable indexed)
-	RecTypeDeleted  = 0x2 // Deleted record (slot available for reuse)
-	RecTypeHeader   = 0x3 // File/index header record
-	RecTypeNormal   = 0x4 // Normal user data record
-	RecTypeReduced  = 0x5 // Reduced record (indexed)
-	RecTypePointer  = 0x6 // Pointer record (indexed)
-	RecTypeRefData  = 0x7 // Data record referenced by pointer
-	RecTypeRedRef   = 0x8 // Reduced record referenced by pointer
+	RecTypeNull    = 0x0 // Null/padding
+	RecTypeSystem  = 0x1 // Free space (variable indexed)
+	RecTypePointer = 0x2 // Pointer record (indexed)
+	RecTypeDeleted = 0x3 // Deleted record (slot available for reuse)
+	RecTypeNormal  = 0x4 // Normal user data record
+	RecTypeReduced = 0x5 // Reduced record (indexed)
+	RecTypePtrRef  = 0x6 // Pointer record referenced by another pointer
+	RecTypeRefData = 0x7 // Data record referenced by pointer
+	RecTypeRedRef  = 0x8 // Reduced record referenced by pointer
 )
 
 // V2Header contains metadata parsed from the 128-byte ISAM file header
@@ -68,9 +69,10 @@ type V2Header struct {
 	LogicalEnd uint64
 
 	// Derived
-	HeaderSize    int // always 128
-	Alignment     int // 8 for IDXFORMAT 8, 4 for 3/4, 1 otherwise
-	RecHeaderSize int // 2 or 4 bytes
+	HeaderSize    int  // 128 for MF stream, 0x800 for indexed marker
+	Alignment     int  // 8 for IDXFORMAT 8, 4 for 3/4, 1 otherwise
+	RecHeaderSize int  // 2 or 4 bytes
+	IsIndexed     bool // true for 0x33FE indexed marker format
 }
 
 // parseV2Header parses the 128-byte ISAM file header
@@ -93,8 +95,9 @@ func parseV2Header(data []byte) (*V2Header, error) {
 		// Long-record format (records ≥ 4096)
 		h.LongRecords = true
 	case data[0] == 0x33 && data[1] == 0xFE:
-		// MF Indexed format — most Siigo files
+		// MF Indexed marker format — data zone starts at 0x800
 		h.LongRecords = false
+		h.IsIndexed = true
 	case (data[0] & 0xF0) == 0x30:
 		// Variant MF format (e.g., Z06 uses 0x30 0x00 0x03 0xFC)
 		// Check if MaxRecLen would require long records
@@ -109,38 +112,56 @@ func parseV2Header(data []byte) (*V2Header, error) {
 		h.RecHeaderSize = 4
 	}
 
-	// Sequence and integrity
-	h.DBSequence = binary.BigEndian.Uint16(data[4:6])
-	h.IntegrityFlag = binary.BigEndian.Uint16(data[6:8])
+	if h.IsIndexed {
+		// 0x33FE indexed marker format: different header layout
+		// Record size at 0x38 (2 bytes), organization at 0x26 (2 bytes)
+		if len(data) < 0x44 {
+			return nil, fmt.Errorf("indexed header too short: %d bytes", len(data))
+		}
+		h.MaxRecordLen = uint32(binary.BigEndian.Uint16(data[0x38:0x3A]))
+		h.MinRecordLen = h.MaxRecordLen
+		h.Organization = byte(binary.BigEndian.Uint16(data[0x26:0x28]))
+		h.IdxFormat = data[0x2B]
+		h.HeaderSize = 0x800
+		h.RecHeaderSize = 2 // indexed markers are always 2-byte status+length
+		h.Alignment = 0     // no alignment padding in indexed marker format
+	} else {
+		// MF stream format: standard 128-byte header layout
+		h.HeaderSize = 128
 
-	// Timestamps (14 chars each)
-	h.CreationDate = string(data[8:22])
-	h.ModifiedDate = string(data[22:36])
+		// Sequence and integrity
+		h.DBSequence = binary.BigEndian.Uint16(data[4:6])
+		h.IntegrityFlag = binary.BigEndian.Uint16(data[6:8])
 
-	// File attributes
-	h.Organization = data[39]
-	h.Compression = data[41]
-	h.IdxFormat = data[43]
-	h.RecordMode = data[48]
+		// Timestamps (14 chars each)
+		h.CreationDate = string(data[8:22])
+		h.ModifiedDate = string(data[22:36])
 
-	// Record sizes
-	h.MaxRecordLen = binary.BigEndian.Uint32(data[54:58])
-	h.MinRecordLen = binary.BigEndian.Uint32(data[58:62])
+		// File attributes
+		h.Organization = data[39]
+		h.Compression = data[41]
+		h.IdxFormat = data[43]
+		h.RecordMode = data[48]
 
-	// Handler version (for indexed)
-	if h.Organization == 2 {
-		h.HandlerVersion = binary.BigEndian.Uint32(data[108:112])
-		h.LogicalEnd = binary.BigEndian.Uint64(data[120:128])
-	}
+		// Record sizes
+		h.MaxRecordLen = binary.BigEndian.Uint32(data[54:58])
+		h.MinRecordLen = binary.BigEndian.Uint32(data[58:62])
 
-	// Alignment depends on IDXFORMAT
-	switch h.IdxFormat {
-	case 8:
-		h.Alignment = 8
-	case 3, 4:
-		h.Alignment = 4
-	default:
-		h.Alignment = 1
+		// Handler version (for indexed)
+		if h.Organization == 2 {
+			h.HandlerVersion = binary.BigEndian.Uint32(data[108:112])
+			h.LogicalEnd = binary.BigEndian.Uint64(data[120:128])
+		}
+
+		// Alignment depends on IDXFORMAT
+		switch h.IdxFormat {
+		case 8:
+			h.Alignment = 8
+		case 3, 4:
+			h.Alignment = 4
+		default:
+			h.Alignment = 1
+		}
 	}
 
 	// Sanity checks
@@ -156,11 +177,11 @@ func recTypeName(t byte) string {
 	names := map[byte]string{
 		RecTypeNull:    "NULL",
 		RecTypeSystem:  "SYSTEM",
+		RecTypePointer: "POINTER",
 		RecTypeDeleted: "DELETED",
-		RecTypeHeader:  "HEADER",
 		RecTypeNormal:  "NORMAL",
 		RecTypeReduced: "REDUCED",
-		RecTypePointer: "POINTER",
+		RecTypePtrRef:  "PTR_REF",
 		RecTypeRefData: "REF_DATA",
 		RecTypeRedRef:  "RED_REF",
 	}
@@ -168,6 +189,15 @@ func recTypeName(t byte) string {
 		return n
 	}
 	return fmt.Sprintf("UNKNOWN(0x%X)", t)
+}
+
+// isValidIndexedStatus returns true for known indexed marker status nibbles
+func isValidIndexedStatus(s byte) bool {
+	switch s {
+	case 0, 1, 2, 4, 6, 8, 10, 12, 14:
+		return true
+	}
+	return false
 }
 
 // V2Record represents a record parsed by the v2 reader
@@ -221,94 +251,121 @@ func ReadFileV2(path string) (*FileInfo, *V2Header, error) {
 	// Parse records starting after header
 	pos := hdr.HeaderSize
 
-	// For IDXFORMAT 8 indexed files, we need to scan through the data
-	// respecting record headers, types, and alignment
-	for pos < len(data) {
-		// Check if we have enough space for a record header
-		if pos+hdr.RecHeaderSize > len(data) {
-			break
-		}
+	// Use LogicalEnd to limit scan if available (avoid reading garbage/padding)
+	scanEnd := len(data)
+	if hdr.LogicalEnd > 0 && int(hdr.LogicalEnd) < scanEnd {
+		scanEnd = int(hdr.LogicalEnd)
+	}
 
-		var recType byte
-		var dataLen int
+	if hdr.IsIndexed {
+		// Indexed marker format: 2-byte markers with status nibble + 12-bit length
+		// Only accept records where length == recSize (exact match filters out index pages)
+		recHi := byte((recSize >> 8) & 0x0F)
+		recLo := byte(recSize & 0xFF)
 
-		if hdr.RecHeaderSize == 2 {
-			// 2-byte header: top 4 bits = type, bottom 12 bits = length
-			marker := binary.BigEndian.Uint16(data[pos : pos+2])
-			recType = byte(marker >> 12)
-			dataLen = int(marker & 0x0FFF)
-		} else {
-			// 4-byte header: top 5 bits = type, bottom 27 bits = length
-			marker := binary.BigEndian.Uint32(data[pos : pos+4])
-			recType = byte(marker >> 27)
-			dataLen = int(marker & 0x07FFFFFF)
-		}
+		for pos+2+recSize <= scanEnd {
+			b0 := data[pos]
+			b1 := data[pos+1]
 
-		// NULL record type with zero length = end of useful data or padding
-		if recType == RecTypeNull && dataLen == 0 {
-			// Skip one alignment unit and try again
-			pos += hdr.Alignment
-			if hdr.Alignment <= 0 {
+			// Fast check: bottom 12 bits must encode exactly recSize
+			if (b0&0x0F) != recHi || b1 != recLo {
 				pos++
+				continue
 			}
-			continue
-		}
 
-		// Validate data length
-		if dataLen < 0 || dataLen > len(data)-pos-hdr.RecHeaderSize {
-			// Invalid length — try advancing by alignment
-			pos += hdr.Alignment
-			if hdr.Alignment <= 0 {
+			// Validate status nibble
+			status := byte((b0 & 0xF0) >> 4)
+			if !isValidIndexedStatus(status) {
 				pos++
+				continue
 			}
-			continue
-		}
 
-		// Extract record data
-		dataStart := pos + hdr.RecHeaderSize
-		dataEnd := dataStart + dataLen
+			payloadStart := pos + 2
+			payloadEnd := payloadStart + recSize
 
-		if dataEnd > len(data) {
-			break
-		}
-
-		// Classify record
-		isData := recType == RecTypeNormal || recType == RecTypeReduced ||
-			recType == RecTypeRefData || recType == RecTypeRedRef
-		isDeleted := recType == RecTypeDeleted
-
-		if isData && dataLen > 0 {
-			// For fixed-length files, the data length should match MaxRecordLen
-			// But sometimes the marker encodes less. Use MaxRecordLen for extraction.
-			extractLen := recSize
-			if dataLen < recSize {
-				// Record header says shorter — use what it says
-				extractLen = dataLen
+			// Skip deleted records (status 0x1)
+			if status == 0x1 {
+				pos = payloadEnd
+				continue
 			}
 
 			rec := make([]byte, recSize)
-			copyLen := extractLen
-			if dataStart+copyLen > len(data) {
-				copyLen = len(data) - dataStart
-			}
-			copy(rec, data[dataStart:dataStart+copyLen])
-
+			copy(rec, data[payloadStart:payloadEnd])
 			info.Records = append(info.Records, Record{
 				Data:   rec,
 				Offset: pos,
 			})
-		} else if isDeleted && dataLen > 0 {
-			// Count deleted but don't include
-			// (could add a flag to include deleted records)
-		}
 
-		// Advance past record header + data + alignment padding
-		consumed := hdr.RecHeaderSize + dataLen
-		if hdr.Alignment > 1 {
-			slack := (hdr.Alignment - (consumed % hdr.Alignment)) % hdr.Alignment
-			consumed += slack
+			pos = payloadEnd
 		}
-		pos += consumed
+	} else {
+		// MF stream format: record type nibble + data length
+		for pos < scanEnd {
+			if pos+hdr.RecHeaderSize > scanEnd {
+				break
+			}
+
+			var recType byte
+			var dataLen int
+
+			if hdr.RecHeaderSize == 2 {
+				marker := binary.BigEndian.Uint16(data[pos : pos+2])
+				recType = byte(marker >> 12)
+				dataLen = int(marker & 0x0FFF)
+			} else {
+				marker := binary.BigEndian.Uint32(data[pos : pos+4])
+				recType = byte((marker >> 28) & 0x0F)
+				dataLen = int(marker & 0x0FFFFFFF)
+			}
+
+			// NULL record type with zero length = padding
+			if recType == RecTypeNull && dataLen == 0 {
+				pos++ // byte-by-byte skip through padding
+				continue
+			}
+
+			// Validate data length
+			if dataLen < 0 || dataLen > scanEnd-pos-hdr.RecHeaderSize {
+				pos++ // byte-by-byte recovery
+				continue
+			}
+
+			dataStart := pos + hdr.RecHeaderSize
+			dataEnd := dataStart + dataLen
+			if dataEnd > scanEnd {
+				break
+			}
+
+			// Classify record
+			isData := recType == RecTypeNormal || recType == RecTypeReduced ||
+				recType == RecTypeRefData || recType == RecTypeRedRef
+
+			if isData && dataLen > 0 {
+				extractLen := recSize
+				if dataLen < recSize {
+					extractLen = dataLen
+				}
+				rec := make([]byte, recSize)
+				copyLen := extractLen
+				if dataStart+copyLen > len(data) {
+					copyLen = len(data) - dataStart
+				}
+				copy(rec, data[dataStart:dataStart+copyLen])
+
+				info.Records = append(info.Records, Record{
+					Data:   rec,
+					Offset: pos,
+				})
+			}
+
+			// Advance past record header + data + alignment padding
+			consumed := hdr.RecHeaderSize + dataLen
+			if hdr.Alignment > 1 {
+				slack := (hdr.Alignment - (consumed % hdr.Alignment)) % hdr.Alignment
+				consumed += slack
+			}
+			pos += consumed
+		}
 	}
 
 	return info, hdr, nil
@@ -335,7 +392,7 @@ type V2Stats struct {
 	DeletedCount int
 	NullCount    int
 	SystemCount  int
-	HeaderCount  int
+	PtrRefCount  int
 	PointerCount int
 	DataTypes    map[byte]int // count by record type
 }
@@ -373,84 +430,125 @@ func ReadFileV2WithStats(path string) ([][]byte, *V2Stats, error) {
 	var records [][]byte
 	pos := hdr.HeaderSize
 
-	for pos < len(data) {
-		if pos+hdr.RecHeaderSize > len(data) {
-			break
-		}
+	// Use LogicalEnd to limit scan if available
+	scanEnd := len(data)
+	if hdr.LogicalEnd > 0 && int(hdr.LogicalEnd) < scanEnd {
+		scanEnd = int(hdr.LogicalEnd)
+	}
 
-		var recType byte
-		var dataLen int
+	if hdr.IsIndexed {
+		// Indexed marker format: only accept exact recSize matches
+		recHi := byte((recSize >> 8) & 0x0F)
+		recLo := byte(recSize & 0xFF)
 
-		if hdr.RecHeaderSize == 2 {
-			marker := binary.BigEndian.Uint16(data[pos : pos+2])
-			recType = byte(marker >> 12)
-			dataLen = int(marker & 0x0FFF)
-		} else {
-			marker := binary.BigEndian.Uint32(data[pos : pos+4])
-			recType = byte(marker >> 27)
-			dataLen = int(marker & 0x07FFFFFF)
-		}
+		for pos+2+recSize <= scanEnd {
+			b0 := data[pos]
+			b1 := data[pos+1]
 
-		if recType == RecTypeNull && dataLen == 0 {
-			stats.NullCount++
-			pos += hdr.Alignment
-			if hdr.Alignment <= 0 {
+			if (b0&0x0F) != recHi || b1 != recLo {
 				pos++
+				continue
 			}
-			continue
-		}
 
-		if dataLen < 0 || dataLen > len(data)-pos-hdr.RecHeaderSize {
-			pos += hdr.Alignment
-			if hdr.Alignment <= 0 {
+			status := byte((b0 & 0xF0) >> 4)
+			if !isValidIndexedStatus(status) {
 				pos++
+				continue
 			}
-			continue
-		}
 
-		stats.DataTypes[recType]++
+			payloadStart := pos + 2
+			payloadEnd := payloadStart + recSize
 
-		dataStart := pos + hdr.RecHeaderSize
-		dataEnd := dataStart + dataLen
-		if dataEnd > len(data) {
-			break
-		}
+			stats.DataTypes[status]++
 
-		isData := recType == RecTypeNormal || recType == RecTypeReduced ||
-			recType == RecTypeRefData || recType == RecTypeRedRef
+			if status == 0x1 {
+				stats.DeletedCount++
+				pos = payloadEnd
+				continue
+			}
 
-		switch recType {
-		case RecTypeDeleted:
-			stats.DeletedCount++
-		case RecTypeSystem:
-			stats.SystemCount++
-		case RecTypeHeader:
-			stats.HeaderCount++
-		case RecTypePointer:
-			stats.PointerCount++
-		}
-
-		if isData && dataLen > 0 {
 			stats.TotalRecords++
-			extractLen := recSize
-			if dataLen < recSize {
-				extractLen = dataLen
-			}
 			rec := make([]byte, recSize)
-			copyLen := extractLen
-			if dataStart+copyLen > len(data) {
-				copyLen = len(data) - dataStart
-			}
-			copy(rec, data[dataStart:dataStart+copyLen])
+			copy(rec, data[payloadStart:payloadEnd])
 			records = append(records, rec)
-		}
 
-		consumed := hdr.RecHeaderSize + dataLen
-		if hdr.Alignment > 1 {
-			slack := (hdr.Alignment - (consumed % hdr.Alignment)) % hdr.Alignment
-			consumed += slack
+			pos = payloadEnd
 		}
-		pos += consumed
+	} else {
+		// MF stream format
+		for pos < scanEnd {
+			if pos+hdr.RecHeaderSize > scanEnd {
+				break
+			}
+
+			var recType byte
+			var dataLen int
+
+			if hdr.RecHeaderSize == 2 {
+				marker := binary.BigEndian.Uint16(data[pos : pos+2])
+				recType = byte(marker >> 12)
+				dataLen = int(marker & 0x0FFF)
+			} else {
+				marker := binary.BigEndian.Uint32(data[pos : pos+4])
+				recType = byte((marker >> 28) & 0x0F)
+				dataLen = int(marker & 0x0FFFFFFF)
+			}
+
+			if recType == RecTypeNull && dataLen == 0 {
+				stats.NullCount++
+				pos++
+				continue
+			}
+
+			if dataLen < 0 || dataLen > scanEnd-pos-hdr.RecHeaderSize {
+				pos++
+				continue
+			}
+
+			stats.DataTypes[recType]++
+
+			dataStart := pos + hdr.RecHeaderSize
+			dataEnd := dataStart + dataLen
+			if dataEnd > scanEnd {
+				break
+			}
+
+			isData := recType == RecTypeNormal || recType == RecTypeReduced ||
+				recType == RecTypeRefData || recType == RecTypeRedRef
+
+			switch recType {
+			case RecTypeDeleted:
+				stats.DeletedCount++
+			case RecTypeSystem:
+				stats.SystemCount++
+			case RecTypePtrRef:
+				stats.PtrRefCount++
+			case RecTypePointer:
+				stats.PointerCount++
+			}
+
+			if isData && dataLen > 0 {
+				stats.TotalRecords++
+				extractLen := recSize
+				if dataLen < recSize {
+					extractLen = dataLen
+				}
+				rec := make([]byte, recSize)
+				copyLen := extractLen
+				if dataStart+copyLen > len(data) {
+					copyLen = len(data) - dataStart
+				}
+				copy(rec, data[dataStart:dataStart+copyLen])
+				records = append(records, rec)
+			}
+
+			consumed := hdr.RecHeaderSize + dataLen
+			if hdr.Alignment > 1 {
+				slack := (hdr.Alignment - (consumed % hdr.Alignment)) % hdr.Alignment
+				consumed += slack
+			}
+			pos += consumed
+		}
 	}
 
 	return records, stats, nil
@@ -483,7 +581,7 @@ func CompareV1V2(path string) {
 		log.Printf("  V2 record types: %v", v2stats.DataTypes)
 		log.Printf("  V2 deleted=%d null=%d system=%d header=%d pointer=%d",
 			v2stats.DeletedCount, v2stats.NullCount, v2stats.SystemCount,
-			v2stats.HeaderCount, v2stats.PointerCount)
+			v2stats.PtrRefCount, v2stats.PointerCount)
 	}
 
 	if v1err == nil && v2err == nil {

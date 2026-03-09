@@ -27,6 +27,10 @@ const EDITABLE_FIELDS: Record<string, string[]> = {
   saldos_consolidados: ['cuenta_contable'],
   documentos: ['tipo_comprobante', 'nit_tercero', 'cuenta_contable', 'producto_ref', 'fecha', 'descripcion', 'tipo_mov'],
   terceros_ampliados: ['nit', 'nombre', 'tipo_persona', 'representante_legal', 'direccion', 'email'],
+  movimientos_inventario: ['codigo_producto', 'tipo_comprobante', 'fecha', 'cantidad', 'valor', 'tipo_mov'],
+  saldos_inventario: ['codigo_producto'],
+  activos_fijos_detalle: ['nombre', 'nit_responsable', 'codigo', 'fecha', 'valor_compra', 'ubicacion', 'referencia'],
+  audit_trail_terceros: ['nombre', 'nit_tercero', 'fecha_cambio', 'tipo_doc', 'direccion', 'email'],
 };
 
 export default function DataPage({ table, title, file }: Props) {
@@ -83,6 +87,10 @@ export default function DataPage({ table, title, file }: Props) {
       saldos_consolidados: api.getSaldosConsolidados,
       documentos: api.getDocumentos,
       terceros_ampliados: api.getTercerosAmpliados,
+      movimientos_inventario: api.getMovimientosInventario,
+      saldos_inventario: api.getSaldosInventario,
+      activos_fijos_detalle: api.getActivosFijosDetalle,
+      audit_trail_terceros: api.getAuditTrailTerceros,
     };
     const result = await fetchers[table](page, search);
     setData(result.data || []);
@@ -409,6 +417,93 @@ export default function DataPage({ table, title, file }: Props) {
               <td className="col-date">{r.fecha}</td>
               <td className="col-desc">{r.descripcion}</td>
               <td className="col-value">{r.tipo_mov}</td>
+              <td><StatusBadge status={r.sync_status} /></td>
+              {renderActionButtons(r)}
+            </tr>
+          ))}</tbody>
+        </table>
+      );
+    }
+    if (table === 'movimientos_inventario') {
+      return (
+        <table className="data-table">
+          <thead><tr>{renderCheckboxHeader()}{sortTh('Producto','codigo_producto')}{sortTh('Tipo','tipo_comprobante')}{sortTh('Comp','codigo_comp')}{sortTh('Seq','secuencia')}{sortTh('TipoDoc','tipo_doc')}{sortTh('Fecha','fecha')}{sortTh('Cantidad','cantidad')}{sortTh('Valor','valor')}{sortTh('D/C','tipo_mov')}{sortTh('Estado','sync_status')}<th>Acciones</th></tr></thead>
+          <tbody>{sortedData.map((r, i) => (
+            <tr key={i}>
+              {renderCheckbox(r)}
+              <td className="col-key">{r.codigo_producto}</td>
+              <td className="col-type">{r.tipo_comprobante}</td>
+              <td className="col-code">{r.codigo_comp}</td>
+              <td className="col-code">{r.secuencia}</td>
+              <td className="col-code">{r.tipo_doc}</td>
+              <td className="col-date">{r.fecha}</td>
+              <td className="col-value">{r.cantidad}</td>
+              <td className="col-value">{r.valor}</td>
+              <td className="col-type">{r.tipo_mov}</td>
+              <td><StatusBadge status={r.sync_status} /></td>
+              {renderActionButtons(r)}
+            </tr>
+          ))}</tbody>
+        </table>
+      );
+    }
+    if (table === 'activos_fijos_detalle') {
+      return (
+        <table className="data-table">
+          <thead><tr>{renderCheckboxHeader()}{sortTh('Codigo','codigo')}{sortTh('Nombre','nombre')}{sortTh('NIT Resp','nit_responsable')}{sortTh('Fecha','fecha')}{sortTh('Valor Compra','valor_compra')}{sortTh('Ubicacion','ubicacion')}{sortTh('Referencia','referencia')}{sortTh('Estado','sync_status')}<th>Acciones</th></tr></thead>
+          <tbody>{sortedData.map((r, i) => (
+            <tr key={i}>
+              {renderCheckbox(r)}
+              <td className="col-code">{r.codigo}</td>
+              <td className="col-name">{r.nombre}</td>
+              <td className="col-key">{r.nit_responsable}</td>
+              <td className="col-date">{r.fecha}</td>
+              <td className="col-value">{r.valor_compra?.toLocaleString()}</td>
+              <td className="col-desc">{r.ubicacion}</td>
+              <td className="col-code">{r.referencia}</td>
+              <td><StatusBadge status={r.sync_status} /></td>
+              {renderActionButtons(r)}
+            </tr>
+          ))}</tbody>
+        </table>
+      );
+    }
+    if (table === 'audit_trail_terceros') {
+      return (
+        <table className="data-table">
+          <thead><tr>{renderCheckboxHeader()}{sortTh('Nombre','nombre')}{sortTh('NIT','nit_tercero')}{sortTh('Fecha','fecha_cambio')}{sortTh('Tipo','tipo_doc')}{sortTh('Usuario','usuario')}{sortTh('Direccion','direccion')}{sortTh('Email','email')}{sortTh('Rep. Legal','rep_legal')}{sortTh('Estado','sync_status')}<th>Acciones</th></tr></thead>
+          <tbody>{sortedData.map((r, i) => (
+            <tr key={i}>
+              {renderCheckbox(r)}
+              <td className="col-name">{r.nombre}</td>
+              <td className="col-key">{r.nit_tercero}</td>
+              <td className="col-date">{r.fecha_cambio}</td>
+              <td className="col-type">{r.tipo_doc}</td>
+              <td className="col-code">{r.usuario}</td>
+              <td className="col-desc">{r.direccion}</td>
+              <td className="col-desc">{r.email}</td>
+              <td className="col-name">{r.rep_legal}</td>
+              <td><StatusBadge status={r.sync_status} /></td>
+              {renderActionButtons(r)}
+            </tr>
+          ))}</tbody>
+        </table>
+      );
+    }
+    if (table === 'saldos_inventario') {
+      return (
+        <table className="data-table">
+          <thead><tr>{renderCheckboxHeader()}{sortTh('Producto','codigo_producto')}{sortTh('Empresa','empresa')}{sortTh('Grupo','grupo')}{sortTh('Saldo Ini.','saldo_inicial')}{sortTh('Entradas','entradas')}{sortTh('Salidas','salidas')}{sortTh('Saldo Final','saldo_final')}{sortTh('Estado','sync_status')}<th>Acciones</th></tr></thead>
+          <tbody>{sortedData.map((r, i) => (
+            <tr key={i}>
+              {renderCheckbox(r)}
+              <td className="col-key">{r.codigo_producto}</td>
+              <td className="col-code">{r.empresa}</td>
+              <td className="col-code">{r.grupo}</td>
+              <td className="col-value">{r.saldo_inicial?.toLocaleString('es-CO', { minimumFractionDigits: 2 })}</td>
+              <td className="col-value">{r.entradas?.toLocaleString('es-CO', { minimumFractionDigits: 2 })}</td>
+              <td className="col-value">{r.salidas?.toLocaleString('es-CO', { minimumFractionDigits: 2 })}</td>
+              <td className="col-value" style={{ fontWeight: 600 }}>{r.saldo_final?.toLocaleString('es-CO', { minimumFractionDigits: 2 })}</td>
               <td><StatusBadge status={r.sync_status} /></td>
               {renderActionButtons(r)}
             </tr>

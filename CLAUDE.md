@@ -25,10 +25,13 @@ replace siigo-common => ../siigo-common
 ```
 **NEVER** create isam/, parsers/, api/, config/, or storage/ packages inside siigo-sync, siigo-app, or siigo-web.
 
-### 2. EXTFH vs Binary offsets
+### 2. ISAM Reader v2 is the source of truth
+The official ISAM file reader is **`reader_v2.go`** in `siigo-common/isam/` (`ReadFileV2`, `ReadFileV2All`, `ReadFileV2WithStats`). It parses the 128-byte Micro Focus header (magic, idxformat, reclen, alignment) and uses record type nibbles to classify records. `ReadIsamFile()` in `extfh.go` already delegates to v2 as fallback when EXTFH DLL is unavailable. Since `cblrtsm.dll` does NOT exist on this system, **v2 is the active reader for everything**: parsers, SQLite ingestion, sync, and analysis. All new parsers and tools MUST use `ReadIsamFile()` (which routes to v2) or `ReadFileV2WithStats()` for diagnostics.
+
+### 3. EXTFH vs Binary offsets (legacy note)
 ISAM records have DIFFERENT offsets depending on the reader:
-- **EXTFH** (via cblrtsm.dll): Clean records, no markers
-- **Binary fallback**: Includes 2-byte record markers, shifting all offsets
+- **EXTFH** (via cblrtsm.dll): Clean records, no markers — NOT available on current system
+- **Binary/v2 reader**: Uses spec-based parsing with record type nibbles, no offset shifting needed
 
 Every parser MUST check `isam.ExtfhAvailable()` and use dual offsets.
 
@@ -141,14 +144,11 @@ When adding, modifying, or removing any `/api/v1/*` endpoint in `siigo-web/main.
 |--------|------|-------------|
 | POST | `/api/v1/auth` | Get JWT token (api_key OR username+password) |
 | GET | `/api/v1/stats` | Stats summary |
-| GET | `/api/v1/clients` | List clients (paginated) |
-| GET | `/api/v1/clients/{key}` | Client detail by NIT |
-| GET | `/api/v1/products` | List products |
-| GET | `/api/v1/products/{key}` | Product detail |
-| GET | `/api/v1/movements` | List movements |
-| GET | `/api/v1/movements/{key}` | Movement detail |
-| GET | `/api/v1/cartera` | List cartera |
-| GET | `/api/v1/cartera/{key}` | Cartera detail |
+| GET | `/api/v1/{table}` | List any of 24 tables (paginated, search) |
+| GET | `/api/v1/{table}/{key}` | Detail by key for any table |
+| GET | `/api/v1/postman` | Export dynamic Postman v2.1 collection |
+
+**24 tables**: clients, products, movements, cartera, plan_cuentas, activos_fijos, saldos_terceros, saldos_consolidados, documentos, terceros_ampliados, transacciones_detalle, periodos_contables, condiciones_pago, libros_auxiliares, codigos_dane, actividades_ica, conceptos_pila, activos_fijos_detalle, audit_trail_terceros, clasificacion_cuentas, movimientos_inventario, saldos_inventario, historial, maestros
 
 ### OData endpoints (for Power BI / BI tools)
 | Method | Path | Description |
@@ -159,7 +159,7 @@ When adding, modifying, or removing any `/api/v1/*` endpoint in `siigo-web/main.
 | GET | `/odata/{table}('key')` | Single entity by key |
 | GET | `/odata/{table}/$count` | Count only |
 
-Tables: `clients`, `products`, `movements`, `cartera`. Protected by same JWT as v1.
+All 24 data tables available. Protected by same JWT as v1.
 
 **$filter operators**: `eq`, `ne`, `gt`, `ge`, `lt`, `le`, `contains()`, `startswith()`
 **Example**: `/odata/clients?$top=100&$filter=sync_status eq 'synced'&$orderby=nombre&$count=true`
@@ -277,11 +277,27 @@ The sync system runs **two independent loops** to isolate ISAM reading from API 
 
 **Why**: If the API is down or slow, ISAM detection continues uninterrupted. Records stay in SQLite as `pending` until successfully sent.
 
-## Send Behavior
-- **Sending is disabled by default** for all modules (`send_enabled` all false)
-- User must explicitly enable sending per table from Data pages toggle
-- Send loop skips entirely when no module has sending enabled (avoids unnecessary API login)
-- Circuit breaker: auto-pauses sending after consecutive failures, resume via `/send-resume` bot command or UI
+## Per-Table Sync Control
+
+Both detection and sending are controlled **per-table** from Config → Sincronizacion:
+
+| Config | What it controls | Default | Config key |
+|--------|-----------------|---------|------------|
+| `detect_enabled` | ISAM → SQLite (per table) | All **enabled** | `detect_enabled` in config.json |
+| `send_enabled` | SQLite → Laravel (per table) | All **disabled** | `send_enabled` in config.json |
+
+- **24 tables** support both detect and send toggles
+- API endpoints: `GET/POST /api/detect-enabled`, `GET/POST /api/send-enabled`
+- `config.AllSyncTables()` is the canonical list of all syncable tables
+- `GetPendingGeneric()` in storage provides a universal pending query for any table
+- Send loop skips entirely when no module has sending enabled
+- Circuit breaker: auto-pauses sending after consecutive failures
+
+## Postman Collection Export
+- `GET /api/v1/postman` generates a dynamic Postman v2.1 collection
+- Includes all endpoints organized by folders: Auth, Stats, Data Tables (24), OData, Sync Control, Config, Users
+- Uses `{{base_url}}` and `{{token}}` variables
+- Content-Disposition header triggers download as `siigo-sync-postman.json`
 
 ## SQL Explorer
 - Interactive SQL query tool at `/explorer` page

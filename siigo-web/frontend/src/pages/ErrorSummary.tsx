@@ -34,6 +34,8 @@ const TABLE_LABELS: Record<string, string> = {
   activos_fijos_detalle: 'Activos Detalle',
   audit_trail_terceros: 'Audit Trail',
   clasificacion_cuentas: 'Clasif. Cuentas',
+  movimientos_inventario: 'Mov. Inventario',
+  saldos_inventario: 'Saldos Inventario',
 };
 
 export default function ErrorSummary() {

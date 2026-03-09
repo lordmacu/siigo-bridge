@@ -74,6 +74,10 @@ export const api = {
   getSaldosConsolidados: (page: number, search: string) => get(`/saldos-consolidados?page=${page}&search=${encodeURIComponent(search)}`),
   getDocumentos: (page: number, search: string) => get(`/documentos?page=${page}&search=${encodeURIComponent(search)}`),
   getTercerosAmpliados: (page: number, search: string) => get(`/terceros-ampliados?page=${page}&search=${encodeURIComponent(search)}`),
+  getMovimientosInventario: (page: number, search: string) => get(`/movimientos-inventario?page=${page}&search=${encodeURIComponent(search)}`),
+  getSaldosInventario: (page: number, search: string) => get(`/saldos-inventario?page=${page}&search=${encodeURIComponent(search)}`),
+  getActivosFijosDetalle: (page: number, search: string) => get(`/activos-fijos-detalle?page=${page}&search=${encodeURIComponent(search)}`),
+  getAuditTrailTerceros: (page: number, search: string) => get(`/audit-trail-terceros?page=${page}&search=${encodeURIComponent(search)}`),
   getSyncHistory: (table: string, page: number, search?: string, dateFrom?: string, dateTo?: string, status?: string) => {
     const params = new URLSearchParams({ table, page: String(page) });
     if (search) params.set('search', search);
@@ -103,6 +107,8 @@ export const api = {
   saveFieldMappings: (mappings: Record<string, FieldMap[]>) => post('/field-mappings', mappings),
   getSendEnabled: () => get('/send-enabled'),
   saveSendEnabled: (enabled: Record<string, boolean>) => post('/send-enabled', enabled),
+  getDetectEnabled: () => get('/detect-enabled'),
+  saveDetectEnabled: (enabled: Record<string, boolean>) => post('/detect-enabled', enabled),
   getErrorSummary: () => get('/error-summary'),
   getPublicAPIConfig: () => get('/public-api-config'),
   savePublicAPIConfig: (data: object) => post('/public-api-config', data),
