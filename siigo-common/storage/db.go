@@ -26,7 +26,8 @@ var validTables = map[string]bool{
 	"conceptos_pila": true, "activos_fijos_detalle": true, "audit_trail_terceros": true,
 	"clasificacion_cuentas": true,
 	"movimientos_inventario": true, "saldos_inventario": true,
-	"historial": true, "maestros": true,
+	"historial": true, "maestros": true, "formulas": true, "docs_inventario": true,
+	"vendedores_areas": true,
 	"sync_history": true, "logs": true,
 }
 
@@ -1053,41 +1054,209 @@ func (db *DB) migrate() error {
 		`CREATE INDEX IF NOT EXISTS idx_maestros_status ON maestros(sync_status)`,
 		`CREATE INDEX IF NOT EXISTS idx_maestros_tipo ON maestros(tipo)`,
 
-		// Missing relationship indexes on ORIGINAL tables
-		// movements → plan_cuentas, fecha
+		`CREATE TABLE IF NOT EXISTS formulas (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			record_key TEXT NOT NULL UNIQUE,
+			empresa TEXT DEFAULT '',
+			grupo_producto TEXT DEFAULT '',
+			codigo_producto TEXT DEFAULT '',
+			grupo_ingrediente TEXT DEFAULT '',
+			codigo_ingrediente TEXT DEFAULT '',
+			porcentaje REAL DEFAULT 0,
+			hash TEXT NOT NULL,
+			sync_status TEXT DEFAULT 'pending',
+			sync_action TEXT DEFAULT 'add',
+			sync_error TEXT,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			synced_at DATETIME
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_formulas_status ON formulas(sync_status)`,
+		`CREATE INDEX IF NOT EXISTS idx_formulas_producto ON formulas(codigo_producto)`,
+
+		`CREATE TABLE IF NOT EXISTS docs_inventario (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			record_key TEXT NOT NULL UNIQUE,
+			tipo_doc TEXT DEFAULT '',
+			fecha TEXT DEFAULT '',
+			hora TEXT DEFAULT '',
+			seq TEXT DEFAULT '',
+			usuario_crea TEXT DEFAULT '',
+			usuario_modifica TEXT DEFAULT '',
+			fecha_modifica TEXT DEFAULT '',
+			modulo_origen TEXT DEFAULT '',
+			codigo_producto TEXT DEFAULT '',
+			campo_modificado TEXT DEFAULT '',
+			hash TEXT NOT NULL,
+			sync_status TEXT DEFAULT 'pending',
+			sync_action TEXT DEFAULT 'add',
+			sync_error TEXT,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			synced_at DATETIME
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_docs_inventario_status ON docs_inventario(sync_status)`,
+		`CREATE INDEX IF NOT EXISTS idx_docs_inventario_producto ON docs_inventario(codigo_producto)`,
+
+		`CREATE TABLE IF NOT EXISTS vendedores_areas (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			record_key TEXT NOT NULL UNIQUE,
+			tipo TEXT DEFAULT '',
+			codigo TEXT DEFAULT '',
+			nombre TEXT DEFAULT '',
+			nombre_corto TEXT DEFAULT '',
+			ciudad TEXT DEFAULT '',
+			nit TEXT DEFAULT '',
+			direccion TEXT DEFAULT '',
+			email TEXT DEFAULT '',
+			hash TEXT NOT NULL,
+			sync_status TEXT DEFAULT 'pending',
+			sync_action TEXT DEFAULT 'add',
+			sync_error TEXT,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			synced_at DATETIME
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_vendedores_areas_status ON vendedores_areas(sync_status)`,
+		`CREATE INDEX IF NOT EXISTS idx_vendedores_areas_tipo ON vendedores_areas(tipo)`,
+
+		// =====================================================================
+		// RELATIONSHIP INDEXES (foreign key equivalents for cross-table JOINs)
+		// =====================================================================
+		//
+		// Foreign Key Map (logical relationships):
+		//
+		// clients.nit ← movements.nit_tercero
+		// clients.nit ← cartera.nit_tercero
+		// clients.nit ← documentos.nit_tercero
+		// clients.nit ← saldos_terceros.nit_tercero
+		// clients.nit ← transacciones_detalle.nit_tercero
+		// clients.nit ← libros_auxiliares.nit_tercero
+		// clients.nit ← condiciones_pago.nit
+		// clients.nit ← activos_fijos.nit_responsable
+		// clients.nit ← activos_fijos_detalle.nit_responsable
+		// clients.nit ← audit_trail_terceros.nit_tercero
+		// clients.nit ← vendedores_areas.nit
+		//
+		// terceros_ampliados.nit ← clients.nit (same tercero, extended data)
+		//
+		// plan_cuentas.codigo_cuenta ← movements.cuenta_contable
+		// plan_cuentas.codigo_cuenta ← cartera.cuenta_contable
+		// plan_cuentas.codigo_cuenta ← documentos.cuenta_contable
+		// plan_cuentas.codigo_cuenta ← saldos_terceros.cuenta_contable
+		// plan_cuentas.codigo_cuenta ← saldos_consolidados.cuenta_contable
+		// plan_cuentas.codigo_cuenta ← transacciones_detalle.cuenta_contable
+		// plan_cuentas.codigo_cuenta ← libros_auxiliares.cuenta_contable
+		//
+		// products.code ← formulas.codigo_producto
+		// products.code ← formulas.codigo_ingrediente
+		// products.code ← documentos.producto_ref
+		// products.code ← movimientos_inventario.codigo_producto
+		// products.code ← saldos_inventario.codigo_producto
+		// products.code ← docs_inventario.codigo_producto
+		//
+		// codigos_dane.codigo ← (reference table, joined by ciudad codes)
+		// actividades_ica.codigo ← (reference table)
+		// clasificacion_cuentas.codigo_cuenta ← plan_cuentas.codigo_cuenta (classification)
+		// maestros.record_key ← (config reference: centros costo, bodegas, etc.)
+		//
+
+		// --- clients (nit) relationships ---
+		`CREATE INDEX IF NOT EXISTS idx_movements_nit_fk ON movements(nit_tercero)`,
 		`CREATE INDEX IF NOT EXISTS idx_movements_cuenta ON movements(cuenta_contable)`,
 		`CREATE INDEX IF NOT EXISTS idx_movements_fecha ON movements(fecha)`,
-		// cartera → plan_cuentas, fecha
+
 		`CREATE INDEX IF NOT EXISTS idx_cartera_cuenta ON cartera(cuenta_contable)`,
 		`CREATE INDEX IF NOT EXISTS idx_cartera_fecha ON cartera(fecha)`,
-		// activos_fijos → clients via nit_responsable
+
 		`CREATE INDEX IF NOT EXISTS idx_activos_fijos_nit ON activos_fijos(nit_responsable)`,
-		// products → grupo lookup
+
 		`CREATE INDEX IF NOT EXISTS idx_products_grupo ON products(grupo)`,
-		// documentos → fecha, producto
+
 		`CREATE INDEX IF NOT EXISTS idx_documentos_fecha ON documentos(fecha)`,
 		`CREATE INDEX IF NOT EXISTS idx_documentos_producto ON documentos(producto_ref)`,
 
-		// Cross-table relationship indexes on NEW tables
-		// Transacciones → cuentas, terceros
+		// --- transacciones_detalle → clients, plan_cuentas ---
 		`CREATE INDEX IF NOT EXISTS idx_transacciones_detalle_cuenta ON transacciones_detalle(cuenta_contable)`,
 		`CREATE INDEX IF NOT EXISTS idx_transacciones_detalle_fecha ON transacciones_detalle(fecha_documento)`,
 		`CREATE INDEX IF NOT EXISTS idx_transacciones_detalle_tipo ON transacciones_detalle(tipo_comprobante)`,
-		// Libros auxiliares → cuentas, terceros, comprobantes
+
+		// --- libros_auxiliares → clients, plan_cuentas ---
 		`CREATE INDEX IF NOT EXISTS idx_libros_auxiliares_tipo ON libros_auxiliares(tipo_comprobante)`,
 		`CREATE INDEX IF NOT EXISTS idx_libros_auxiliares_fecha ON libros_auxiliares(fecha_documento)`,
-		// Condiciones pago → terceros
+
+		// --- condiciones_pago → clients ---
 		`CREATE INDEX IF NOT EXISTS idx_condiciones_pago_fecha ON condiciones_pago(fecha)`,
-		// Activos fijos detalle → terceros
+
+		// --- activos_fijos_detalle → clients ---
 		`CREATE INDEX IF NOT EXISTS idx_activos_fijos_detalle_nit ON activos_fijos_detalle(nit_responsable)`,
 		`CREATE INDEX IF NOT EXISTS idx_activos_fijos_detalle_grupo ON activos_fijos_detalle(grupo)`,
-		// Audit trail → terceros, usuario
+
+		// --- audit_trail_terceros → clients ---
 		`CREATE INDEX IF NOT EXISTS idx_audit_trail_terceros_usuario ON audit_trail_terceros(usuario)`,
 		`CREATE INDEX IF NOT EXISTS idx_audit_trail_terceros_fecha ON audit_trail_terceros(fecha_cambio)`,
-		// Clasificacion → join with plan_cuentas
+
+		// --- clasificacion_cuentas → plan_cuentas ---
 		`CREATE INDEX IF NOT EXISTS idx_clasificacion_cuentas_grupo ON clasificacion_cuentas(codigo_grupo)`,
-		// Periodos → empresa
+
+		// --- periodos_contables ---
 		`CREATE INDEX IF NOT EXISTS idx_periodos_contables_empresa ON periodos_contables(empresa)`,
+
+		// --- formulas → products (producto e ingrediente) ---
+		`CREATE INDEX IF NOT EXISTS idx_formulas_ingrediente ON formulas(codigo_ingrediente)`,
+
+		// --- docs_inventario → products ---
+		`CREATE INDEX IF NOT EXISTS idx_docs_inventario_fecha ON docs_inventario(fecha)`,
+
+		// --- vendedores_areas → clients (nit) ---
+		`CREATE INDEX IF NOT EXISTS idx_vendedores_areas_nit ON vendedores_areas(nit)`,
+
+		// --- saldos_consolidados → plan_cuentas ---
+		`CREATE INDEX IF NOT EXISTS idx_saldos_consolidados_cuenta ON saldos_consolidados(cuenta_contable)`,
+
+		// =====================================================================
+		// FOREIGN KEY VIEWS (for easy cross-table queries)
+		// =====================================================================
+		// NIT normalization: CAST(CAST(x AS INTEGER) AS TEXT) strips leading zeros
+		// so clients.nit='00019410548' matches cartera.nit_tercero='0000019410548'
+		`CREATE VIEW IF NOT EXISTS v_cartera_detalle AS
+			SELECT c.*, cl.nombre AS nombre_tercero, pc.nombre AS nombre_cuenta
+			FROM cartera c
+			LEFT JOIN clients cl ON CAST(CAST(cl.nit AS INTEGER) AS TEXT) = CAST(CAST(c.nit_tercero AS INTEGER) AS TEXT)
+			LEFT JOIN plan_cuentas pc ON pc.codigo_cuenta = c.cuenta_contable`,
+
+		`CREATE VIEW IF NOT EXISTS v_documentos_detalle AS
+			SELECT d.*, cl.nombre AS nombre_tercero, pc.nombre AS nombre_cuenta, p.nombre AS nombre_producto
+			FROM documentos d
+			LEFT JOIN clients cl ON CAST(CAST(cl.nit AS INTEGER) AS TEXT) = CAST(CAST(d.nit_tercero AS INTEGER) AS TEXT)
+			LEFT JOIN plan_cuentas pc ON pc.codigo_cuenta = d.cuenta_contable
+			LEFT JOIN products p ON p.code = d.producto_ref`,
+
+		`CREATE VIEW IF NOT EXISTS v_saldos_terceros_detalle AS
+			SELECT st.*, cl.nombre AS nombre_tercero, pc.nombre AS nombre_cuenta
+			FROM saldos_terceros st
+			LEFT JOIN clients cl ON CAST(CAST(cl.nit AS INTEGER) AS TEXT) = CAST(CAST(st.nit_tercero AS INTEGER) AS TEXT)
+			LEFT JOIN plan_cuentas pc ON pc.codigo_cuenta = st.cuenta_contable`,
+
+		`CREATE VIEW IF NOT EXISTS v_libros_auxiliares_detalle AS
+			SELECT la.*, cl.nombre AS nombre_tercero, pc.nombre AS nombre_cuenta
+			FROM libros_auxiliares la
+			LEFT JOIN clients cl ON CAST(CAST(cl.nit AS INTEGER) AS TEXT) = CAST(CAST(la.nit_tercero AS INTEGER) AS TEXT)
+			LEFT JOIN plan_cuentas pc ON pc.codigo_cuenta = la.cuenta_contable`,
+
+		`CREATE VIEW IF NOT EXISTS v_formulas_detalle AS
+			SELECT f.*, pp.nombre AS nombre_producto, pi.nombre AS nombre_ingrediente
+			FROM formulas f
+			LEFT JOIN products pp ON pp.code = f.codigo_producto
+			LEFT JOIN products pi ON pi.code = f.codigo_ingrediente`,
+
+		`CREATE VIEW IF NOT EXISTS v_movements_detalle AS
+			SELECT m.*, cl.nombre AS nombre_tercero, pc.nombre AS nombre_cuenta
+			FROM movements m
+			LEFT JOIN clients cl ON CAST(CAST(cl.nit AS INTEGER) AS TEXT) = CAST(CAST(m.nit_tercero AS INTEGER) AS TEXT)
+			LEFT JOIN plan_cuentas pc ON pc.codigo_cuenta = m.cuenta_contable`,
+
+		`CREATE VIEW IF NOT EXISTS v_saldos_consolidados_detalle AS
+			SELECT sc.*, pc.nombre AS nombre_cuenta
+			FROM saldos_consolidados sc
+			LEFT JOIN plan_cuentas pc ON pc.codigo_cuenta = sc.cuenta_contable`,
 
 		// Sync stats (for dashboard charts)
 		`CREATE TABLE IF NOT EXISTS sync_stats (
@@ -2572,6 +2741,81 @@ func (db *DB) GetGenericTable(tableName string, limit, offset int, search string
 
 // ==================== GENERIC SYNC HELPERS ====================
 
+// UpsertGeneric performs a generic upsert for any sync table.
+// keyCol is the SQLite column name for the primary key (e.g. "nit", "record_key", "code").
+// key is the key value for this record.
+// columns maps SQLite column name → value (excluding key, hash, and sync metadata).
+// hash is the SHA256 hash of the raw ISAM record.
+// Returns "add", "edit", or "" (no change).
+func (db *DB) UpsertGeneric(table, keyCol, key, hash string, columns map[string]interface{}) string {
+	if !isValidTable(table) {
+		return ""
+	}
+
+	var existingHash string
+	err := db.conn.QueryRow(
+		fmt.Sprintf(`SELECT hash FROM %s WHERE %s=?`, table, keyCol), key,
+	).Scan(&existingHash)
+	now := time.Now().Format(time.RFC3339)
+
+	if err == sql.ErrNoRows {
+		// INSERT
+		colNames := []string{keyCol}
+		placeholders := []string{"?"}
+		args := []interface{}{key}
+
+		for col, val := range columns {
+			colNames = append(colNames, col)
+			placeholders = append(placeholders, "?")
+			args = append(args, val)
+		}
+		colNames = append(colNames, "hash", "sync_status", "sync_action", "updated_at")
+		placeholders = append(placeholders, "?", "'pending'", "'add'", "?")
+		args = append(args, hash, now)
+
+		query := fmt.Sprintf(`INSERT INTO %s (%s) VALUES (%s)`,
+			table,
+			strings.Join(colNames, ", "),
+			strings.Join(placeholders, ", "),
+		)
+		db.conn.Exec(query, args...)
+		return "add"
+	}
+
+	if existingHash != hash {
+		// Track changes
+		strCols := make(map[string]string, len(columns))
+		for col, val := range columns {
+			strCols[col] = fmt.Sprintf("%v", val)
+		}
+		db.trackChanges(table, key, strCols)
+
+		// UPDATE
+		sets := []string{}
+		args := []interface{}{}
+		for col, val := range columns {
+			sets = append(sets, col+"=?")
+			args = append(args, val)
+		}
+		sets = append(sets, "hash=?", "sync_status='pending'", "sync_action='edit'", "updated_at=?")
+		args = append(args, hash, now, key)
+
+		query := fmt.Sprintf(`UPDATE %s SET %s WHERE %s=?`,
+			table,
+			strings.Join(sets, ", "),
+			keyCol,
+		)
+		db.conn.Exec(query, args...)
+		return "edit"
+	}
+	return ""
+}
+
+// MarkDeletedGeneric marks records not in currentKeys as deleted.
+func (db *DB) MarkDeletedGeneric(table, keyCol string, currentKeys map[string]bool) int {
+	return db.markDeleted(table, keyCol, currentKeys)
+}
+
 func (db *DB) getAllHashes(table, keyCol string) map[string]string {
 	hashes := make(map[string]string)
 	rows, err := db.conn.Query(
@@ -2868,7 +3112,7 @@ func (db *DB) SearchSyncHistory(tableName, search, dateFrom, dateTo, status stri
 func (db *DB) GetStats() map[string]interface{} {
 	stats := map[string]interface{}{}
 
-	tables := []string{"clients", "products", "movements", "cartera", "plan_cuentas", "activos_fijos", "saldos_terceros", "saldos_consolidados", "documentos", "terceros_ampliados", "transacciones_detalle", "periodos_contables", "condiciones_pago", "libros_auxiliares", "codigos_dane", "actividades_ica", "conceptos_pila", "activos_fijos_detalle", "audit_trail_terceros", "clasificacion_cuentas"}
+	tables := []string{"clients", "products", "movements", "cartera", "plan_cuentas", "activos_fijos", "saldos_terceros", "saldos_consolidados", "documentos", "terceros_ampliados", "transacciones_detalle", "periodos_contables", "condiciones_pago", "libros_auxiliares", "codigos_dane", "actividades_ica", "conceptos_pila", "activos_fijos_detalle", "audit_trail_terceros", "clasificacion_cuentas", "movimientos_inventario", "saldos_inventario", "historial", "maestros", "formulas", "docs_inventario", "vendedores_areas"}
 	for _, t := range tables {
 		var total, synced, pending, errors int
 		db.conn.QueryRow(fmt.Sprintf(`SELECT COUNT(*) FROM %s`, t)).Scan(&total)
@@ -3328,6 +3572,8 @@ func (db *DB) keyColForTable(table string) string {
 		return "record_key"
 	case "clasificacion_cuentas":
 		return "codigo_cuenta"
+	case "movimientos_inventario", "saldos_inventario", "historial", "maestros", "formulas", "docs_inventario", "vendedores_areas":
+		return "record_key"
 	}
 	return ""
 }
@@ -3598,10 +3844,17 @@ func (db *DB) ClearAll() error {
 		"codigos_dane", "actividades_ica", "conceptos_pila",
 		"activos_fijos_detalle", "audit_trail_terceros", "clasificacion_cuentas",
 		"movimientos_inventario", "saldos_inventario", "historial", "maestros",
-		"sync_history",
+		"formulas", "docs_inventario", "vendedores_areas", "sync_history",
 	}
+	var errs []string
 	for _, t := range tables {
-		db.conn.Exec(`DELETE FROM ` + t)
+		_, err := db.conn.Exec(`DELETE FROM ` + t)
+		if err != nil {
+			errs = append(errs, t+": "+err.Error())
+		}
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("ClearAll errors: %s", strings.Join(errs, "; "))
 	}
 	return nil
 }

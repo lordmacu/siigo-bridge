@@ -32,13 +32,15 @@ func FileBrowseHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type FileEntry struct {
-		Name     string `json:"name"`
-		Path     string `json:"path"`
-		IsDir    bool   `json:"is_dir"`
-		Size     int64  `json:"size"`
-		IsISAM   bool   `json:"is_isam"`
-		RecSize  int    `json:"rec_size,omitempty"`
-		Records  int    `json:"records,omitempty"`
+		Name        string `json:"name"`
+		Path        string `json:"path"`
+		IsDir       bool   `json:"is_dir"`
+		IsEmpty     bool   `json:"is_empty,omitempty"`
+		HasISAM     bool   `json:"has_isam,omitempty"`
+		Size        int64  `json:"size"`
+		IsISAM      bool   `json:"is_isam"`
+		RecSize     int    `json:"rec_size,omitempty"`
+		Records     int    `json:"records,omitempty"`
 	}
 
 	var result []FileEntry
@@ -54,6 +56,34 @@ func FileBrowseHandler(w http.ResponseWriter, r *http.Request) {
 			Path:  fullPath,
 			IsDir: e.IsDir(),
 			Size:  info.Size(),
+		}
+
+		// Check if directory has ISAM-compatible files
+		if e.IsDir() {
+			subEntries, err := os.ReadDir(fullPath)
+			if err == nil {
+				if len(subEntries) == 0 {
+					entry.IsEmpty = true
+				} else {
+					// Check if any file inside could be ISAM (no extension or Z-prefix, size > 128)
+					for _, sub := range subEntries {
+						if sub.IsDir() {
+							continue
+						}
+						subInfo, err := sub.Info()
+						if err != nil {
+							continue
+						}
+						if subInfo.Size() > 128 {
+							ext := filepath.Ext(sub.Name())
+							if ext == "" || strings.HasPrefix(strings.ToUpper(sub.Name()), "Z") {
+								entry.HasISAM = true
+								break
+							}
+						}
+					}
+				}
+			}
 		}
 
 		// Check if it's a potential ISAM file (no extension, or known patterns)

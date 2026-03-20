@@ -24,6 +24,35 @@ import (
 //   - Properly skips index pages, deleted records, and null padding
 // ---------------------------------------------------------------------------
 
+// looksLikeData checks if a record contains mostly printable/text data
+// rather than binary index page content. Examines the first N bytes and
+// rejects records where too many bytes are non-printable control chars.
+func looksLikeData(rec []byte, recSize int) bool {
+	checkLen := 30
+	if recSize < checkLen {
+		checkLen = recSize
+	}
+	if len(rec) < checkLen {
+		checkLen = len(rec)
+	}
+	if checkLen == 0 {
+		return false
+	}
+	printable := 0
+	for i := 0; i < checkLen; i++ {
+		b := rec[i]
+		// Count printable ASCII (0x20-0x7E) and digit chars
+		if b >= 0x20 && b <= 0x7E {
+			printable++
+		}
+	}
+	// Real ISAM data records have mostly printable text in the first 30 bytes
+	// (empresa, tipo, codigo, nombre fields are all ASCII).
+	// Index pages and deleted slots have mostly nulls/binary.
+	// Require at least 60% printable ASCII in the first 30 bytes.
+	return printable*100/checkLen >= 60
+}
+
 // Record type codes (top 4 bits of the 2-byte record header)
 // Per Micro Focus spec: 0=null, 1=system, 2=pointer, 3=deleted, 4=normal, ...
 const (
@@ -327,7 +356,15 @@ func ReadFileV2(path string) (*FileInfo, *V2Header, error) {
 			pos = payloadEnd
 		}
 	} else {
-		// MF stream format: record type nibble + data length
+		// MF stream format: record type nibble + data length.
+		//
+		// For files with alignment=1 (common in older Siigo data), index pages and data
+		// records are interleaved without padding. We scan byte-by-byte for markers where
+		// dataLen == recSize exactly, then verify with looksLikeData() to reject false positives.
+		//
+		// For files with alignment > 1, use the standard sequential parsing.
+		exactMatchScan := hdr.Alignment <= 1 && hdr.Organization == 2
+
 		for pos < scanEnd {
 			if pos+hdr.RecHeaderSize > scanEnd {
 				break
@@ -346,61 +383,95 @@ func ReadFileV2(path string) (*FileInfo, *V2Header, error) {
 				dataLen = int(marker & 0x0FFFFFFF)
 			}
 
-			// NULL record type with zero length = padding
-			if recType == RecTypeNull && dataLen == 0 {
-				if hdr.Alignment > 1 && hdr.Organization == 2 {
-					pos += hdr.Alignment // indexed files have clean aligned padding
-				} else {
-					pos++ // byte-by-byte recovery for sequential/relative formats
-				}
-				continue
-			}
+			if exactMatchScan {
+				// Exact-match scanning for Align=1 indexed files.
+				// Only accept markers where dataLen matches recSize exactly.
+				isData := (recType == RecTypeNormal || recType == RecTypeReduced ||
+					recType == RecTypeRefData || recType == RecTypeRedRef) && dataLen == recSize
 
-			// Validate data length
-			if dataLen < 0 || dataLen > scanEnd-pos-hdr.RecHeaderSize {
-				if hdr.Alignment > 1 && hdr.Organization == 2 {
-					pos += hdr.Alignment
-				} else {
+				if !isData {
 					pos++
+					continue
 				}
-				continue
-			}
 
-			dataStart := pos + hdr.RecHeaderSize
-			dataEnd := dataStart + dataLen
-			if dataEnd > scanEnd {
-				break
-			}
-
-			// Classify record
-			isData := recType == RecTypeNormal || recType == RecTypeReduced ||
-				recType == RecTypeRefData || recType == RecTypeRedRef
-
-			if isData && dataLen > 0 {
-				extractLen := recSize
-				if dataLen < recSize {
-					extractLen = dataLen
+				dataStart := pos + hdr.RecHeaderSize
+				dataEnd := dataStart + recSize
+				if dataEnd > scanEnd {
+					break
 				}
+
 				rec := make([]byte, recSize)
-				copyLen := extractLen
-				if dataStart+copyLen > len(data) {
-					copyLen = len(data) - dataStart
+				copy(rec, data[dataStart:dataEnd])
+
+				if !looksLikeData(rec, recSize) {
+					pos++
+					continue
 				}
-				copy(rec, data[dataStart:dataStart+copyLen])
 
 				info.Records = append(info.Records, Record{
 					Data:   rec,
 					Offset: pos,
 				})
-			}
 
-			// Advance past record header + data + alignment padding
-			consumed := hdr.RecHeaderSize + dataLen
-			if hdr.Alignment > 1 {
-				slack := (hdr.Alignment - (consumed % hdr.Alignment)) % hdr.Alignment
-				consumed += slack
+				pos = dataEnd // jump past this record's data
+			} else {
+				// Standard sequential parsing for Align > 1 files
+
+				// NULL record type with zero length = padding
+				if recType == RecTypeNull && dataLen == 0 {
+					if hdr.Alignment > 1 && hdr.Organization == 2 {
+						pos += hdr.Alignment
+					} else {
+						pos++
+					}
+					continue
+				}
+
+				// Validate data length
+				if dataLen < 0 || dataLen > scanEnd-pos-hdr.RecHeaderSize {
+					if hdr.Alignment > 1 && hdr.Organization == 2 {
+						pos += hdr.Alignment
+					} else {
+						pos++
+					}
+					continue
+				}
+
+				dataStart := pos + hdr.RecHeaderSize
+				dataEnd := dataStart + dataLen
+				if dataEnd > scanEnd {
+					break
+				}
+
+				isData := recType == RecTypeNormal || recType == RecTypeReduced ||
+					recType == RecTypeRefData || recType == RecTypeRedRef
+
+				if isData && dataLen > 0 {
+					extractLen := recSize
+					if dataLen < recSize {
+						extractLen = dataLen
+					}
+					rec := make([]byte, recSize)
+					copyLen := extractLen
+					if dataStart+copyLen > len(data) {
+						copyLen = len(data) - dataStart
+					}
+					copy(rec, data[dataStart:dataStart+copyLen])
+
+					info.Records = append(info.Records, Record{
+						Data:   rec,
+						Offset: pos,
+					})
+				}
+
+				// Advance past record header + data + alignment padding
+				consumed := hdr.RecHeaderSize + dataLen
+				if hdr.Alignment > 1 {
+					slack := (hdr.Alignment - (consumed % hdr.Alignment)) % hdr.Alignment
+					consumed += slack
+				}
+				pos += consumed
 			}
-			pos += consumed
 		}
 	}
 
@@ -512,6 +583,8 @@ func ReadFileV2WithStats(path string) ([][]byte, *V2Stats, error) {
 		}
 	} else {
 		// MF stream format
+		exactMatchScan := hdr.Alignment <= 1 && hdr.Organization == 2
+
 		for pos < scanEnd {
 			if pos+hdr.RecHeaderSize > scanEnd {
 				break
@@ -530,68 +603,97 @@ func ReadFileV2WithStats(path string) ([][]byte, *V2Stats, error) {
 				dataLen = int(marker & 0x0FFFFFFF)
 			}
 
-			if recType == RecTypeNull && dataLen == 0 {
-				stats.NullCount++
-				if hdr.Alignment > 1 && hdr.Organization == 2 {
-					pos += hdr.Alignment // indexed files have clean aligned padding
-				} else {
-					pos++ // byte-by-byte recovery for sequential/relative formats
-				}
-				continue
-			}
+			if exactMatchScan {
+				isData := (recType == RecTypeNormal || recType == RecTypeReduced ||
+					recType == RecTypeRefData || recType == RecTypeRedRef) && dataLen == recSize
 
-			if dataLen < 0 || dataLen > scanEnd-pos-hdr.RecHeaderSize {
-				if hdr.Alignment > 1 && hdr.Organization == 2 {
-					pos += hdr.Alignment
-				} else {
+				if !isData {
 					pos++
+					continue
 				}
-				continue
-			}
 
-			stats.DataTypes[recType]++
-
-			dataStart := pos + hdr.RecHeaderSize
-			dataEnd := dataStart + dataLen
-			if dataEnd > scanEnd {
-				break
-			}
-
-			isData := recType == RecTypeNormal || recType == RecTypeReduced ||
-				recType == RecTypeRefData || recType == RecTypeRedRef
-
-			switch recType {
-			case RecTypeDeleted:
-				stats.DeletedCount++
-			case RecTypeSystem:
-				stats.SystemCount++
-			case RecTypePtrRef:
-				stats.PtrRefCount++
-			case RecTypePointer:
-				stats.PointerCount++
-			}
-
-			if isData && dataLen > 0 {
-				stats.TotalRecords++
-				extractLen := recSize
-				if dataLen < recSize {
-					extractLen = dataLen
+				dataStart := pos + hdr.RecHeaderSize
+				dataEnd := dataStart + recSize
+				if dataEnd > scanEnd {
+					break
 				}
+
 				rec := make([]byte, recSize)
-				copyLen := extractLen
-				if dataStart+copyLen > len(data) {
-					copyLen = len(data) - dataStart
-				}
-				copy(rec, data[dataStart:dataStart+copyLen])
-				records = append(records, rec)
-			}
+				copy(rec, data[dataStart:dataEnd])
 
-			consumed := hdr.RecHeaderSize + dataLen
-			if hdr.Alignment > 1 {
-				slack := (hdr.Alignment - (consumed % hdr.Alignment)) % hdr.Alignment
-				consumed += slack
+				if !looksLikeData(rec, recSize) {
+					pos++
+					continue
+				}
+
+				stats.TotalRecords++
+				stats.DataTypes[recType]++
+				records = append(records, rec)
+				pos = dataEnd
+			} else {
+				if recType == RecTypeNull && dataLen == 0 {
+					stats.NullCount++
+					if hdr.Alignment > 1 && hdr.Organization == 2 {
+						pos += hdr.Alignment
+					} else {
+						pos++
+					}
+					continue
+				}
+
+				if dataLen < 0 || dataLen > scanEnd-pos-hdr.RecHeaderSize {
+					if hdr.Alignment > 1 && hdr.Organization == 2 {
+						pos += hdr.Alignment
+					} else {
+						pos++
+					}
+					continue
+				}
+
+				stats.DataTypes[recType]++
+
+				dataStart := pos + hdr.RecHeaderSize
+				dataEnd := dataStart + dataLen
+				if dataEnd > scanEnd {
+					break
+				}
+
+				isData := recType == RecTypeNormal || recType == RecTypeReduced ||
+					recType == RecTypeRefData || recType == RecTypeRedRef
+
+				switch recType {
+				case RecTypeDeleted:
+					stats.DeletedCount++
+				case RecTypeSystem:
+					stats.SystemCount++
+				case RecTypePtrRef:
+					stats.PtrRefCount++
+				case RecTypePointer:
+					stats.PointerCount++
+				}
+
+				if isData && dataLen > 0 {
+					stats.TotalRecords++
+					extractLen := recSize
+					if dataLen < recSize {
+						extractLen = dataLen
+					}
+					rec := make([]byte, recSize)
+					copyLen := extractLen
+					if dataStart+copyLen > len(data) {
+						copyLen = len(data) - dataStart
+					}
+					copy(rec, data[dataStart:dataStart+copyLen])
+					records = append(records, rec)
+				}
+
+				consumed := hdr.RecHeaderSize + dataLen
+				if hdr.Alignment > 1 {
+					slack := (hdr.Alignment - (consumed % hdr.Alignment)) % hdr.Alignment
+					consumed += slack
+				}
+				pos += consumed
 			}
-			pos += consumed
 		}
 	}
 

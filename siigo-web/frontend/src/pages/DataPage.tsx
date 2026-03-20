@@ -9,6 +9,7 @@ import Modal from '../components/Modal';
 import TabBar from '../components/TabBar';
 import SearchBox from '../components/SearchBox';
 import { fmtDate } from '../utils/format';
+import { TABLE_CONFIGS } from '../config/tables';
 
 interface Props {
   table: string;
@@ -16,34 +17,8 @@ interface Props {
   file: string;
 }
 
-const EDITABLE_FIELDS: Record<string, string[]> = {
-  clients: ['nit', 'nombre', 'tipo_persona', 'empresa', 'direccion', 'email', 'rep_legal'],
-  products: ['code', 'nombre', 'grupo', 'cuenta_contable', 'fecha', 'tipo_mov'],
-  movements: ['tipo_comprobante', 'numero_doc', 'fecha', 'nit_tercero', 'cuenta_contable', 'descripcion', 'valor', 'tipo_mov'],
-  cartera: ['tipo_registro', 'nit_tercero', 'cuenta_contable', 'fecha', 'descripcion', 'tipo_mov'],
-  plan_cuentas: ['codigo_cuenta', 'nombre', 'empresa', 'naturaleza'],
-  activos_fijos: ['codigo', 'nombre', 'empresa', 'nit_responsable', 'fecha_adquisicion'],
-  saldos_terceros: ['cuenta_contable', 'nit_tercero'],
-  saldos_consolidados: ['cuenta_contable'],
-  documentos: ['tipo_comprobante', 'nit_tercero', 'cuenta_contable', 'producto_ref', 'fecha', 'descripcion', 'tipo_mov'],
-  terceros_ampliados: ['nit', 'nombre', 'tipo_persona', 'representante_legal', 'direccion', 'email'],
-  movimientos_inventario: ['codigo_producto', 'tipo_comprobante', 'fecha', 'cantidad', 'valor', 'tipo_mov'],
-  saldos_inventario: ['codigo_producto'],
-  activos_fijos_detalle: ['nombre', 'nit_responsable', 'codigo', 'fecha', 'valor_compra', 'ubicacion', 'referencia'],
-  audit_trail_terceros: ['nombre', 'nit_tercero', 'fecha_cambio', 'tipo_doc', 'direccion', 'email'],
-  transacciones_detalle: ['nit_tercero', 'cuenta_contable', 'fecha_documento', 'valor', 'tipo_movimiento'],
-  periodos_contables: ['numero_periodo', 'fecha_inicio', 'fecha_fin', 'estado'],
-  condiciones_pago: ['tipo', 'nit', 'fecha', 'valor', 'fecha_registro'],
-  libros_auxiliares: ['cuenta_contable', 'nit_tercero', 'fecha_documento', 'saldo', 'debito', 'credito'],
-  codigos_dane: ['codigo', 'nombre'],
-  actividades_ica: ['codigo', 'nombre', 'tarifa'],
-  conceptos_pila: ['tipo', 'fondo', 'concepto'],
-  clasificacion_cuentas: ['codigo_cuenta', 'descripcion'],
-  historial: ['tipo', 'sub_tipo', 'empresa', 'fecha', 'nombre', 'nombre2'],
-  maestros: ['tipo', 'codigo', 'nombre', 'responsable', 'direccion'],
-};
-
 export default function DataPage({ table, title, file }: Props) {
+  const cfg = TABLE_CONFIGS[table];
   const [subTab, setSubTab] = useState<'data' | 'history'>('data');
   const [data, setData] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
@@ -86,36 +61,11 @@ export default function DataPage({ table, title, file }: Props) {
   }, []);
 
   const fetchData = useCallback(async () => {
-    const fetchers: Record<string, (p: number, s: string) => Promise<any>> = {
-      clients: api.getClients,
-      products: api.getProducts,
-      movements: api.getMovements,
-      cartera: api.getCartera,
-      plan_cuentas: api.getPlanCuentas,
-      activos_fijos: api.getActivosFijos,
-      saldos_terceros: api.getSaldosTerceros,
-      saldos_consolidados: api.getSaldosConsolidados,
-      documentos: api.getDocumentos,
-      terceros_ampliados: api.getTercerosAmpliados,
-      movimientos_inventario: api.getMovimientosInventario,
-      saldos_inventario: api.getSaldosInventario,
-      activos_fijos_detalle: api.getActivosFijosDetalle,
-      audit_trail_terceros: api.getAuditTrailTerceros,
-      transacciones_detalle: api.getTransaccionesDetalle,
-      periodos_contables: api.getPeriodosContables,
-      condiciones_pago: api.getCondicionesPago,
-      libros_auxiliares: api.getLibrosAuxiliares,
-      codigos_dane: api.getCodigosDane,
-      actividades_ica: api.getActividadesIca,
-      conceptos_pila: api.getConceptosPila,
-      clasificacion_cuentas: api.getClasificacionCuentas,
-      historial: api.getHistorial,
-      maestros: api.getMaestros,
-    };
-    const result = await fetchers[table](page, search);
+    const path = cfg?.apiPath || table;
+    const result = await api.getTableData(path, page, search);
     setData(result.data || []);
     setTotal(result.total || 0);
-  }, [table, page, search]);
+  }, [table, page, search, cfg]);
 
   const fetchHistory = useCallback(async () => {
     const result = await api.getSyncHistory(table, histPage, histSearch, histDateFrom, histDateTo, histStatus);
@@ -136,10 +86,11 @@ export default function DataPage({ table, title, file }: Props) {
   const doHistSearch = () => { setHistSearch(histSearchInput); setHistPage(1); };
   const clearHistSearch = () => { setHistSearchInput(''); setHistSearch(''); setHistStatus(''); setHistDateFrom(''); setHistDateTo(''); setHistPage(1); };
 
+  const editable = cfg?.editableFields || [];
+
   const openEdit = (record: any) => {
     setEditRecord(record);
     const fields: Record<string, string> = {};
-    const editable = EDITABLE_FIELDS[table] || [];
     for (const f of editable) {
       fields[f] = record[f] ?? '';
     }
@@ -220,28 +171,6 @@ export default function DataPage({ table, title, file }: Props) {
     }
   };
 
-  const renderCheckbox = (r: any) => (
-    <td style={{ width: 32 }}>
-      <input type="checkbox" checked={selected.has(r.id)} onChange={() => toggleSelect(r.id)} />
-    </td>
-  );
-
-  const renderCheckboxHeader = () => (
-    <th style={{ width: 32 }}>
-      <input type="checkbox" checked={data.length > 0 && selected.size === data.length} onChange={toggleSelectAll} />
-    </th>
-  );
-
-  const renderActionButtons = (r: any) => (
-    <td>
-      <button className="btn-sm btn-resend" onClick={() => openChangeHistory(r)} title="Historial" style={{ marginRight: 4 }}>Hist</button>
-      {allowEditDelete && <>
-        <button className="btn-sm btn-edit" onClick={() => openEdit(r)} title="Editar">Editar</button>
-        <button className="btn-sm btn-danger-sm" onClick={() => setDeleteConfirm(r)} title="Eliminar" style={{ marginLeft: 4 }}>Eliminar</button>
-      </>}
-    </td>
-  );
-
   const handleSort = (col: string) => {
     if (sortCol === col) {
       setSortDir(d => d === 'asc' ? 'desc' : 'asc');
@@ -264,488 +193,56 @@ export default function DataPage({ table, title, file }: Props) {
     </th>
   );
 
+  // Format a cell value based on column type
+  const fmtCell = (value: any, col: { type: string; format?: string; bold?: boolean }) => {
+    if (value == null || value === '') return col.type === 'name' || col.type === 'desc' ? '-' : '';
+    if (col.type === 'bool') return value ? 'Si' : 'No';
+    if (col.format === 'money' && typeof value === 'number') {
+      return value.toLocaleString('es-CO', { minimumFractionDigits: 2 });
+    }
+    if (col.format === 'percent' && typeof value === 'number') {
+      return value.toLocaleString('es-CO', { minimumFractionDigits: 3, maximumFractionDigits: 3 }) + '%';
+    }
+    return String(value);
+  };
+
   const renderDataTable = () => {
-    if (table === 'clients') {
-      return (
-        <table className="data-table">
-          <thead><tr>{renderCheckboxHeader()}{sortTh('NIT','nit')}{sortTh('Nombre','nombre')}{sortTh('Tipo','tipo_persona')}{sortTh('Empresa','empresa')}{sortTh('Email','email')}{sortTh('Estado','sync_status')}<th>Acciones</th></tr></thead>
-          <tbody>{sortedData.map((r, i) => (
-            <tr key={i}>
-              {renderCheckbox(r)}
-              <td className="col-key">{r.nit}</td>
-              <td className="col-name">{r.nombre}</td>
-              <td className="col-type">{r.tipo_persona}</td>
-              <td className="col-code">{r.empresa}</td>
-              <td className="col-desc">{r.email}</td>
-              <td><StatusBadge status={r.sync_status} /></td>
-              {renderActionButtons(r)}
-            </tr>
-          ))}</tbody>
-        </table>
-      );
-    }
-    if (table === 'products') {
-      return (
-        <table className="data-table">
-          <thead><tr>{renderCheckboxHeader()}{sortTh('Codigo','code')}{sortTh('Nombre','nombre')}{sortTh('Grupo','grupo')}{sortTh('Cuenta','cuenta_contable')}{sortTh('Estado','sync_status')}<th>Acciones</th></tr></thead>
-          <tbody>{sortedData.map((r, i) => (
-            <tr key={i}>
-              {renderCheckbox(r)}
-              <td className="col-key">{r.code}</td>
-              <td className="col-name">{r.nombre}</td>
-              <td className="col-type">{r.grupo}</td>
-              <td className="col-code">{r.cuenta_contable}</td>
-              <td><StatusBadge status={r.sync_status} /></td>
-              {renderActionButtons(r)}
-            </tr>
-          ))}</tbody>
-        </table>
-      );
-    }
-    if (table === 'movements') {
-      return (
-        <table className="data-table">
-          <thead><tr>{renderCheckboxHeader()}{sortTh('Tipo','tipo_comprobante')}{sortTh('Num Doc','numero_doc')}{sortTh('Fecha','fecha')}{sortTh('NIT','nit_tercero')}{sortTh('Descripcion','descripcion')}{sortTh('Estado','sync_status')}<th>Acciones</th></tr></thead>
-          <tbody>{sortedData.map((r, i) => (
-            <tr key={i}>
-              {renderCheckbox(r)}
-              <td className="col-type">{r.tipo_comprobante}</td>
-              <td className="col-key">{r.numero_doc}</td>
-              <td className="col-date">{r.fecha}</td>
-              <td className="col-code">{r.nit_tercero}</td>
-              <td className="col-desc">{r.descripcion}</td>
-              <td><StatusBadge status={r.sync_status} /></td>
-              {renderActionButtons(r)}
-            </tr>
-          ))}</tbody>
-        </table>
-      );
-    }
-    if (table === 'cartera') {
-      return (
-        <table className="data-table">
-          <thead><tr>{renderCheckboxHeader()}{sortTh('Tipo','tipo_registro')}{sortTh('NIT','nit_tercero')}{sortTh('Cuenta','cuenta_contable')}{sortTh('Fecha','fecha')}{sortTh('Descripcion','descripcion')}{sortTh('D/C','tipo_mov')}{sortTh('Estado','sync_status')}<th>Acciones</th></tr></thead>
-          <tbody>{sortedData.map((r, i) => (
-            <tr key={i}>
-              {renderCheckbox(r)}
-              <td className="col-type">{r.tipo_registro}</td>
-              <td className="col-key">{r.nit_tercero}</td>
-              <td className="col-code">{r.cuenta_contable}</td>
-              <td className="col-date">{r.fecha}</td>
-              <td className="col-desc">{r.descripcion}</td>
-              <td className="col-value">{r.tipo_mov}</td>
-              <td><StatusBadge status={r.sync_status} /></td>
-              {renderActionButtons(r)}
-            </tr>
-          ))}</tbody>
-        </table>
-      );
-    }
-    if (table === 'plan_cuentas') {
-      return (
-        <table className="data-table">
-          <thead><tr>{renderCheckboxHeader()}{sortTh('Codigo','codigo_cuenta')}{sortTh('Nombre','nombre')}{sortTh('Empresa','empresa')}{sortTh('Activa','activa')}{sortTh('Auxiliar','auxiliar')}{sortTh('Naturaleza','naturaleza')}{sortTh('Estado','sync_status')}<th>Acciones</th></tr></thead>
-          <tbody>{sortedData.map((r, i) => (
-            <tr key={i}>
-              {renderCheckbox(r)}
-              <td className="col-key">{r.codigo_cuenta}</td>
-              <td className="col-name">{r.nombre}</td>
-              <td className="col-code">{r.empresa}</td>
-              <td className="col-type">{r.activa ? 'Si' : 'No'}</td>
-              <td className="col-type">{r.auxiliar ? 'Si' : 'No'}</td>
-              <td className="col-desc">{r.naturaleza}</td>
-              <td><StatusBadge status={r.sync_status} /></td>
-              {renderActionButtons(r)}
-            </tr>
-          ))}</tbody>
-        </table>
-      );
-    }
-    if (table === 'activos_fijos') {
-      return (
-        <table className="data-table">
-          <thead><tr>{renderCheckboxHeader()}{sortTh('Codigo','codigo')}{sortTh('Nombre','nombre')}{sortTh('Empresa','empresa')}{sortTh('NIT Responsable','nit_responsable')}{sortTh('Fecha Adquisicion','fecha_adquisicion')}{sortTh('Estado','sync_status')}<th>Acciones</th></tr></thead>
-          <tbody>{sortedData.map((r, i) => (
-            <tr key={i}>
-              {renderCheckbox(r)}
-              <td className="col-key">{r.codigo}</td>
-              <td className="col-name">{r.nombre}</td>
-              <td className="col-code">{r.empresa}</td>
-              <td className="col-code">{r.nit_responsable}</td>
-              <td className="col-date">{r.fecha_adquisicion}</td>
-              <td><StatusBadge status={r.sync_status} /></td>
-              {renderActionButtons(r)}
-            </tr>
-          ))}</tbody>
-        </table>
-      );
-    }
-    if (table === 'saldos_terceros') {
-      return (
-        <table className="data-table">
-          <thead><tr>{renderCheckboxHeader()}{sortTh('Cuenta','cuenta_contable')}{sortTh('NIT','nit_tercero')}{sortTh('Empresa','empresa')}{sortTh('Saldo Ant.','saldo_anterior')}{sortTh('Debito','debito')}{sortTh('Credito','credito')}{sortTh('Saldo Final','saldo_final')}{sortTh('Estado','sync_status')}<th>Acciones</th></tr></thead>
-          <tbody>{sortedData.map((r, i) => (
-            <tr key={i}>
-              {renderCheckbox(r)}
-              <td className="col-code">{r.cuenta_contable}</td>
-              <td className="col-key">{r.nit_tercero}</td>
-              <td className="col-code">{r.empresa}</td>
-              <td className="col-value">{r.saldo_anterior?.toLocaleString('es-CO', { minimumFractionDigits: 2 })}</td>
-              <td className="col-value">{r.debito?.toLocaleString('es-CO', { minimumFractionDigits: 2 })}</td>
-              <td className="col-value">{r.credito?.toLocaleString('es-CO', { minimumFractionDigits: 2 })}</td>
-              <td className="col-value" style={{ fontWeight: 600 }}>{r.saldo_final?.toLocaleString('es-CO', { minimumFractionDigits: 2 })}</td>
-              <td><StatusBadge status={r.sync_status} /></td>
-              {renderActionButtons(r)}
-            </tr>
-          ))}</tbody>
-        </table>
-      );
-    }
-    if (table === 'saldos_consolidados') {
-      return (
-        <table className="data-table">
-          <thead><tr>{renderCheckboxHeader()}{sortTh('Cuenta','cuenta_contable')}{sortTh('Empresa','empresa')}{sortTh('Saldo Ant.','saldo_anterior')}{sortTh('Debito','debito')}{sortTh('Credito','credito')}{sortTh('Saldo Final','saldo_final')}{sortTh('Estado','sync_status')}<th>Acciones</th></tr></thead>
-          <tbody>{sortedData.map((r, i) => (
-            <tr key={i}>
-              {renderCheckbox(r)}
-              <td className="col-key">{r.cuenta_contable}</td>
-              <td className="col-code">{r.empresa}</td>
-              <td className="col-value">{r.saldo_anterior?.toLocaleString('es-CO', { minimumFractionDigits: 2 })}</td>
-              <td className="col-value">{r.debito?.toLocaleString('es-CO', { minimumFractionDigits: 2 })}</td>
-              <td className="col-value">{r.credito?.toLocaleString('es-CO', { minimumFractionDigits: 2 })}</td>
-              <td className="col-value" style={{ fontWeight: 600 }}>{r.saldo_final?.toLocaleString('es-CO', { minimumFractionDigits: 2 })}</td>
-              <td><StatusBadge status={r.sync_status} /></td>
-              {renderActionButtons(r)}
-            </tr>
-          ))}</tbody>
-        </table>
-      );
-    }
-    if (table === 'documentos') {
-      return (
-        <table className="data-table">
-          <thead><tr>{renderCheckboxHeader()}{sortTh('Tipo','tipo_comprobante')}{sortTh('Cod','codigo_comp')}{sortTh('Seq','secuencia')}{sortTh('NIT','nit_tercero')}{sortTh('Cuenta','cuenta_contable')}{sortTh('Producto','producto_ref')}{sortTh('Fecha','fecha')}{sortTh('Descripcion','descripcion')}{sortTh('D/C','tipo_mov')}{sortTh('Estado','sync_status')}<th>Acciones</th></tr></thead>
-          <tbody>{sortedData.map((r, i) => (
-            <tr key={i}>
-              {renderCheckbox(r)}
-              <td className="col-type">{r.tipo_comprobante}</td>
-              <td className="col-code">{r.codigo_comp}</td>
-              <td className="col-code">{r.secuencia}</td>
-              <td className="col-key">{r.nit_tercero}</td>
-              <td className="col-code">{r.cuenta_contable}</td>
-              <td className="col-code">{r.producto_ref}</td>
-              <td className="col-date">{r.fecha}</td>
-              <td className="col-desc">{r.descripcion}</td>
-              <td className="col-value">{r.tipo_mov}</td>
-              <td><StatusBadge status={r.sync_status} /></td>
-              {renderActionButtons(r)}
-            </tr>
-          ))}</tbody>
-        </table>
-      );
-    }
-    if (table === 'movimientos_inventario') {
-      return (
-        <table className="data-table">
-          <thead><tr>{renderCheckboxHeader()}{sortTh('Producto','codigo_producto')}{sortTh('Tipo','tipo_comprobante')}{sortTh('Comp','codigo_comp')}{sortTh('Seq','secuencia')}{sortTh('TipoDoc','tipo_doc')}{sortTh('Fecha','fecha')}{sortTh('Cantidad','cantidad')}{sortTh('Valor','valor')}{sortTh('D/C','tipo_mov')}{sortTh('Estado','sync_status')}<th>Acciones</th></tr></thead>
-          <tbody>{sortedData.map((r, i) => (
-            <tr key={i}>
-              {renderCheckbox(r)}
-              <td className="col-key">{r.codigo_producto}</td>
-              <td className="col-type">{r.tipo_comprobante}</td>
-              <td className="col-code">{r.codigo_comp}</td>
-              <td className="col-code">{r.secuencia}</td>
-              <td className="col-code">{r.tipo_doc}</td>
-              <td className="col-date">{r.fecha}</td>
-              <td className="col-value">{r.cantidad}</td>
-              <td className="col-value">{r.valor}</td>
-              <td className="col-type">{r.tipo_mov}</td>
-              <td><StatusBadge status={r.sync_status} /></td>
-              {renderActionButtons(r)}
-            </tr>
-          ))}</tbody>
-        </table>
-      );
-    }
-    if (table === 'activos_fijos_detalle') {
-      return (
-        <table className="data-table">
-          <thead><tr>{renderCheckboxHeader()}{sortTh('Codigo','codigo')}{sortTh('Nombre','nombre')}{sortTh('NIT Resp','nit_responsable')}{sortTh('Fecha','fecha')}{sortTh('Valor Compra','valor_compra')}{sortTh('Ubicacion','ubicacion')}{sortTh('Referencia','referencia')}{sortTh('Estado','sync_status')}<th>Acciones</th></tr></thead>
-          <tbody>{sortedData.map((r, i) => (
-            <tr key={i}>
-              {renderCheckbox(r)}
-              <td className="col-code">{r.codigo}</td>
-              <td className="col-name">{r.nombre}</td>
-              <td className="col-key">{r.nit_responsable}</td>
-              <td className="col-date">{r.fecha}</td>
-              <td className="col-value">{r.valor_compra?.toLocaleString()}</td>
-              <td className="col-desc">{r.ubicacion}</td>
-              <td className="col-code">{r.referencia}</td>
-              <td><StatusBadge status={r.sync_status} /></td>
-              {renderActionButtons(r)}
-            </tr>
-          ))}</tbody>
-        </table>
-      );
-    }
-    if (table === 'audit_trail_terceros') {
-      return (
-        <table className="data-table">
-          <thead><tr>{renderCheckboxHeader()}{sortTh('Nombre','nombre')}{sortTh('NIT','nit_tercero')}{sortTh('Fecha','fecha_cambio')}{sortTh('Tipo','tipo_doc')}{sortTh('Usuario','usuario')}{sortTh('Direccion','direccion')}{sortTh('Email','email')}{sortTh('Rep. Legal','rep_legal')}{sortTh('Estado','sync_status')}<th>Acciones</th></tr></thead>
-          <tbody>{sortedData.map((r, i) => (
-            <tr key={i}>
-              {renderCheckbox(r)}
-              <td className="col-name">{r.nombre}</td>
-              <td className="col-key">{r.nit_tercero}</td>
-              <td className="col-date">{r.fecha_cambio}</td>
-              <td className="col-type">{r.tipo_doc}</td>
-              <td className="col-code">{r.usuario}</td>
-              <td className="col-desc">{r.direccion}</td>
-              <td className="col-desc">{r.email}</td>
-              <td className="col-name">{r.rep_legal}</td>
-              <td><StatusBadge status={r.sync_status} /></td>
-              {renderActionButtons(r)}
-            </tr>
-          ))}</tbody>
-        </table>
-      );
-    }
-    if (table === 'saldos_inventario') {
-      return (
-        <table className="data-table">
-          <thead><tr>{renderCheckboxHeader()}{sortTh('Producto','codigo_producto')}{sortTh('Empresa','empresa')}{sortTh('Grupo','grupo')}{sortTh('Saldo Ini.','saldo_inicial')}{sortTh('Entradas','entradas')}{sortTh('Salidas','salidas')}{sortTh('Saldo Final','saldo_final')}{sortTh('Estado','sync_status')}<th>Acciones</th></tr></thead>
-          <tbody>{sortedData.map((r, i) => (
-            <tr key={i}>
-              {renderCheckbox(r)}
-              <td className="col-key">{r.codigo_producto}</td>
-              <td className="col-code">{r.empresa}</td>
-              <td className="col-code">{r.grupo}</td>
-              <td className="col-value">{r.saldo_inicial?.toLocaleString('es-CO', { minimumFractionDigits: 2 })}</td>
-              <td className="col-value">{r.entradas?.toLocaleString('es-CO', { minimumFractionDigits: 2 })}</td>
-              <td className="col-value">{r.salidas?.toLocaleString('es-CO', { minimumFractionDigits: 2 })}</td>
-              <td className="col-value" style={{ fontWeight: 600 }}>{r.saldo_final?.toLocaleString('es-CO', { minimumFractionDigits: 2 })}</td>
-              <td><StatusBadge status={r.sync_status} /></td>
-              {renderActionButtons(r)}
-            </tr>
-          ))}</tbody>
-        </table>
-      );
-    }
-    if (table === 'transacciones_detalle') {
-      return (
-        <table className="data-table">
-          <thead><tr>{renderCheckboxHeader()}{sortTh('Tipo Comp','tipo_comprobante')}{sortTh('Empresa','empresa')}{sortTh('NIT','nit_tercero')}{sortTh('Cuenta','cuenta_contable')}{sortTh('Fecha','fecha_documento')}{sortTh('D/C','tipo_movimiento')}{sortTh('Valor','valor')}{sortTh('Referencia','referencia')}{sortTh('Estado','sync_status')}<th>Acciones</th></tr></thead>
-          <tbody>{sortedData.map((r, i) => (
-            <tr key={i}>
-              {renderCheckbox(r)}
-              <td className="col-type">{r.tipo_comprobante}</td>
-              <td className="col-code">{r.empresa}</td>
-              <td className="col-key">{r.nit_tercero}</td>
-              <td className="col-code">{r.cuenta_contable}</td>
-              <td className="col-date">{r.fecha_documento}</td>
-              <td className="col-type">{r.tipo_movimiento}</td>
-              <td className="col-value">{r.valor}</td>
-              <td className="col-code">{r.referencia}</td>
-              <td><StatusBadge status={r.sync_status} /></td>
-              {renderActionButtons(r)}
-            </tr>
-          ))}</tbody>
-        </table>
-      );
-    }
-    if (table === 'periodos_contables') {
-      return (
-        <table className="data-table">
-          <thead><tr>{renderCheckboxHeader()}{sortTh('Periodo','numero_periodo')}{sortTh('Empresa','empresa')}{sortTh('Fecha Inicio','fecha_inicio')}{sortTh('Fecha Fin','fecha_fin')}{sortTh('Estado Periodo','estado')}{sortTh('Saldo 1','saldo1')}{sortTh('Saldo 2','saldo2')}{sortTh('Saldo 3','saldo3')}{sortTh('Estado','sync_status')}<th>Acciones</th></tr></thead>
-          <tbody>{sortedData.map((r, i) => (
-            <tr key={i}>
-              {renderCheckbox(r)}
-              <td className="col-key">{r.numero_periodo}</td>
-              <td className="col-code">{r.empresa}</td>
-              <td className="col-date">{r.fecha_inicio}</td>
-              <td className="col-date">{r.fecha_fin}</td>
-              <td className="col-type">{r.estado}</td>
-              <td className="col-value">{r.saldo1?.toLocaleString()}</td>
-              <td className="col-value">{r.saldo2?.toLocaleString()}</td>
-              <td className="col-value">{r.saldo3?.toLocaleString()}</td>
-              <td><StatusBadge status={r.sync_status} /></td>
-              {renderActionButtons(r)}
-            </tr>
-          ))}</tbody>
-        </table>
-      );
-    }
-    if (table === 'condiciones_pago') {
-      return (
-        <table className="data-table">
-          <thead><tr>{renderCheckboxHeader()}{sortTh('Tipo','tipo')}{sortTh('Empresa','empresa')}{sortTh('NIT','nit')}{sortTh('TipoDoc','tipo_doc')}{sortTh('Fecha','fecha')}{sortTh('Valor','valor')}{sortTh('Fecha Reg','fecha_registro')}{sortTh('Estado','sync_status')}<th>Acciones</th></tr></thead>
-          <tbody>{sortedData.map((r, i) => (
-            <tr key={i}>
-              {renderCheckbox(r)}
-              <td className="col-type">{r.tipo}</td>
-              <td className="col-code">{r.empresa}</td>
-              <td className="col-key">{r.nit}</td>
-              <td className="col-type">{r.tipo_doc}</td>
-              <td className="col-date">{r.fecha}</td>
-              <td className="col-value">{r.valor?.toLocaleString()}</td>
-              <td className="col-date">{r.fecha_registro}</td>
-              <td><StatusBadge status={r.sync_status} /></td>
-              {renderActionButtons(r)}
-            </tr>
-          ))}</tbody>
-        </table>
-      );
-    }
-    if (table === 'libros_auxiliares') {
-      return (
-        <table className="data-table">
-          <thead><tr>{renderCheckboxHeader()}{sortTh('Empresa','empresa')}{sortTh('Cuenta','cuenta_contable')}{sortTh('TipoComp','tipo_comprobante')}{sortTh('NIT','nit_tercero')}{sortTh('Fecha','fecha_documento')}{sortTh('Saldo','saldo')}{sortTh('Debito','debito')}{sortTh('Credito','credito')}{sortTh('Estado','sync_status')}<th>Acciones</th></tr></thead>
-          <tbody>{sortedData.map((r, i) => (
-            <tr key={i}>
-              {renderCheckbox(r)}
-              <td className="col-code">{r.empresa}</td>
-              <td className="col-key">{r.cuenta_contable}</td>
-              <td className="col-type">{r.tipo_comprobante}</td>
-              <td className="col-key">{r.nit_tercero}</td>
-              <td className="col-date">{r.fecha_documento}</td>
-              <td className="col-value">{r.saldo?.toLocaleString()}</td>
-              <td className="col-value">{r.debito?.toLocaleString()}</td>
-              <td className="col-value">{r.credito?.toLocaleString()}</td>
-              <td><StatusBadge status={r.sync_status} /></td>
-              {renderActionButtons(r)}
-            </tr>
-          ))}</tbody>
-        </table>
-      );
-    }
-    if (table === 'codigos_dane') {
-      return (
-        <table className="data-table">
-          <thead><tr>{renderCheckboxHeader()}{sortTh('Codigo','codigo')}{sortTh('Nombre','nombre')}{sortTh('Estado','sync_status')}<th>Acciones</th></tr></thead>
-          <tbody>{sortedData.map((r, i) => (
-            <tr key={i}>
-              {renderCheckbox(r)}
-              <td className="col-key">{r.codigo}</td>
-              <td className="col-name">{r.nombre}</td>
-              <td><StatusBadge status={r.sync_status} /></td>
-              {renderActionButtons(r)}
-            </tr>
-          ))}</tbody>
-        </table>
-      );
-    }
-    if (table === 'actividades_ica') {
-      return (
-        <table className="data-table">
-          <thead><tr>{renderCheckboxHeader()}{sortTh('Codigo','codigo')}{sortTh('Nombre','nombre')}{sortTh('Tarifa','tarifa')}{sortTh('Estado','sync_status')}<th>Acciones</th></tr></thead>
-          <tbody>{sortedData.map((r, i) => (
-            <tr key={i}>
-              {renderCheckbox(r)}
-              <td className="col-key">{r.codigo}</td>
-              <td className="col-name">{r.nombre}</td>
-              <td className="col-value">{r.tarifa}</td>
-              <td><StatusBadge status={r.sync_status} /></td>
-              {renderActionButtons(r)}
-            </tr>
-          ))}</tbody>
-        </table>
-      );
-    }
-    if (table === 'conceptos_pila') {
-      return (
-        <table className="data-table">
-          <thead><tr>{renderCheckboxHeader()}{sortTh('Tipo','tipo')}{sortTh('Fondo','fondo')}{sortTh('Concepto','concepto')}{sortTh('Flags','flags')}{sortTh('Tipo Base','tipo_base')}{sortTh('Base Calculo','base_calculo')}{sortTh('Estado','sync_status')}<th>Acciones</th></tr></thead>
-          <tbody>{sortedData.map((r, i) => (
-            <tr key={i}>
-              {renderCheckbox(r)}
-              <td className="col-type">{r.tipo}</td>
-              <td className="col-code">{r.fondo}</td>
-              <td className="col-key">{r.concepto}</td>
-              <td className="col-code">{r.flags}</td>
-              <td className="col-type">{r.tipo_base}</td>
-              <td className="col-value">{r.base_calculo}</td>
-              <td><StatusBadge status={r.sync_status} /></td>
-              {renderActionButtons(r)}
-            </tr>
-          ))}</tbody>
-        </table>
-      );
-    }
-    if (table === 'clasificacion_cuentas') {
-      return (
-        <table className="data-table">
-          <thead><tr>{renderCheckboxHeader()}{sortTh('Cuenta','codigo_cuenta')}{sortTh('Grupo','codigo_grupo')}{sortTh('Detalle','codigo_detalle')}{sortTh('Descripcion','descripcion')}{sortTh('Estado','sync_status')}<th>Acciones</th></tr></thead>
-          <tbody>{sortedData.map((r, i) => (
-            <tr key={i}>
-              {renderCheckbox(r)}
-              <td className="col-key">{r.codigo_cuenta}</td>
-              <td className="col-code">{r.codigo_grupo}</td>
-              <td className="col-code">{r.codigo_detalle}</td>
-              <td className="col-name">{r.descripcion}</td>
-              <td><StatusBadge status={r.sync_status} /></td>
-              {renderActionButtons(r)}
-            </tr>
-          ))}</tbody>
-        </table>
-      );
-    }
-    if (table === 'historial') {
-      return (
-        <table className="data-table">
-          <thead><tr>{renderCheckboxHeader()}{sortTh('Tipo','tipo')}{sortTh('SubTipo','sub_tipo')}{sortTh('Empresa','empresa')}{sortTh('Fecha','fecha')}{sortTh('Nombre','nombre')}{sortTh('Nombre2','nombre2')}{sortTh('Estado','sync_status')}<th>Acciones</th></tr></thead>
-          <tbody>{sortedData.map((r, i) => (
-            <tr key={i}>
-              {renderCheckbox(r)}
-              <td className="col-type">{r.tipo}</td>
-              <td className="col-code">{r.sub_tipo}</td>
-              <td className="col-code">{r.empresa}</td>
-              <td className="col-date">{r.fecha}</td>
-              <td className="col-name">{r.nombre}</td>
-              <td className="col-name">{r.nombre2}</td>
-              <td><StatusBadge status={r.sync_status} /></td>
-              {renderActionButtons(r)}
-            </tr>
-          ))}</tbody>
-        </table>
-      );
-    }
-    if (table === 'maestros') {
-      return (
-        <table className="data-table">
-          <thead><tr>{renderCheckboxHeader()}{sortTh('Tipo','tipo')}{sortTh('Codigo','codigo')}{sortTh('Nombre','nombre')}{sortTh('Responsable','responsable')}{sortTh('Direccion','direccion')}{sortTh('Estado','sync_status')}<th>Acciones</th></tr></thead>
-          <tbody>{sortedData.map((r, i) => (
-            <tr key={i}>
-              {renderCheckbox(r)}
-              <td className="col-type">{r.tipo}</td>
-              <td className="col-key">{r.codigo}</td>
-              <td className="col-name">{r.nombre}</td>
-              <td className="col-name">{r.responsable}</td>
-              <td className="col-desc">{r.direccion}</td>
-              <td><StatusBadge status={r.sync_status} /></td>
-              {renderActionButtons(r)}
-            </tr>
-          ))}</tbody>
-        </table>
-      );
-    }
-    // terceros_ampliados (default)
+    if (!cfg) return <EmptyState title="Tabla no configurada" message={`No hay configuracion para "${table}"`} />;
+
     return (
       <table className="data-table">
-        <thead><tr>{renderCheckboxHeader()}{sortTh('NIT','nit')}{sortTh('Nombre','nombre')}{sortTh('Tipo','tipo_persona')}{sortTh('Empresa','empresa')}{sortTh('Rep. Legal','representante_legal')}{sortTh('Direccion','direccion')}{sortTh('Email','email')}{sortTh('Estado','sync_status')}<th>Acciones</th></tr></thead>
-        <tbody>{sortedData.map((r, i) => (
-          <tr key={i}>
-            {renderCheckbox(r)}
-            <td className="col-key">{r.nit}</td>
-            <td className="col-name">{r.nombre}</td>
-            <td className="col-type">{r.tipo_persona}</td>
-            <td className="col-code">{r.empresa}</td>
-            <td className="col-name">{r.representante_legal || '-'}</td>
-            <td className="col-desc">{r.direccion || '-'}</td>
-            <td className="col-desc">{r.email || '-'}</td>
-            <td><StatusBadge status={r.sync_status} /></td>
-            {renderActionButtons(r)}
+        <thead>
+          <tr>
+            <th style={{ width: 32 }}>
+              <input type="checkbox" checked={data.length > 0 && selected.size === data.length} onChange={toggleSelectAll} />
+            </th>
+            {cfg.columns.map(c => sortTh(c.label, c.field))}
+            {sortTh('Estado', 'sync_status')}
+            <th>Acciones</th>
           </tr>
-        ))}</tbody>
+        </thead>
+        <tbody>
+          {sortedData.map((r, i) => (
+            <tr key={i}>
+              <td style={{ width: 32 }}>
+                <input type="checkbox" checked={selected.has(r.id)} onChange={() => toggleSelect(r.id)} />
+              </td>
+              {cfg.columns.map(c => (
+                <td key={c.field} className={`col-${c.type === 'bool' ? 'type' : c.type}`} style={c.bold ? { fontWeight: 600 } : undefined}>
+                  {fmtCell(r[c.field], c)}
+                </td>
+              ))}
+              <td><StatusBadge status={r.sync_status} /></td>
+              <td>
+                <button className="btn-sm btn-resend" onClick={() => openChangeHistory(r)} title="Historial" style={{ marginRight: 4 }}>Hist</button>
+                {allowEditDelete && <>
+                  <button className="btn-sm btn-edit" onClick={() => openEdit(r)} title="Editar">Editar</button>
+                  <button className="btn-sm btn-danger-sm" onClick={() => setDeleteConfirm(r)} title="Eliminar" style={{ marginLeft: 4 }}>Eliminar</button>
+                </>}
+              </td>
+            </tr>
+          ))}
+        </tbody>
       </table>
     );
   };

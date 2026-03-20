@@ -210,7 +210,8 @@ var allSyncTables = []string{
 	"condiciones_pago", "libros_auxiliares", "codigos_dane", "actividades_ica",
 	"conceptos_pila", "activos_fijos_detalle", "audit_trail_terceros",
 	"clasificacion_cuentas", "movimientos_inventario", "saldos_inventario",
-	"historial", "maestros",
+	"historial", "maestros", "formulas", "docs_inventario",
+	"vendedores_areas",
 }
 
 // AllSyncTables returns the canonical list of all syncable tables.

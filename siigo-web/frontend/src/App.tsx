@@ -119,6 +119,9 @@ export default function App() {
           <Route path="/clasificacion-cuentas" element={guard('clasificacion_cuentas', <DataPage table="clasificacion_cuentas" title="Clasificacion Cuentas (Z279)" file="Z279" />)} />
           <Route path="/historial" element={guard('historial', <DataPage table="historial" title="Historial (Z18)" file="Z18" />)} />
           <Route path="/maestros" element={guard('maestros', <DataPage table="maestros" title="Maestros (Z06)" file="Z06" />)} />
+          <Route path="/formulas" element={guard('formulas', <DataPage table="formulas" title="Formulas / Recetas (Z06)" file="Z06" />)} />
+          <Route path="/docs-inventario" element={guard('docs_inventario', <DataPage table="docs_inventario" title="Docs Inventario (Z11I)" file="Z11I" />)} />
+          <Route path="/vendedores-areas" element={guard('vendedores_areas', <DataPage table="vendedores_areas" title="Vendedores / Areas (Z06A)" file="Z06A" />)} />
           <Route path="/logs" element={guard('logs', <Logs />)} />
           <Route path="/errors" element={guard('errors', <ErrorSummary />)} />
           <Route path="/field-mappings" element={guard('field-mappings', <FieldMappings />)} />

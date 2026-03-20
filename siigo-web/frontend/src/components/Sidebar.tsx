@@ -28,6 +28,9 @@ const navItems = [
   { path: '/clasificacion-cuentas', label: 'Clasif. Cuentas', badge: 'Z279', module: 'clasificacion_cuentas' },
   { path: '/historial', label: 'Historial', badge: 'Z18', module: 'historial' },
   { path: '/maestros', label: 'Maestros', badge: 'Z06', module: 'maestros' },
+  { path: '/formulas', label: 'Formulas', badge: 'Z06R', module: 'formulas' },
+  { path: '/docs-inventario', label: 'Docs Inventario', badge: 'Z11I', module: 'docs_inventario' },
+  { path: '/vendedores-areas', label: 'Vendedores/Areas', badge: 'Z06A', module: 'vendedores_areas' },
   { path: '/field-mappings', label: 'Mapeo Campos', badge: '', module: 'field-mappings' },
   { path: '/errors', label: 'Errores', badge: '', module: 'errors' },
   { path: '/logs', label: 'Logs', badge: '', module: 'logs' },
@@ -37,11 +40,15 @@ const navItems = [
   { path: '/audit', label: 'Auditoria', badge: '', module: 'config' },
 ];
 
+// Modules that are not data tables — always shown regardless of record count
+const alwaysShow = new Set(['dashboard', 'field-mappings', 'errors', 'logs', 'explorer', 'config', 'users']);
+
 export default function Sidebar({ onLogout, open, userInfo }: { onLogout?: () => void; open?: boolean; userInfo?: UserInfo | null }) {
   const location = useLocation();
   const navigate = useNavigate();
   const [syncing, setSyncing] = useState(false);
   const [paused, setPaused] = useState(false);
+  const [tableCounts, setTableCounts] = useState<Record<string, number>>({});
 
   const pollStatus = useCallback(async () => {
     try {
@@ -49,6 +56,26 @@ export default function Sidebar({ onLogout, open, userInfo }: { onLogout?: () =>
       setSyncing(s.syncing);
       setPaused(s.paused);
     } catch { /* ignore */ }
+  }, []);
+
+  // Load stats to know which tables have data
+  useEffect(() => {
+    const loadCounts = async () => {
+      try {
+        const stats = await api.getStats();
+        const counts: Record<string, number> = {};
+        for (const [key, val] of Object.entries(stats)) {
+          if (key.endsWith('_total')) {
+            const table = key.replace('_total', '');
+            counts[table] = val as number;
+          }
+        }
+        setTableCounts(counts);
+      } catch { /* ignore */ }
+    };
+    loadCounts();
+    const interval = setInterval(loadCounts, 60000); // refresh every 60s
+    return () => clearInterval(interval);
   }, []);
 
   useEffect(() => {
@@ -80,8 +107,16 @@ export default function Sidebar({ onLogout, open, userInfo }: { onLogout?: () =>
       </div>
       <div className="nav-items">
         {navItems.filter(item => {
-          if (!userInfo || userInfo.role === 'root' || userInfo.role === 'admin') return true;
-          return item.module === 'dashboard' || userInfo.permissions.includes(item.module);
+          // Permission check
+          if (userInfo && userInfo.role !== 'root' && userInfo.role !== 'admin') {
+            if (item.module !== 'dashboard' && !userInfo.permissions.includes(item.module)) return false;
+          }
+          // Hide data tables with 0 records (system pages always visible)
+          if (!alwaysShow.has(item.module) && item.badge && Object.keys(tableCounts).length > 0) {
+            const count = tableCounts[item.module] ?? 0;
+            if (count === 0) return false;
+          }
+          return true;
         }).map(item => (
           <div
             key={item.path}

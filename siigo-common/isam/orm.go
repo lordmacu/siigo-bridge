@@ -64,6 +64,7 @@ type Table struct {
 	keyField      *FieldDef  // cached reference to primary key
 	compositeKeys []FieldDef // composite key fields (optional)
 	SafeMode      bool       // when true, writes check Siigo process + file locks (default: true)
+	RecordFilter  func([]byte) bool // optional: only include records where this returns true
 }
 
 // Row represents a single record from an ISAM table (named Row to avoid
@@ -159,6 +160,9 @@ func (t *Table) All() ([]*Row, error) {
 	hasSoftDelete := t.IsSoftDeleteEnabled()
 	records := make([]*Row, 0, len(info.Records))
 	for i, rec := range info.Records {
+		if t.RecordFilter != nil && !t.RecordFilter(rec.Data) {
+			continue
+		}
 		if hasSoftDelete && t.keyField != nil {
 			key := ExtractField(rec.Data, t.keyField.Offset, t.keyField.Length)
 			if isSoftDeleted(t.Path, key) {

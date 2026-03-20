@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useState, useEffect } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import * as api from '../utils/api'
 
 type WizardStep = 'select' | 'analyze' | 'fields' | 'save'
@@ -15,8 +15,9 @@ interface DetectedField {
 }
 
 export default function ImportWizard() {
+  const [searchParams] = useSearchParams()
   const [step, setStep] = useState<WizardStep>('select')
-  const [filePath, setFilePath] = useState('')
+  const [filePath, setFilePath] = useState(searchParams.get('path') || '')
   const [fileInfo, setFileInfo] = useState<any>(null)
   const [hexData, setHexData] = useState<any>(null)
   const [fields, setFields] = useState<DetectedField[]>([])
@@ -25,6 +26,13 @@ export default function ImportWizard() {
   const [selectedRecord, setSelectedRecord] = useState(0)
   const [loading, setLoading] = useState(false)
   const navigate = useNavigate()
+
+  // Auto-analyze if path came from URL
+  useEffect(() => {
+    if (filePath && step === 'select') {
+      analyzeFile()
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Step 1: Select file
   const analyzeFile = async () => {
@@ -302,35 +310,86 @@ export default function ImportWizard() {
       )}
 
       {/* Step 4: Save schema */}
-      {step === 'save' && (
-        <div className="card">
-          <h3>Save Schema</h3>
-          <div className="form-group" style={{ marginTop: '1rem' }}>
-            <label>Schema Name</label>
-            <input value={schemaName} onChange={e => setSchemaName(e.target.value)} placeholder="my_table" />
-          </div>
-          <div className="form-group">
-            <label>Description (optional)</label>
-            <input value={description} onChange={e => setDescription(e.target.value)} placeholder="Describe this table..." />
-          </div>
+      {step === 'save' && (() => {
+        const keyField = fields.find(f => f.isKey)
+        const schemaJson = {
+          name: schemaName || 'unnamed',
+          description,
+          record_size: fileInfo?.record_size,
+          key_offset: keyField?.offset ?? 0,
+          key_length: keyField?.length ?? 0,
+          source_file: filePath,
+          fields: fields.map(f => ({
+            name: f.name,
+            offset: f.offset,
+            length: f.length,
+            type: f.type === 'date' ? 'date' : f.type === 'numeric' ? 'int' : f.type === 'binary' ? 'bcd' : 'string',
+            is_key: f.isKey,
+          })),
+        }
+        const jsonStr = JSON.stringify(schemaJson, null, 2)
 
-          <div style={{ background: 'var(--bg-primary)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '1rem', margin: '1rem 0' }}>
-            <h4 style={{ fontSize: '0.875rem', marginBottom: '0.5rem' }}>Summary</h4>
-            <p style={{ fontSize: '0.8125rem' }}>
-              Record size: <strong>{fileInfo?.record_size}</strong> bytes<br />
-              Fields: <strong>{fields.length}</strong><br />
-              Key: <strong>{fields.find(f => f.isKey)?.name || 'none'}</strong>
-              (offset {fields.find(f => f.isKey)?.offset}, length {fields.find(f => f.isKey)?.length})<br />
-              Source: <code>{filePath}</code>
-            </p>
-          </div>
+        const downloadJson = () => {
+          const blob = new Blob([jsonStr], { type: 'application/json' })
+          const url = URL.createObjectURL(blob)
+          const a = document.createElement('a')
+          a.href = url
+          a.download = `${schemaName || 'schema'}.json`
+          a.click()
+          URL.revokeObjectURL(url)
+        }
 
-          <div className="btn-group">
-            <button className="btn" onClick={() => setStep('fields')}>Back</button>
-            <button className="btn btn-success" onClick={saveSchema}>Save Schema & Open Table</button>
+        return (
+          <div>
+            <div className="card">
+              <h3>Save Schema</h3>
+              <div className="form-group" style={{ marginTop: '1rem' }}>
+                <label>Schema Name</label>
+                <input value={schemaName} onChange={e => setSchemaName(e.target.value)} placeholder="my_table" />
+              </div>
+              <div className="form-group">
+                <label>Description (optional)</label>
+                <input value={description} onChange={e => setDescription(e.target.value)} placeholder="Describe this table..." />
+              </div>
+
+              <div style={{ background: 'var(--bg-primary)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '1rem', margin: '1rem 0' }}>
+                <h4 style={{ fontSize: '0.875rem', marginBottom: '0.5rem' }}>Summary</h4>
+                <p style={{ fontSize: '0.8125rem' }}>
+                  Record size: <strong>{fileInfo?.record_size}</strong> bytes<br />
+                  Fields: <strong>{fields.length}</strong><br />
+                  Key: <strong>{keyField?.name || 'none'}</strong>
+                  {keyField && <> (offset {keyField.offset}, length {keyField.length})</>}<br />
+                  Source: <code>{filePath}</code>
+                </p>
+              </div>
+
+              <div className="btn-group">
+                <button className="btn" onClick={() => setStep('fields')}>Back</button>
+                <button className="btn btn-success" onClick={saveSchema}>Save Schema & Open Table</button>
+              </div>
+            </div>
+
+            {/* JSON Preview */}
+            <div className="card" style={{ marginTop: '1rem' }}>
+              <div className="card-header">
+                <h3>Schema JSON</h3>
+                <button className="btn btn-sm" onClick={downloadJson}>Download .json</button>
+              </div>
+              <pre style={{
+                background: 'var(--bg-primary)', border: '1px solid var(--border)',
+                borderRadius: 'var(--radius)', padding: '1rem', fontSize: '0.75rem',
+                maxHeight: 400, overflowY: 'auto', color: 'var(--accent-light)',
+              }}>
+                {jsonStr}
+              </pre>
+              <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
+                This JSON is saved to <code>data/schemas/{schemaName || 'name'}.json</code> on the server
+                and can be reused to create new ISAM files with the same structure.
+              </p>
+            </div>
           </div>
-        </div>
-      )}
+        )
+      })()}
     </div>
   )
 }

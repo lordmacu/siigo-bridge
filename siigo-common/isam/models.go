@@ -30,14 +30,14 @@ var Clients = DefineModel("clients", "Z17", false, "", 1438, func(m *Model) {
 var Products = DefineModel("products", "Z04", true, "", 3520, func(m *Model) {
 	m.String("empresa", 0, 5)
 	m.String("grupo", 5, 3)
-	m.Key("codigo", 8, 6)
-	m.String("nombre", 14, 50)
-	m.String("nombre_corto", 64, 40)
-	m.String("referencia", 104, 30)
+	m.Key("codigo", 8, 7)
+	m.String("nombre", 15, 50)
+	m.String("nombre_corto", 65, 40)
+	m.String("referencia", 105, 30)
 })
 
-// Movements — Z49: Movimientos
-var Movements = DefineModel("movements", "Z49", false, "", 2295, func(m *Model) {
+// Movements — Z49YYYY: Movimientos
+var Movements = DefineModel("movements", "Z49", true, "", 2295, func(m *Model) {
 	m.String("tipo_comp", 0, 1)
 	m.Key("codigo", 1, 3)
 	m.String("num_doc", 4, 11)
@@ -109,7 +109,7 @@ var TercerosAmpliados = DefineModel("terceros_ampliados", "Z08", true, "A", 1152
 	m.String("nombre", 18, 60)
 	m.String("rep_legal", 96, 60)
 	m.String("direccion", 194, 56)
-	m.String("email", 323, 70)
+	m.String("email", 328, 65)
 })
 
 // SaldosTerceros — Z25YYYY: Saldos Terceros
@@ -222,27 +222,36 @@ var CondicionesPago = DefineModel("condiciones_pago", "Z05", true, "", 1023, fun
 
 // MovimientosInventario — Z16YYYY: Movimientos Inventario
 var MovimientosInventario = DefineModel("movimientos_inventario", "Z16", true, "", 320, func(m *Model) {
-	m.String("empresa", 0, 5)
-	m.Key("codigo", 5, 6)
-	m.String("tipo", 11, 1)
-	m.String("bodega", 12, 3)
-	m.String("cantidad", 15, 10)
-	m.Date("fecha", 25, 8)
+	m.String("empresa", 0, 3)
+	m.String("grupo", 3, 3)
+	m.Key("codigo", 7, 6)
+	m.String("tipo_comp", 13, 1)
+	m.String("cod_comp", 14, 3)
+	m.String("secuencia", 23, 3)
+	m.String("tipo_doc", 26, 2)
+	m.Date("fecha", 44, 8)
+	m.String("cantidad", 52, 16)
+	m.String("tipo_mov", 103, 1)
+	m.String("valor", 104, 15)
 })
 
-// SaldosInventario — Z23YYYY: Saldos Inventario
-var SaldosInventario = DefineModel("saldos_inventario", "Z23", true, "", 441, func(m *Model) {
-	m.String("empresa", 0, 5)
-	m.Key("codigo", 5, 6)
-	m.String("bodega", 11, 3)
-	m.String("cantidad", 14, 10)
+// SaldosInventario — Z15YYYY: Saldos Inventario
+var SaldosInventario = DefineModel("saldos_inventario", "Z15", true, "", 441, func(m *Model) {
+	m.String("tipo_reg", 0, 2)
+	m.String("empresa", 2, 3)
+	m.String("grupo", 5, 3)
+	m.Key("codigo", 8, 6)
+	m.BCD("saldo_inicial", 25, 7, 2)
+	m.BCD("entradas", 33, 7, 2)
+	m.BCD("salidas", 43, 7, 2)
 })
 
-// ClasificacionCuentas — Z279CP: Clasificación Cuentas
-var ClasificacionCuentas = DefineModel("clasificacion_cuentas", "Z279CP", false, "", 128, func(m *Model) {
-	m.Key("codigo", 0, 9)
-	m.String("nombre", 9, 40)
-	m.String("tipo", 49, 1)
+// ClasificacionCuentas — Z279CP11: Clasificación Cuentas (2-digit year suffix, CP11 in Archivos Siigo)
+var ClasificacionCuentas = DefineModel("clasificacion_cuentas", "Z279CP11", false, "", 128, func(m *Model) {
+	m.Key("codigo", 0, 4)
+	m.String("codigo_grupo", 6, 4)
+	m.String("codigo_detalle", 10, 4)
+	m.String("descripcion", 14, 114)
 })
 
 // ActivosFijosDetalle — Z27YYYYA: Activos Fijos Detalle
@@ -271,3 +280,52 @@ var AuditTrailTerceros = DefineModel("audit_trail_terceros", "Z11N", true, "", 8
 	m.String("direccion", 250, 40)
 	m.String("email", 391, 47)
 })
+
+// DocsInventario — Z11IYYYY: Documentos Inventario (audit trail de cambios en productos)
+var DocsInventario = DefineModel("docs_inventario", "Z11I", true, "", 516, func(m *Model) {
+	m.String("tipo_doc", 0, 20)
+	m.Date("fecha", 20, 8)
+	m.String("hora", 28, 4)
+	m.String("seq", 32, 4)
+	m.String("usuario_crea", 36, 8)
+	m.String("usuario_modifica", 44, 8)
+	m.Date("fecha_modifica", 52, 8)
+	m.String("hora_modifica", 60, 4)
+	m.String("seq_modifica", 64, 4)
+	m.String("modulo_origen", 68, 24)
+	m.String("modulo_destino", 92, 20)
+	m.Key("codigo_producto", 108, 15)
+	m.String("campo_modificado", 176, 25)
+})
+
+// Formulas — Z06 tipo R: Fórmulas/Recetas de producción (ingredientes por producto)
+var Formulas = DefineModel("formulas", "Z06", false, "", 4096, func(m *Model) {
+	m.String("tipo", 0, 1)
+	m.String("empresa", 2, 3)
+	m.String("grupo_producto", 5, 3)
+	m.String("codigo_producto", 8, 7)
+	m.String("grupo_ingrediente", 15, 3)
+	m.Key("codigo_ingrediente", 18, 7)
+	m.String("porcentaje", 82, 14)
+})
+
+// VendedoresAreas — Z06A: Vendedores y Areas/Centros de costo
+var VendedoresAreas = DefineModel("vendedores_areas", "Z06A", false, "", 2285, func(m *Model) {
+	m.String("tipo", 0, 1)
+	m.Key("codigo", 2, 7)
+	m.String("nombre", 32, 30)
+	m.String("nombre_corto", 82, 30)
+	m.String("ciudad", 129, 30)
+	m.String("nit", 160, 12)
+	m.String("direccion", 131, 40)
+	m.String("email", 234, 40)
+})
+
+func init() {
+	Formulas.Table.RecordFilter = func(data []byte) bool {
+		return len(data) > 0 && data[0] == 'R'
+	}
+	VendedoresAreas.Table.RecordFilter = func(data []byte) bool {
+		return len(data) > 0 && (data[0] == 'V' || data[0] == 'A')
+	}
+}

@@ -125,6 +125,7 @@ type Server struct {
 	startTime      time.Time
 	apiLimiter     *rateLimiter
 	loginLimiter   *rateLimiter
+	syncRegistry   map[string]*SyncTableDef // ORM-based sync table definitions
 }
 
 func main() {
@@ -166,6 +167,11 @@ func main() {
 		startTime:  time.Now(),
 		apiLimiter:   newRateLimiter(120, time.Minute), // 120 req/min per IP
 		loginLimiter: newRateLimiter(5, time.Minute),   // 5 login attempts/min per IP
+	}
+
+	// Initialize ORM sync registry if data path is configured
+	if srv.cfg.Siigo.DataPath != "" {
+		srv.syncRegistry = initSyncTables(srv.cfg.Siigo.DataPath)
 	}
 
 	// Periodic cleanup
@@ -583,6 +589,9 @@ var apiPathToModule = map[string]string{
 	"/api/clasificacion-cuentas":    "clasificacion_cuentas",
 	"/api/historial":               "historial",
 	"/api/maestros":                "maestros",
+	"/api/formulas":                "formulas",
+	"/api/docs-inventario":         "docs_inventario",
+	"/api/vendedores-areas":        "vendedores_areas",
 	"/api/field-mappings":          "field-mappings",
 	"/api/error-summary":        "errors",
 	"/api/logs":                 "logs",
@@ -784,6 +793,9 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/clasificacion-cuentas", s.permMiddleware(s.handleGenericTable("clasificacion_cuentas")))
 	mux.HandleFunc("/api/historial", s.permMiddleware(s.handleGenericTable("historial")))
 	mux.HandleFunc("/api/maestros", s.permMiddleware(s.handleGenericTable("maestros")))
+	mux.HandleFunc("/api/formulas", s.permMiddleware(s.handleGenericTable("formulas")))
+	mux.HandleFunc("/api/docs-inventario", s.permMiddleware(s.handleGenericTable("docs_inventario")))
+	mux.HandleFunc("/api/vendedores-areas", s.permMiddleware(s.handleGenericTable("vendedores_areas")))
 	mux.HandleFunc("/api/sync-history", s.authMiddleware(s.handleSyncHistory))
 	mux.HandleFunc("/api/logs", s.permMiddleware(s.handleLogs))
 	mux.HandleFunc("/api/sync-now", s.authMiddleware(s.handleSyncNow))
@@ -884,10 +896,537 @@ func jsonError(w http.ResponseWriter, msg string, code int) {
 	json.NewEncoder(w).Encode(map[string]string{"error": msg})
 }
 
+// ==================== ORM SYNC TABLE REGISTRY ====================
+
+// SyncTableDef describes how to map an ISAM ORM model to a SQLite sync table.
+type SyncTableDef struct {
+	Table    string       // SQLite table name (e.g. "clients")
+	Model    *isam.Model  // ORM model (e.g. isam.TercerosAmpliados)
+	Label    string       // Human-readable label for logs
+	KeyCol   string       // SQLite key column name (e.g. "nit", "record_key")
+	// KeyFunc generates the SQLite key from an ORM row. If nil, uses the ORM primary key.
+	KeyFunc  func(r *isam.Row) string
+	// ColMap maps SQLite column name → ORM field name.
+	// BCD/float fields use the prefix "~" to indicate GetFloat (e.g. "~saldo_anterior").
+	ColMap   map[string]string
+	// BoolMap maps SQLite column → ORM field for boolean S/N → 0/1 conversion.
+	BoolMap  map[string]string
+	// ComputedCols generates additional SQLite columns from a row (e.g. saldo_final = prev + debit - credit).
+	ComputedCols func(r *isam.Row) map[string]interface{}
+}
+
+// initSyncTables initializes the ORM models and returns the sync table registry.
+// Must be called after config is loaded (needs DataPath).
+func initSyncTables(dataPath string) map[string]*SyncTableDef {
+	// Find the latest year from Z04 (most common year-based file)
+	_, latestYear := parsers.FindLatestZ04(dataPath)
+	if latestYear == "" {
+		latestYear = "2016" // fallback
+	}
+
+	// Connect all 24 ORM models and enable caching
+	isam.ConnectAll(dataPath, latestYear)
+
+	// Enable 30s read cache on all models (avoids re-reading ISAM files within a detect cycle)
+	for _, m := range []*isam.Model{
+		isam.Clients, isam.Products, isam.Movements, isam.Cartera,
+		isam.Maestros, isam.PlanCuentas, isam.ActivosFijos, isam.Documentos,
+		isam.TercerosAmpliados, isam.SaldosTerceros, isam.SaldosConsolidados,
+		isam.CodigosDane, isam.Historial, isam.ActividadesICA, isam.ConceptosPILA,
+		isam.LibrosAuxiliares, isam.TransaccionesDetalle, isam.PeriodosContables,
+		isam.CondicionesPago, isam.MovimientosInventario, isam.SaldosInventario,
+		isam.ClasificacionCuentas, isam.ActivosFijosDetalle, isam.AuditTrailTerceros,
+		isam.Formulas, isam.DocsInventario, isam.VendedoresAreas,
+	} {
+		m.EnableCache(30 * time.Second)
+	}
+
+	registry := map[string]*SyncTableDef{
+		"clients": {
+			Table: "clients", Model: isam.TercerosAmpliados, Label: "Clients", KeyCol: "nit",
+			KeyFunc: func(r *isam.Row) string { return r.Get("nit") },
+			ColMap: map[string]string{
+				"nombre": "nombre", "empresa": "empresa", "tipo_persona": "tipo_persona",
+				"rep_legal": "rep_legal", "direccion": "direccion", "email": "email",
+			},
+		},
+		"products": {
+			Table: "products", Model: isam.Products, Label: "Products", KeyCol: "code",
+			KeyFunc: func(r *isam.Row) string { return r.Get("codigo") },
+			ColMap: map[string]string{
+				"nombre": "nombre", "nombre_corto": "nombre_corto", "grupo": "grupo",
+				"referencia": "referencia", "empresa": "empresa",
+			},
+		},
+		"movements": {
+			Table: "movements", Model: isam.Movements, Label: "Movements", KeyCol: "record_key",
+			KeyFunc: func(r *isam.Row) string {
+				tc := strings.TrimSpace(r.Get("tipo_comp"))
+				nd := strings.TrimSpace(r.Get("num_doc"))
+				k := tc + "-" + nd
+				if k == "-" { return r.Hash() }
+				return k
+			},
+			ColMap: map[string]string{
+				"tipo_comprobante": "tipo_comp", "numero_doc": "num_doc",
+				"nit_tercero": "nombre_tercero",
+			},
+		},
+		"cartera": {
+			Table: "cartera", Model: isam.Cartera, Label: "Cartera", KeyCol: "record_key",
+			KeyFunc: func(r *isam.Row) string {
+				t := strings.TrimSpace(r.Get("tipo"))
+				e := strings.TrimSpace(r.Get("empresa"))
+				s := strings.TrimSpace(r.Get("seq"))
+				return t + "-" + e + "-" + s
+			},
+			ColMap: map[string]string{
+				"tipo_registro": "tipo", "empresa": "empresa", "secuencia": "seq",
+				"tipo_doc": "tipo_doc", "nit_tercero": "nit", "cuenta_contable": "cuenta",
+				"fecha": "fecha", "descripcion": "descripcion", "tipo_mov": "dc",
+			},
+		},
+		"plan_cuentas": {
+			Table: "plan_cuentas", Model: isam.PlanCuentas, Label: "Plan Cuentas", KeyCol: "codigo_cuenta",
+			KeyFunc: func(r *isam.Row) string { return r.Get("cuenta") },
+			ColMap: map[string]string{
+				"nombre": "nombre", "empresa": "empresa", "naturaleza": "naturaleza",
+			},
+			BoolMap: map[string]string{
+				"activa": "activa", "auxiliar": "auxiliar",
+			},
+		},
+		"activos_fijos": {
+			Table: "activos_fijos", Model: isam.ActivosFijos, Label: "Activos Fijos", KeyCol: "codigo",
+			KeyFunc: func(r *isam.Row) string { return r.Get("codigo") },
+			ColMap: map[string]string{
+				"nombre": "nombre", "empresa": "empresa", "nit_responsable": "nit",
+				"fecha_adquisicion": "fecha",
+			},
+		},
+		"saldos_terceros": {
+			Table: "saldos_terceros", Model: isam.SaldosTerceros, Label: "Saldos Terceros", KeyCol: "record_key",
+			KeyFunc: func(r *isam.Row) string {
+				c := strings.TrimSpace(r.Get("cuenta"))
+				n := strings.TrimSpace(r.Get("nit"))
+				k := c + "-" + n
+				if k == "-" { return "" }
+				return k
+			},
+			ColMap: map[string]string{
+				"cuenta_contable": "cuenta", "nit_tercero": "nit", "empresa": "empresa",
+				"~saldo_anterior": "saldo_anterior", "~debito": "debito", "~credito": "credito",
+			},
+			ComputedCols: func(r *isam.Row) map[string]interface{} {
+				prev := r.GetFloat("saldo_anterior")
+				deb := r.GetFloat("debito")
+				cre := r.GetFloat("credito")
+				return map[string]interface{}{"saldo_final": prev + deb - cre}
+			},
+		},
+		"saldos_consolidados": {
+			Table: "saldos_consolidados", Model: isam.SaldosConsolidados, Label: "Saldos Consolidados", KeyCol: "cuenta_contable",
+			KeyFunc: func(r *isam.Row) string { return r.Get("cuenta") },
+			ColMap: map[string]string{
+				"empresa": "empresa",
+				"~saldo_anterior": "saldo_anterior", "~debito": "debito", "~credito": "credito",
+			},
+			ComputedCols: func(r *isam.Row) map[string]interface{} {
+				prev := r.GetFloat("saldo_anterior")
+				deb := r.GetFloat("debito")
+				cre := r.GetFloat("credito")
+				return map[string]interface{}{"saldo_final": prev + deb - cre}
+			},
+		},
+		"documentos": {
+			Table: "documentos", Model: isam.Documentos, Label: "Documentos", KeyCol: "record_key",
+			KeyFunc: func(r *isam.Row) string {
+				t := strings.TrimSpace(r.Get("tipo"))
+				c := strings.TrimSpace(r.Get("codigo"))
+				s := strings.TrimSpace(r.Get("seq"))
+				return t + "-" + c + "-" + s + "-" + r.Hash()[:8]
+			},
+			ColMap: map[string]string{
+				"tipo_comprobante": "tipo", "codigo_comp": "codigo", "secuencia": "seq",
+				"nit_tercero": "nit", "cuenta_contable": "cuenta", "producto_ref": "producto",
+				"bodega": "bodega", "centro_costo": "cc", "fecha": "fecha",
+				"descripcion": "descripcion", "tipo_mov": "dc", "referencia": "referencia",
+			},
+		},
+		"terceros_ampliados": {
+			Table: "terceros_ampliados", Model: isam.TercerosAmpliados, Label: "Terceros Ampliados", KeyCol: "nit",
+			KeyFunc: func(r *isam.Row) string { return r.Get("nit") },
+			ColMap: map[string]string{
+				"nombre": "nombre", "empresa": "empresa", "tipo_persona": "tipo_persona",
+				"representante_legal": "rep_legal", "direccion": "direccion", "email": "email",
+			},
+		},
+		"transacciones_detalle": {
+			Table: "transacciones_detalle", Model: isam.TransaccionesDetalle, Label: "Transacciones Detalle", KeyCol: "record_key",
+			KeyFunc: func(r *isam.Row) string {
+				t := strings.TrimSpace(r.Get("tipo"))
+				e := strings.TrimSpace(r.Get("empresa"))
+				s := strings.TrimSpace(r.Get("seq"))
+				c := strings.TrimSpace(r.Get("cuenta"))
+				k := t + "-" + e + "-" + s + "-" + c
+				if k == "---" { return r.Hash() }
+				return k
+			},
+			ColMap: map[string]string{
+				"tipo_comprobante": "tipo", "empresa": "empresa", "secuencia": "seq",
+				"nit_tercero": "nit", "cuenta_contable": "cuenta",
+				"fecha_documento": "fecha", "fecha_vencimiento": "fecha_venc",
+				"tipo_movimiento": "dc", "~valor": "valor",
+			},
+		},
+		"periodos_contables": {
+			Table: "periodos_contables", Model: isam.PeriodosContables, Label: "Periodos Contables", KeyCol: "record_key",
+			KeyFunc: func(r *isam.Row) string {
+				np := strings.TrimSpace(r.Get("num_periodo"))
+				if np == "" { return r.Hash() }
+				return np
+			},
+			ColMap: map[string]string{
+				"numero_periodo": "num_periodo", "fecha_inicio": "fecha_inicio",
+				"fecha_fin": "fecha_fin",
+				"~saldo1": "saldo1", "~saldo2": "saldo2", "~saldo3": "saldo3",
+			},
+		},
+		"condiciones_pago": {
+			Table: "condiciones_pago", Model: isam.CondicionesPago, Label: "Condiciones Pago", KeyCol: "record_key",
+			KeyFunc: func(r *isam.Row) string {
+				t := strings.TrimSpace(r.Get("tipo"))
+				e := strings.TrimSpace(r.Get("empresa"))
+				s := strings.TrimSpace(r.Get("seq"))
+				n := strings.TrimSpace(r.Get("nit"))
+				k := t + "-" + e + "-" + s + "-" + n
+				if k == "---" { return r.Hash() }
+				return k
+			},
+			ColMap: map[string]string{
+				"tipo": "tipo", "empresa": "empresa", "secuencia": "seq",
+				"tipo_doc": "tipo_doc", "fecha": "fecha", "nit": "nit",
+				"tipo_secundario": "tipo_sec", "~valor": "valor", "fecha_registro": "fecha_reg",
+			},
+		},
+		"libros_auxiliares": {
+			Table: "libros_auxiliares", Model: isam.LibrosAuxiliares, Label: "Libros Auxiliares", KeyCol: "record_key",
+			KeyFunc: func(r *isam.Row) string {
+				tc := strings.TrimSpace(r.Get("tipo_comp"))
+				e := strings.TrimSpace(r.Get("empresa"))
+				c := strings.TrimSpace(r.Get("cuenta"))
+				n := strings.TrimSpace(r.Get("nit"))
+				d := strings.TrimSpace(r.Get("fecha_doc"))
+				k := tc + "-" + e + "-" + c + "-" + n + "-" + d
+				if k == "----" { return r.Hash() }
+				return k
+			},
+			ColMap: map[string]string{
+				"empresa": "empresa", "cuenta_contable": "cuenta",
+				"tipo_comprobante": "tipo_comp", "codigo_comprobante": "cod_comp",
+				"fecha_documento": "fecha_doc", "nit_tercero": "nit",
+				"~saldo": "saldo", "~debito": "debito", "~credito": "credito",
+			},
+		},
+		"codigos_dane": {
+			Table: "codigos_dane", Model: isam.CodigosDane, Label: "Codigos DANE", KeyCol: "codigo",
+			KeyFunc: func(r *isam.Row) string { return r.Get("codigo") },
+			ColMap: map[string]string{
+				"nombre": "nombre",
+			},
+		},
+		"actividades_ica": {
+			Table: "actividades_ica", Model: isam.ActividadesICA, Label: "Actividades ICA", KeyCol: "codigo",
+			KeyFunc: func(r *isam.Row) string { return r.Get("codigo") },
+			ColMap: map[string]string{
+				"nombre": "nombre", "tarifa": "tarifa",
+			},
+		},
+		"conceptos_pila": {
+			Table: "conceptos_pila", Model: isam.ConceptosPILA, Label: "Conceptos PILA", KeyCol: "record_key",
+			KeyFunc: func(r *isam.Row) string {
+				t := strings.TrimSpace(r.Get("tipo"))
+				f := strings.TrimSpace(r.Get("fondo"))
+				c := strings.TrimSpace(r.Get("concepto"))
+				k := t + "-" + f + "-" + c
+				if k == "--" { return r.Hash() }
+				return k
+			},
+			ColMap: map[string]string{
+				"tipo": "tipo", "fondo": "fondo", "concepto": "concepto",
+				"flags": "flags", "tipo_base": "tipo_base", "base_calculo": "base_calculo",
+			},
+		},
+		"activos_fijos_detalle": {
+			Table: "activos_fijos_detalle", Model: isam.ActivosFijosDetalle, Label: "Activos Fijos Detalle", KeyCol: "record_key",
+			KeyFunc: func(r *isam.Row) string {
+				e := strings.TrimSpace(r.Get("empresa"))
+				c := strings.TrimSpace(r.Get("codigo"))
+				k := e + "-" + c
+				if k == "-" { return r.Hash() }
+				return k
+			},
+			ColMap: map[string]string{
+				"grupo": "empresa", "secuencia": "codigo",
+				"nombre": "nombre", "nit_responsable": "nit",
+				"fecha": "fecha", "~valor_compra": "valor_compra",
+			},
+		},
+		"audit_trail_terceros": {
+			Table: "audit_trail_terceros", Model: isam.AuditTrailTerceros, Label: "Audit Trail Terceros", KeyCol: "record_key",
+			KeyFunc: func(r *isam.Row) string {
+				n := strings.TrimSpace(r.Get("nit"))
+				t := strings.TrimSpace(r.Get("timestamp"))
+				k := n + "-" + t
+				if k == "-" { return r.Hash() }
+				return k
+			},
+			ColMap: map[string]string{
+				"fecha_cambio": "fecha_cambio", "nit_tercero": "nit",
+				"timestamp": "timestamp", "usuario": "usuario",
+				"fecha_periodo": "fecha_periodo", "tipo_doc": "tipo_doc",
+				"nombre": "nombre", "nit_representante": "nit_rep",
+				"nombre_representante": "nom_rep",
+				"direccion": "direccion", "email": "email",
+			},
+		},
+		"clasificacion_cuentas": {
+			Table: "clasificacion_cuentas", Model: isam.ClasificacionCuentas, Label: "Clasificacion Cuentas", KeyCol: "codigo_cuenta",
+			KeyFunc: func(r *isam.Row) string { return r.Get("codigo") },
+			ColMap: map[string]string{
+				"descripcion": "descripcion", "codigo_grupo": "codigo_grupo", "codigo_detalle": "codigo_detalle",
+			},
+		},
+		"movimientos_inventario": {
+			Table: "movimientos_inventario", Model: isam.MovimientosInventario, Label: "Movimientos Inventario", KeyCol: "record_key",
+			KeyFunc: func(r *isam.Row) string {
+				e := strings.TrimSpace(r.Get("empresa"))
+				c := strings.TrimSpace(r.Get("codigo"))
+				tc := strings.TrimSpace(r.Get("tipo_comp"))
+				f := strings.TrimSpace(r.Get("fecha"))
+				k := e + "-" + c + "-" + tc + "-" + f
+				if k == "---" { return r.Hash() }
+				return k
+			},
+			ColMap: map[string]string{
+				"empresa": "empresa", "codigo_producto": "codigo", "grupo": "grupo",
+				"tipo_comprobante": "tipo_comp", "codigo_comp": "cod_comp",
+				"secuencia": "secuencia", "tipo_doc": "tipo_doc",
+				"fecha": "fecha", "cantidad": "cantidad",
+				"tipo_mov": "tipo_mov", "valor": "valor",
+			},
+		},
+		"saldos_inventario": {
+			Table: "saldos_inventario", Model: isam.SaldosInventario, Label: "Saldos Inventario", KeyCol: "record_key",
+			KeyFunc: func(r *isam.Row) string {
+				e := strings.TrimSpace(r.Get("empresa"))
+				g := strings.TrimSpace(r.Get("grupo"))
+				c := strings.TrimSpace(r.Get("codigo"))
+				k := e + "-" + g + "-" + c
+				if k == "--" { return r.Hash() }
+				return k
+			},
+			ColMap: map[string]string{
+				"empresa": "empresa", "codigo_producto": "codigo", "grupo": "grupo",
+				"tipo_registro": "tipo_reg",
+				"~saldo_inicial": "saldo_inicial", "~entradas": "entradas", "~salidas": "salidas",
+			},
+			ComputedCols: func(r *isam.Row) map[string]interface{} {
+				ini := r.GetFloat("saldo_inicial")
+				ent := r.GetFloat("entradas")
+				sal := r.GetFloat("salidas")
+				return map[string]interface{}{"saldo_final": ini + ent - sal}
+			},
+		},
+		"historial": {
+			Table: "historial", Model: isam.Historial, Label: "Historial", KeyCol: "record_key",
+			KeyFunc: func(r *isam.Row) string {
+				e := strings.TrimSpace(r.Get("empresa"))
+				st := strings.TrimSpace(r.Get("sub_tipo"))
+				f := strings.TrimSpace(r.Get("fecha"))
+				k := e + "-" + st + "-" + f
+				if k == "--" { return "" }
+				return k
+			},
+			ColMap: map[string]string{
+				"tipo_registro": "tipo", "sub_tipo": "sub_tipo", "empresa": "empresa",
+				"fecha": "fecha", "nombre_origen": "nombre", "nombre_destin": "nombre2",
+			},
+		},
+		"maestros": {
+			Table: "maestros", Model: isam.Maestros, Label: "Maestros", KeyCol: "record_key",
+			KeyFunc: func(r *isam.Row) string {
+				t := strings.TrimSpace(r.Get("tipo"))
+				c := strings.TrimSpace(r.Get("codigo"))
+				k := t + "-" + c
+				if k == "-" { return "" }
+				return k
+			},
+			ColMap: map[string]string{
+				"tipo": "tipo", "codigo": "codigo", "nombre": "nombre",
+				"responsable": "responsable", "direccion": "direccion",
+			},
+		},
+		"formulas": {
+			Table: "formulas", Model: isam.Formulas, Label: "Formulas", KeyCol: "record_key",
+			KeyFunc: func(r *isam.Row) string {
+				emp := strings.TrimSpace(r.Get("empresa"))
+				prod := strings.TrimSpace(r.Get("codigo_producto"))
+				ing := strings.TrimSpace(r.Get("codigo_ingrediente"))
+				k := emp + "-" + prod + "-" + ing
+				if k == "--" { return "" }
+				return k
+			},
+			ColMap: map[string]string{
+				"empresa": "empresa", "grupo_producto": "grupo_producto",
+				"codigo_producto": "codigo_producto", "grupo_ingrediente": "grupo_ingrediente",
+				"codigo_ingrediente": "codigo_ingrediente",
+			},
+			ComputedCols: func(r *isam.Row) map[string]interface{} {
+				raw := strings.TrimSpace(r.Get("porcentaje"))
+				val, _ := strconv.ParseFloat(raw, 64)
+				return map[string]interface{}{"porcentaje": val / 1000.0}
+			},
+		},
+		"docs_inventario": {
+			Table: "docs_inventario", Model: isam.DocsInventario, Label: "Docs Inventario", KeyCol: "record_key",
+			KeyFunc: func(r *isam.Row) string {
+				td := strings.TrimSpace(r.Get("tipo_doc"))
+				f := strings.TrimSpace(r.Get("fecha"))
+				h := strings.TrimSpace(r.Get("hora"))
+				sq := strings.TrimSpace(r.Get("seq"))
+				k := td + "-" + f + h + sq
+				if k == "-" { return "" }
+				return k
+			},
+			ColMap: map[string]string{
+				"tipo_doc": "tipo_doc", "fecha": "fecha", "hora": "hora", "seq": "seq",
+				"usuario_crea": "usuario_crea", "usuario_modifica": "usuario_modifica",
+				"fecha_modifica": "fecha_modifica", "modulo_origen": "modulo_origen",
+				"codigo_producto": "codigo_producto", "campo_modificado": "campo_modificado",
+			},
+		},
+		"vendedores_areas": {
+			Table: "vendedores_areas", Model: isam.VendedoresAreas, Label: "Vendedores/Areas", KeyCol: "record_key",
+			KeyFunc: func(r *isam.Row) string {
+				t := strings.TrimSpace(r.Get("tipo"))
+				c := strings.TrimSpace(r.Get("codigo"))
+				k := t + "-" + c
+				if k == "-" {
+					return ""
+				}
+				return k
+			},
+			ColMap: map[string]string{
+				"tipo": "tipo", "codigo": "codigo", "nombre": "nombre",
+				"nombre_corto": "nombre_corto", "ciudad": "ciudad",
+				"nit": "nit", "direccion": "direccion", "email": "email",
+			},
+		},
+	}
+
+	return registry
+}
+
+// fmtIsamDate converts YYYYMMDD → YYYY-MM-DD if valid, else returns raw.
+func fmtIsamDate(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if len(raw) == 8 {
+		y, m, d := raw[:4], raw[4:6], raw[6:8]
+		if y >= "1900" && y <= "2099" {
+			return y + "-" + m + "-" + d
+		}
+	}
+	return raw
+}
+
+// diffGeneric reads an ISAM file via the ORM model and upserts to SQLite.
+func (s *Server) diffGeneric(def *SyncTableDef) {
+	if !def.Model.Exists() {
+		s.db.AddLog("warn", def.Table, "File does not exist: "+def.Model.Table.Path)
+		return
+	}
+
+	rows, err := def.Model.All()
+	if err != nil {
+		s.db.AddLog("error", def.Model.FileName(), "Error reading: "+err.Error())
+		return
+	}
+	s.db.AddLog("info", def.Table, fmt.Sprintf("Read %d rows from ISAM", len(rows)))
+
+	// Pre-build a set of date field names from the ORM schema for auto-conversion
+	dateFields := map[string]bool{}
+	for _, f := range def.Model.Table.Fields {
+		if f.Type == isam.FieldDate {
+			dateFields[f.Name] = true
+		}
+	}
+
+	adds, edits := 0, 0
+	currentKeys := make(map[string]bool, len(rows))
+
+	for _, r := range rows {
+		key := strings.TrimSpace(def.KeyFunc(r))
+		if key == "" {
+			continue
+		}
+		currentKeys[key] = true
+
+		// Build column values from ColMap
+		cols := make(map[string]interface{}, len(def.ColMap)+len(def.BoolMap)+3)
+		for sqlCol, ormField := range def.ColMap {
+			if strings.HasPrefix(sqlCol, "~") {
+				// Float/BCD field
+				realCol := sqlCol[1:]
+				cols[realCol] = r.GetFloat(ormField)
+			} else if dateFields[ormField] {
+				// Date field — convert YYYYMMDD → YYYY-MM-DD
+				cols[sqlCol] = fmtIsamDate(r.Get(ormField))
+			} else {
+				cols[sqlCol] = strings.TrimSpace(r.Get(ormField))
+			}
+		}
+
+		// Boolean S/N → 0/1 conversion
+		for sqlCol, ormField := range def.BoolMap {
+			v := strings.TrimSpace(r.Get(ormField))
+			if v == "S" || v == "s" {
+				cols[sqlCol] = 1
+			} else {
+				cols[sqlCol] = 0
+			}
+		}
+
+		// Computed columns (e.g. saldo_final)
+		if def.ComputedCols != nil {
+			for k, v := range def.ComputedCols(r) {
+				cols[k] = v
+			}
+		}
+
+		action := s.db.UpsertGeneric(def.Table, def.KeyCol, key, r.Hash(), cols)
+		switch action {
+		case "add":
+			adds++
+		case "edit":
+			edits++
+		}
+	}
+
+	deletes := s.db.MarkDeletedGeneric(def.Table, def.KeyCol, currentKeys)
+
+	if adds > 0 || edits > 0 || deletes > 0 {
+		s.db.AddLog("info", "DETECT", fmt.Sprintf("[%s] %s: %d new, %d updated, %d deleted (total: %d)",
+			def.Label, def.Model.FileName(), adds, edits, deletes, len(rows)))
+	}
+	s.bot.NotifyChangesDetected(def.Label, adds, edits, deletes)
+}
+
 // ==================== SYNC LOOP ====================
 
 func (s *Server) startSyncLoop() {
 	s.paused = false
+	s.stopCh = make(chan bool, 1)
 	s.db.AddLog("info", "SYNC", "Loops started (detect + send independent)")
 
 	go s.startDetectLoop()
@@ -909,7 +1448,7 @@ func (s *Server) startDetectLoop() {
 	for {
 		select {
 		case <-ticker.C:
-			if !s.paused && !s.detecting {
+			if !s.paused && !s.detecting && s.cfg.SetupComplete {
 				s.doDetectCycle()
 			}
 		case <-s.stopCh:
@@ -952,43 +1491,39 @@ func (s *Server) doDetectCycle() {
 
 	s.db.AddLog("info", "DETECT", "--- Detection cycle started --- Reading ISAM files...")
 
-	// Each diff only runs if detection is enabled for that table
-	type detectEntry struct {
-		table string
-		fn    func()
+	// Re-initialize registry if not yet done (e.g. setup wizard just completed)
+	if s.syncRegistry == nil && s.cfg.Siigo.DataPath != "" {
+		s.syncRegistry = initSyncTables(s.cfg.Siigo.DataPath)
 	}
-	detects := []detectEntry{
-		{"clients", s.diffClientes},
-		{"products", s.diffProductos},
-		{"movements", s.diffMovimientos},
-		{"cartera", s.diffCartera},
-		{"plan_cuentas", s.diffPlanCuentas},
-		{"activos_fijos", s.diffActivosFijos},
-		{"saldos_terceros", s.diffSaldosTerceros},
-		{"saldos_consolidados", s.diffSaldosConsolidados},
-		{"documentos", s.diffDocumentos},
-		{"terceros_ampliados", s.diffTercerosAmpliados},
-		{"transacciones_detalle", s.diffTransaccionesDetalle},
-		{"periodos_contables", s.diffPeriodosContables},
-		{"condiciones_pago", s.diffCondicionesPago},
-		{"libros_auxiliares", s.diffLibrosAuxiliares},
-		{"codigos_dane", s.diffCodigosDane},
-		{"actividades_ica", s.diffActividadesICA},
-		{"conceptos_pila", s.diffConceptosPILA},
-		{"activos_fijos_detalle", s.diffActivosFijosDetalle},
-		{"audit_trail_terceros", s.diffAuditTrailTerceros},
-		{"clasificacion_cuentas", s.diffClasificacionCuentas},
-		{"movimientos_inventario", s.diffMovimientosInventario},
-		{"saldos_inventario", s.diffSaldosInventario},
-		{"historial", s.diffHistorial},
-		{"maestros", s.diffMaestros},
+
+	// Detection order (matches config.AllSyncTables)
+	detectOrder := []string{
+		"clients", "products", "movements", "cartera",
+		"plan_cuentas", "activos_fijos", "saldos_terceros", "saldos_consolidados",
+		"documentos", "terceros_ampliados", "transacciones_detalle", "periodos_contables",
+		"condiciones_pago", "libros_auxiliares", "codigos_dane", "actividades_ica",
+		"conceptos_pila", "activos_fijos_detalle", "audit_trail_terceros", "clasificacion_cuentas",
+		"movimientos_inventario", "saldos_inventario", "historial", "maestros", "formulas", "docs_inventario",
+		"vendedores_areas",
 	}
+
 	enabledCount := 0
-	for _, d := range detects {
-		if s.cfg.IsDetectEnabled(d.table) {
-			enabledCount++
-			s.db.AddLog("info", "DETECT", fmt.Sprintf("Scanning table: %s...", d.table))
-			d.fn()
+	for _, table := range detectOrder {
+		// Abort if setup was reset (e.g. user cleared the database)
+		if !s.cfg.SetupComplete || s.paused {
+			s.db.AddLog("info", "DETECT", "Detection aborted (setup incomplete or paused)")
+			return
+		}
+		if !s.cfg.IsDetectEnabled(table) {
+			continue
+		}
+		enabledCount++
+		s.db.AddLog("info", "DETECT", fmt.Sprintf("Scanning table: %s...", table))
+
+		if def, ok := s.syncRegistry[table]; ok {
+			s.diffGeneric(def)
+		} else if fn := s.getDiffFunc(table); fn != nil {
+			fn() // fallback to legacy diff
 		}
 	}
 
@@ -1130,9 +1665,17 @@ var setupTablesList = []setupTableDef{
 	{"saldos_inventario", "Saldos Inventario (Z15)"},
 	{"historial", "Historial Documentos (Z18)"},
 	{"maestros", "Maestros Config (Z06)"},
+	{"formulas", "Formulas/Recetas (Z06 tipo R)"},
+	{"docs_inventario", "Docs Inventario (Z11I)"},
+	{"vendedores_areas", "Vendedores/Areas (Z06A)"},
 }
 
 func (s *Server) getDiffFunc(table string) func() {
+	// Try ORM registry first
+	if def, ok := s.syncRegistry[table]; ok {
+		return func() { s.diffGeneric(def) }
+	}
+	// Legacy fallback (should not be needed — all 27 tables are in the registry)
 	switch table {
 	case "clients":
 		return s.diffClientes
@@ -2214,54 +2757,12 @@ func (s *Server) retryFailedRecords() {
 
 // ==================== ISAM CACHE ====================
 
-var (
-	cachedClientes    []parsers.TerceroAmpliado
-	cachedProductos   []parsers.Inventario
-	cachedMovimientos []parsers.Movimiento
-	cachedCartera     []parsers.Cartera
-)
-
+// refreshCache triggers a diff for the given table, re-reading ISAM data into SQLite.
 func (s *Server) refreshCache(which string) {
-	switch which {
-	case "clients":
-		c, _, err := parsers.ParseTercerosAmpliados(s.cfg.Siigo.DataPath)
-		if err == nil {
-			cachedClientes = c
-		}
-	case "products":
-		p, _, err := parsers.ParseInventario(s.cfg.Siigo.DataPath)
-		if err == nil {
-			cachedProductos = p
-		}
-	case "movements":
-		m, err := parsers.ParseMovimientos(s.cfg.Siigo.DataPath)
-		if err == nil {
-			cachedMovimientos = m
-		}
-	case "cartera":
-		var all []parsers.Cartera
-		for _, file := range s.cfg.Sync.Files {
-			if len(file) < 3 || file[:3] != "Z09" {
-				continue
-			}
-			anio := ""
-			if len(file) > 3 {
-				anio = file[3:]
-			}
-			c, err := parsers.ParseCartera(s.cfg.Siigo.DataPath, anio)
-			if err == nil {
-				all = append(all, c...)
-			}
-		}
-		cachedCartera = all
-	case "movimientos_inventario":
-		s.diffMovimientosInventario()
-	case "saldos_inventario":
-		s.diffSaldosInventario()
-	case "activos_fijos_detalle":
-		s.diffActivosFijosDetalle()
-	case "audit_trail_terceros":
-		s.diffAuditTrailTerceros()
+	if def, ok := s.syncRegistry[which]; ok {
+		s.diffGeneric(def)
+	} else if fn := s.getDiffFunc(which); fn != nil {
+		fn()
 	}
 }
 
@@ -2792,15 +3293,38 @@ func (s *Server) handleClearDatabase(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "POST only", 405)
 		return
 	}
-	// Reset setup_complete so the wizard reappears
-	s.cfg.SetupComplete = false
+
+	// 1. Stop sync loops so they don't repopulate tables
+	s.paused = true
+	s.cfg.SetupComplete = false // This will abort any running doDetectCycle
+
+	// 2. Wait for any in-progress detection/send cycle to finish (max 10s)
+	for i := 0; i < 100; i++ {
+		if !s.detecting && !s.sending {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	// 3. Reset setup state
 	s.setupPopulated = make(map[string]bool)
+	s.setupPopulating = ""
 	if err := s.cfg.Save("config.json"); err != nil {
 		s.db.AddLog("warn", "CONFIG", "Error resetting setup_complete: "+err.Error())
 	}
 
-	if err := s.db.ClearAll(); err != nil {
-		jsonError(w, err.Error(), 500)
+	// 4. Clear all data tables (retry up to 3 times if DB is locked)
+	var clearErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		clearErr = s.db.ClearAll()
+		if clearErr == nil {
+			break
+		}
+		s.db.AddLog("warn", "APP", fmt.Sprintf("ClearAll attempt %d failed: %s", attempt+1, clearErr.Error()))
+		time.Sleep(500 * time.Millisecond)
+	}
+	if clearErr != nil {
+		jsonError(w, "Error clearing database: "+clearErr.Error(), 500)
 		return
 	}
 	s.db.AddLog("warning", "APP", "Database cleared by user")
@@ -3330,6 +3854,9 @@ var odataTables = map[string]struct {
 	"saldos_inventario":        {EntityType: "SaldoInventario", KeyProp: "record_key"},
 	"historial":                {EntityType: "Historial", KeyProp: "record_key"},
 	"maestros":                 {EntityType: "Maestro", KeyProp: "record_key"},
+	"formulas":                 {EntityType: "Formula", KeyProp: "record_key"},
+	"docs_inventario":          {EntityType: "DocInventario", KeyProp: "record_key"},
+	"vendedores_areas":         {EntityType: "VendedorArea", KeyProp: "record_key"},
 }
 
 // OData ordered table list (for consistent output, v1 API, and OData routing)
@@ -3341,7 +3868,8 @@ var odataTableOrder = []string{
 	"codigos_dane", "actividades_ica", "conceptos_pila",
 	"activos_fijos_detalle", "audit_trail_terceros", "clasificacion_cuentas",
 	"movimientos_inventario", "saldos_inventario",
-	"historial", "maestros",
+	"historial", "maestros", "formulas", "docs_inventario",
+	"vendedores_areas",
 }
 
 // OData relationships for Power BI auto-detection
@@ -3377,6 +3905,18 @@ var odataRelations = []odataRelation{
 	// Inventory tables
 	{"movimientos_inventario", "codigo_producto", "products", "code", "Producto"},
 	{"saldos_inventario", "codigo_producto", "products", "code", "Producto"},
+	// Formulas → products (producto + ingrediente)
+	{"formulas", "codigo_producto", "products", "code", "Producto"},
+	{"formulas", "codigo_ingrediente", "products", "code", "Ingrediente"},
+	// Docs inventario → products
+	{"docs_inventario", "codigo_producto", "products", "code", "Producto"},
+	// Vendedores/Areas → clients (nit)
+	{"vendedores_areas", "nit", "clients", "nit", "Client"},
+	// Movements → plan_cuentas
+	{"movements", "cuenta_contable", "plan_cuentas", "codigo_cuenta", "CuentaContable"},
+	// Condiciones pago → plan_cuentas (no direct cuenta field, skip)
+	// Historial (standalone, no direct FK)
+	// Maestros (standalone config)
 }
 
 func (s *Server) handleODataServiceDoc(w http.ResponseWriter, r *http.Request) {
@@ -4386,6 +4926,9 @@ func (s *Server) handlePostmanCollection(w http.ResponseWriter, r *http.Request)
 		"audit_trail_terceros": "Audit Trail Terceros (Z11N)", "clasificacion_cuentas": "Clasificacion Cuentas (Z279CP)",
 		"movimientos_inventario": "Movimientos Inventario (Z16)", "saldos_inventario": "Saldos Inventario (Z23)",
 		"historial": "Historial Documentos (Z18)", "maestros": "Maestros Config (Z06)",
+		"formulas": "Formulas/Recetas (Z06 tipo R)",
+		"docs_inventario": "Docs Inventario (Z11I)",
+		"vendedores_areas": "Vendedores/Areas (Z06A)",
 	}
 
 	type pmKV struct {
@@ -4473,7 +5016,7 @@ func (s *Server) handlePostmanCollection(w http.ResponseWriter, r *http.Request)
 		}}
 		dataItems = append(dataItems, folder)
 	}
-	dataFolder := pmItem{Name: "API v1 - Data Tables (24)", Item: dataItems}
+	dataFolder := pmItem{Name: "API v1 - Data Tables (27)", Item: dataItems}
 
 	// --- OData folder ---
 	odataFolder := pmItem{Name: "OData v4 (Power BI)", Item: []pmItem{
@@ -4540,7 +5083,7 @@ func (s *Server) handlePostmanCollection(w http.ResponseWriter, r *http.Request)
 	col := pmCollection{}
 	col.Info.Name = "Siigo Sync API"
 	col.Info.Schema = "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
-	col.Info.Desc = fmt.Sprintf("Coleccion generada automaticamente desde Siigo Sync Middleware.\n\nBase URL: %s\n\n24 tablas de datos de Siigo Pyme con sync bidireccional, OData v4 para Power BI, y API REST completa.", baseURL)
+	col.Info.Desc = fmt.Sprintf("Coleccion generada automaticamente desde Siigo Sync Middleware.\n\nBase URL: %s\n\n27 tablas de datos de Siigo Pyme con sync bidireccional, OData v4 para Power BI, y API REST completa.", baseURL)
 	col.Variable = []pmKV{
 		{Key: "base_url", Value: baseURL, Type: "string"},
 		{Key: "token", Value: "", Type: "string"},

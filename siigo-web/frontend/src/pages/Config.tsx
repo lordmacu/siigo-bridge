@@ -45,6 +45,9 @@ const TABLE_LABELS: Record<string, string> = {
   saldos_inventario: 'Saldos Inventario (Z23)',
   historial: 'Historial Docs (Z18)',
   maestros: 'Maestros Config (Z06)',
+  formulas: 'Formulas/Recetas (Z06)',
+  docs_inventario: 'Docs Inventario (Z11I)',
+  vendedores_areas: 'Vendedores/Areas (Z06A)',
 };
 
 interface WebhookDef {

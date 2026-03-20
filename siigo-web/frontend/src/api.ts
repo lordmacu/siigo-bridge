@@ -64,6 +64,9 @@ export const api = {
   saveConfig: (data: object) => post('/config', data),
   getISAMInfo: () => get('/isam-info'),
   getExtfhStatus: () => get('/extfh-status'),
+  // Generic table data fetcher (used by DataPage)
+  getTableData: (path: string, page: number, search: string) => get(`/${path}?page=${page}&search=${encodeURIComponent(search)}`),
+
   getClients: (page: number, search: string) => get(`/clients?page=${page}&search=${encodeURIComponent(search)}`),
   getProducts: (page: number, search: string) => get(`/products?page=${page}&search=${encodeURIComponent(search)}`),
   getMovements: (page: number, search: string) => get(`/movements?page=${page}&search=${encodeURIComponent(search)}`),
@@ -88,6 +91,9 @@ export const api = {
   getClasificacionCuentas: (page: number, search: string) => get(`/clasificacion-cuentas?page=${page}&search=${encodeURIComponent(search)}`),
   getHistorial: (page: number, search: string) => get(`/historial?page=${page}&search=${encodeURIComponent(search)}`),
   getMaestros: (page: number, search: string) => get(`/maestros?page=${page}&search=${encodeURIComponent(search)}`),
+  getFormulas: (page: number, search: string) => get(`/formulas?page=${page}&search=${encodeURIComponent(search)}`),
+  getDocsInventario: (page: number, search: string) => get(`/docs-inventario?page=${page}&search=${encodeURIComponent(search)}`),
+  getVendedoresAreas: (page: number, search: string) => get(`/vendedores-areas?page=${page}&search=${encodeURIComponent(search)}`),
   getSyncHistory: (table: string, page: number, search?: string, dateFrom?: string, dateTo?: string, status?: string) => {
     const params = new URLSearchParams({ table, page: String(page) });
     if (search) params.set('search', search);

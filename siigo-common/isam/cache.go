@@ -1,6 +1,7 @@
 package isam
 
 import (
+	"strings"
 	"sync"
 	"time"
 )
@@ -32,24 +33,30 @@ var (
 	cachesMu sync.Mutex
 )
 
+// cacheKey returns a unique key for this table (name, not path, to avoid collisions
+// when multiple tables share the same ISAM file, e.g. Maestros and Formulas both use Z06).
+func (t *Table) cacheKey() string {
+	return t.Name + ":" + t.Path
+}
+
 // EnableCache activates read caching for this table with the given TTL.
 func (t *Table) EnableCache(ttl time.Duration) {
 	cachesMu.Lock()
 	defer cachesMu.Unlock()
-	caches[t.Path] = &tableCache{ttl: ttl}
+	caches[t.cacheKey()] = &tableCache{ttl: ttl}
 }
 
 // DisableCache removes caching for this table.
 func (t *Table) DisableCache() {
 	cachesMu.Lock()
 	defer cachesMu.Unlock()
-	delete(caches, t.Path)
+	delete(caches, t.cacheKey())
 }
 
 // ClearCache forces the next read to go to disk.
 func (t *Table) ClearCache() {
 	cachesMu.Lock()
-	c := caches[t.Path]
+	c := caches[t.cacheKey()]
 	cachesMu.Unlock()
 	if c != nil {
 		c.mu.Lock()
@@ -61,7 +68,7 @@ func (t *Table) ClearCache() {
 
 // IsCached returns true if this table has a valid cache.
 func (t *Table) IsCached() bool {
-	c := getCache(t.Path)
+	c := getCache(t.cacheKey())
 	if c == nil {
 		return false
 	}
@@ -73,7 +80,7 @@ func (t *Table) IsCached() bool {
 // cachedAll returns cached rows if available, otherwise reads from disk and caches.
 // Used internally by All() when cache is enabled.
 func (t *Table) cachedAll() ([]*Row, error) {
-	c := getCache(t.Path)
+	c := getCache(t.cacheKey())
 	if c == nil {
 		return nil, nil // no cache configured
 	}
@@ -107,6 +114,7 @@ func (t *Table) cachedAll() ([]*Row, error) {
 }
 
 // readAllFromDisk reads all records bypassing cache (used by cache layer itself).
+// Applies RecordFilter if configured, so cached data is already filtered.
 func (t *Table) readAllFromDisk() ([]*Row, error) {
 	info, _, err := ReadFileV2(t.Path)
 	if err != nil {
@@ -115,6 +123,9 @@ func (t *Table) readAllFromDisk() ([]*Row, error) {
 
 	records := make([]*Row, 0, len(info.Records))
 	for i, rec := range info.Records {
+		if t.RecordFilter != nil && !t.RecordFilter(rec.Data) {
+			continue
+		}
 		r := &Row{
 			table: t,
 			data:  append([]byte{}, rec.Data...),
@@ -143,13 +154,17 @@ func ClearAllCaches() {
 	}
 }
 
-// invalidateCache clears cache for a table after a write operation.
+// invalidateCache clears cache for all tables that share the given file path.
 func invalidateCache(path string) {
-	c := getCache(path)
-	if c != nil {
-		c.mu.Lock()
-		c.rows = nil
-		c.loadedAt = time.Time{}
-		c.mu.Unlock()
+	cachesMu.Lock()
+	defer cachesMu.Unlock()
+	for key, c := range caches {
+		// Key format is "name:path" — check if it contains the path
+		if strings.HasSuffix(key, ":"+path) {
+			c.mu.Lock()
+			c.rows = nil
+			c.loadedAt = time.Time{}
+			c.mu.Unlock()
+		}
 	}
 }
