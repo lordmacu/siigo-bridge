@@ -48,6 +48,7 @@ export default function Sidebar({ onLogout, open, userInfo }: { onLogout?: () =>
   const navigate = useNavigate();
   const [syncing, setSyncing] = useState(false);
   const [paused, setPaused] = useState(false);
+  const [watcherActive, setWatcherActive] = useState(false);
   const [tableCounts, setTableCounts] = useState<Record<string, number>>({});
 
   const pollStatus = useCallback(async () => {
@@ -55,6 +56,7 @@ export default function Sidebar({ onLogout, open, userInfo }: { onLogout?: () =>
       const s = await api.getSyncStatus();
       setSyncing(s.syncing);
       setPaused(s.paused);
+      setWatcherActive(s.watcher_active === true);
     } catch { /* ignore */ }
   }, []);
 
@@ -130,7 +132,7 @@ export default function Sidebar({ onLogout, open, userInfo }: { onLogout?: () =>
       </div>
       <div className="sidebar-footer">
         <div className={`sync-status ${syncing ? 'active' : paused ? 'paused' : 'running'}`}>
-          {syncing ? 'Sincronizando...' : paused ? 'Pausado' : 'Escuchando'}
+          {syncing ? 'Sincronizando...' : paused ? 'Pausado' : watcherActive ? 'Vigilando cambios' : 'Escuchando'}
         </div>
         <button
           className={`sync-btn ${syncing ? 'syncing' : ''}`}

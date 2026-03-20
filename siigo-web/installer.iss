@@ -13,7 +13,7 @@ OutputDir=installer_output
 OutputBaseFilename=SiigoWeb-Setup
 Compression=lzma2
 SolidCompression=yes
-PrivilegesRequired=lowest
+PrivilegesRequired=admin
 ; Uncomment next line if you have a custom icon file:
 ; SetupIconFile=siigo-web.ico
 DisableProgramGroupPage=yes
@@ -22,6 +22,7 @@ UninstallDisplayName=Siigo Web
 [Files]
 ; Main executable (built with build.bat)
 Source: "siigo-web.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "README.txt"; DestDir: "{app}"; Flags: ignoreversion isreadme
 
 [Icons]
 ; Desktop shortcut
@@ -34,10 +35,14 @@ Name: "{group}\Desinstalar Siigo Web"; Filename: "{uninstallexe}"
 [Run]
 ; Launch after install
 Filename: "{app}\siigo-web.exe"; Description: "Iniciar Siigo Web"; Flags: nowait postinstall skipifsilent
+Filename: "notepad.exe"; Parameters: "{app}\README.txt"; Description: "Ver informacion del programa"; Flags: nowait postinstall skipifsilent unchecked shellexec
+
+[Tasks]
+Name: "autostart"; Description: "Iniciar Siigo Web automaticamente al encender Windows"; GroupDescription: "Opciones adicionales:"; Flags: checked
 
 [Registry]
-; Auto-start with Windows (current user, no admin needed)
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "SiigoWeb"; ValueData: """{app}\siigo-web.exe"""; Flags: uninsdeletevalue
+; Auto-start with Windows (only if user checked the task)
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "SiigoWeb"; ValueData: """{app}\siigo-web.exe"""; Flags: uninsdeletevalue; Tasks: autostart
 
 [UninstallDelete]
 ; Clean up all generated files and the app folder on uninstall
@@ -57,7 +62,9 @@ Filename: "taskkill"; Parameters: "/F /IM siigo-web.exe"; Flags: runhidden; RunO
 [Code]
 var
   CredentialsPage: TInputQueryWizardPage;
+  PortPage: TInputQueryWizardPage;
   DataPathPage: TInputDirWizardPage;
+  FirewallOpened: Boolean;
 
 // Escape backslashes for JSON strings: C:\DEMOS01\ -> C:\\DEMOS01\\
 function EscapeJSON(const S: String): String;
@@ -67,8 +74,62 @@ begin
   StringChangeEx(Result, '"', '\"', True);
 end;
 
+// Check if a file exists (any of the known ISAM files)
+function FileExistsInDir(const Dir, FileName: String): Boolean;
+begin
+  Result := FileExists(AddBackslash(Dir) + FileName);
+end;
+
+// Count how many known ISAM files exist in the directory
+function CountISAMFiles(const Dir: String): Integer;
+var
+  KnownFiles: array[0..7] of String;
+  I: Integer;
+begin
+  KnownFiles[0] := 'Z17';
+  KnownFiles[1] := 'Z06';
+  KnownFiles[2] := 'Z49';
+  KnownFiles[3] := 'ZDANE';
+  KnownFiles[4] := 'ZICA';
+  KnownFiles[5] := 'ZPILA';
+  KnownFiles[6] := 'Z06A';
+  KnownFiles[7] := 'Z279CP';
+  Result := 0;
+  for I := 0 to 7 do
+  begin
+    if FileExistsInDir(Dir, KnownFiles[I]) then
+      Result := Result + 1;
+  end;
+end;
+
+// Open firewall port using netsh (requires admin)
+function OpenFirewallPort(Port: String): Boolean;
+var
+  ResultCode: Integer;
+begin
+  // First remove existing rule (ignore errors)
+  Exec('netsh', 'advfirewall firewall delete rule name="Siigo Web"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  // Add new rule
+  Result := Exec('netsh',
+    'advfirewall firewall add rule name="Siigo Web" dir=in action=allow protocol=TCP localport=' + Port,
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0);
+end;
+
+// Remove firewall rule on uninstall
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  ResultCode: Integer;
+begin
+  if CurUninstallStep = usPostUninstall then
+  begin
+    Exec('netsh', 'advfirewall firewall delete rule name="Siigo Web"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  end;
+end;
+
 procedure InitializeWizard;
 begin
+  FirewallOpened := False;
+
   // Page 1: Credentials
   CredentialsPage := CreateInputQueryPage(wpSelectDir,
     'Configuracion de Acceso',
@@ -79,19 +140,46 @@ begin
   CredentialsPage.Values[0] := 'admin';
   CredentialsPage.Values[1] := '';
 
-  // Page 2: Siigo data path
-  DataPathPage := CreateInputDirPage(CredentialsPage.ID,
+  // Page 2: Port configuration
+  PortPage := CreateInputQueryPage(CredentialsPage.ID,
+    'Configuracion de Puerto',
+    'Defina el puerto para el servidor web',
+    'Este puerto se usara para acceso local (localhost), por red LAN y para el tunel de Cloudflare.' + #13#10 +
+    'El firewall de Windows se configurara automaticamente para permitir conexiones en este puerto.' + #13#10 + #13#10 +
+    'Valor recomendado: 3210. Solo cambielo si ese puerto ya esta en uso.');
+  PortPage.Add('Puerto:', False);
+  PortPage.Values[0] := '3210';
+
+  // Page 3: Siigo data path
+  DataPathPage := CreateInputDirPage(PortPage.ID,
     'Ruta de Datos Siigo',
     'Seleccione la carpeta donde estan los archivos de Siigo Pyme',
-    'El instalador buscara los archivos ISAM (Z17, Z04, Z49, etc.) en esta ruta.',
+    'El instalador verificara que la carpeta contenga archivos ISAM de Siigo (Z17, Z06, Z49, etc.).' + #13#10 +
+    'Si la carpeta no contiene archivos reconocidos, no podra continuar.',
     False, '');
   DataPathPage.Add('');
-  DataPathPage.Values[0] := 'C:\DEMOS01\';
+  DataPathPage.Values[0] := 'C:\Archivos Siigo';
+end;
+
+function IsValidPort(const S: String): Boolean;
+var
+  Port: Integer;
+begin
+  Result := False;
+  Port := StrToIntDef(S, -1);
+  if (Port >= 1024) and (Port <= 65535) then
+    Result := True;
 end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;
+var
+  Port: String;
+  DataPath: String;
+  FileCount: Integer;
 begin
   Result := True;
+
+  // Validate credentials
   if CurPageID = CredentialsPage.ID then
   begin
     if CredentialsPage.Values[0] = '' then
@@ -107,13 +195,90 @@ begin
       Exit;
     end;
   end;
+
+  // Validate port and open firewall
+  if CurPageID = PortPage.ID then
+  begin
+    Port := Trim(PortPage.Values[0]);
+    if not IsValidPort(Port) then
+    begin
+      MsgBox('El puerto debe ser un numero entre 1024 y 65535.', mbError, MB_OK);
+      Result := False;
+      Exit;
+    end;
+
+    // Try to open firewall
+    if OpenFirewallPort(Port) then
+    begin
+      FirewallOpened := True;
+      MsgBox('Puerto ' + Port + ' abierto en el firewall de Windows correctamente.' + #13#10 + #13#10 +
+        'Podra acceder al panel desde otros equipos en la red local.',
+        mbInformation, MB_OK);
+    end
+    else
+    begin
+      if MsgBox('No se pudo abrir el puerto ' + Port + ' en el firewall.' + #13#10 + #13#10 +
+        'El servidor funcionara en localhost pero podria no ser accesible desde otros equipos en la red.' + #13#10 + #13#10 +
+        'Desea continuar de todas formas?',
+        mbConfirmation, MB_YESNO) = IDNO then
+      begin
+        Result := False;
+        Exit;
+      end;
+    end;
+  end;
+
+  // Validate Siigo data path
+  if CurPageID = DataPathPage.ID then
+  begin
+    DataPath := DataPathPage.Values[0];
+
+    // Check directory exists
+    if not DirExists(DataPath) then
+    begin
+      MsgBox('La carpeta "' + DataPath + '" no existe.' + #13#10 + #13#10 +
+        'Verifique la ruta e intente de nuevo.',
+        mbError, MB_OK);
+      Result := False;
+      Exit;
+    end;
+
+    // Check for ISAM files
+    FileCount := CountISAMFiles(DataPath);
+    if FileCount = 0 then
+    begin
+      MsgBox('No se encontraron archivos ISAM de Siigo en "' + DataPath + '".' + #13#10 + #13#10 +
+        'Se buscaron archivos como Z17, Z06, Z49, ZDANE, ZICA, ZPILA, etc.' + #13#10 +
+        'Verifique que esta sea la carpeta correcta de datos de Siigo Pyme.',
+        mbError, MB_OK);
+      Result := False;
+      Exit;
+    end;
+
+    if FileCount < 3 then
+    begin
+      if MsgBox('Solo se encontraron ' + IntToStr(FileCount) + ' archivo(s) ISAM en "' + DataPath + '".' + #13#10 + #13#10 +
+        'Normalmente Siigo tiene 6 o mas archivos base. Es posible que esta no sea la carpeta correcta.' + #13#10 + #13#10 +
+        'Desea continuar de todas formas?',
+        mbConfirmation, MB_YESNO) = IDNO then
+      begin
+        Result := False;
+        Exit;
+      end;
+    end
+    else
+    begin
+      MsgBox('Se encontraron ' + IntToStr(FileCount) + ' archivos ISAM de Siigo. La carpeta es valida.',
+        mbInformation, MB_OK);
+    end;
+  end;
 end;
 
 procedure GenerateConfigJSON;
 var
   ConfigFile: String;
   Lines: TStringList;
-  EscUser, EscPass, EscPath: String;
+  EscUser, EscPass, EscPath, Port: String;
 begin
   ConfigFile := ExpandConstant('{app}\config.json');
 
@@ -121,6 +286,7 @@ begin
   EscUser := EscapeJSON(CredentialsPage.Values[0]);
   EscPass := EscapeJSON(CredentialsPage.Values[1]);
   EscPath := EscapeJSON(DataPathPage.Values[0]);
+  Port := Trim(PortPage.Values[0]);
 
   Lines := TStringList.Create;
   try
@@ -130,7 +296,7 @@ begin
     Lines.Add('    "password": "' + EscPass + '"');
     Lines.Add('  },');
     Lines.Add('  "server": {');
-    Lines.Add('    "port": "3210"');
+    Lines.Add('    "port": "' + Port + '"');
     Lines.Add('  },');
     Lines.Add('  "siigo": {');
     Lines.Add('    "data_path": "' + EscPath + '"');

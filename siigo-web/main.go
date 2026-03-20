@@ -126,6 +126,8 @@ type Server struct {
 	apiLimiter     *rateLimiter
 	loginLimiter   *rateLimiter
 	syncRegistry   map[string]*SyncTableDef // ORM-based sync table definitions
+	fileWatcher    *fileWatcher              // fsnotify watcher for ISAM file changes
+	watcherCh      chan []string              // channel receiving changed table names from watcher
 }
 
 func main() {
@@ -277,7 +279,14 @@ func main() {
 	killExistingInstance(port)
 
 	localURL := fmt.Sprintf("http://localhost:%s", port)
+	lanURL := ""
+	if ip := getLocalIP(); ip != "" {
+		lanURL = fmt.Sprintf("http://%s:%s", ip, port)
+	}
 	log.Printf("Siigo Web running on %s", localURL)
+	if lanURL != "" {
+		log.Printf("  LAN: %s", lanURL)
+	}
 
 	httpServer := &http.Server{
 		Addr:    ":" + port,
@@ -332,9 +341,18 @@ func main() {
 	go func() {
 		time.Sleep(5 * time.Second)
 		if tunnelURL := readTunnelURL(); tunnelURL != "" {
-			bot.Send(fmt.Sprintf("🟢 <b>Server started</b>\n\n🖥 Local: %s\n🌍 Public: %s\n📄 Swagger: %s/api/v1/docs", localURL, tunnelURL, tunnelURL))
+			msg := fmt.Sprintf("🟢 <b>Server started</b>\n\n🖥 Local: %s", localURL)
+			if lanURL != "" {
+				msg += fmt.Sprintf("\n🏠 LAN: %s", lanURL)
+			}
+			msg += fmt.Sprintf("\n🌍 Public: %s\n📄 Swagger: %s/api/v1/docs", tunnelURL, tunnelURL)
+			bot.Send(msg)
 		} else {
-			bot.NotifyServerStarted(localURL)
+			msg := localURL
+			if lanURL != "" {
+				msg += fmt.Sprintf("\n🏠 LAN: %s", lanURL)
+			}
+			bot.NotifyServerStarted(msg)
 		}
 	}()
 
@@ -438,6 +456,20 @@ func killExistingInstance(port string) {
 			}
 		}
 	}
+}
+
+// getLocalIP returns the local LAN IP address (e.g. 192.168.x.x).
+func getLocalIP() string {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return ""
+	}
+	for _, addr := range addrs {
+		if ipNet, ok := addr.(*net.IPNet); ok && !ipNet.IP.IsLoopback() && ipNet.IP.To4() != nil {
+			return ipNet.IP.String()
+		}
+	}
+	return ""
 }
 
 // openBrowser opens the given URL in the default browser
@@ -1426,21 +1458,64 @@ func (s *Server) diffGeneric(def *SyncTableDef) {
 
 func (s *Server) startSyncLoop() {
 	s.paused = false
-	s.stopCh = make(chan bool, 1)
+	s.stopCh = make(chan bool, 2)
 	s.db.AddLog("info", "SYNC", "Loops started (detect + send independent)")
 
 	go s.startDetectLoop()
 	s.startSendLoop()
 }
 
-// startDetectLoop reads ISAM files and updates SQLite independently
+// startDetectLoop uses fsnotify to watch ISAM files and only processes tables whose files changed.
+// Falls back to full-scan polling if the watcher cannot be initialized.
 func (s *Server) startDetectLoop() {
+	// Run initial full scan on startup
+	s.doDetectCycle()
+
+	// Initialize watcher if registry and data path are available
+	if s.syncRegistry != nil && s.cfg.Siigo.DataPath != "" {
+		s.watcherCh = make(chan []string, 32)
+		fileMap := buildFileToTablesMap(s.syncRegistry)
+		fw, err := newFileWatcher(s.cfg.Siigo.DataPath, fileMap, 800*time.Millisecond, func(tables []string) {
+			// Non-blocking send to channel
+			select {
+			case s.watcherCh <- tables:
+			default:
+				// Channel full — a detect is already queued, skip
+			}
+		})
+		if err != nil {
+			s.db.AddLog("warn", "DETECT", fmt.Sprintf("File watcher failed, falling back to polling: %v", err))
+			s.startDetectLoopPolling()
+			return
+		}
+		s.fileWatcher = fw
+		s.db.AddLog("info", "DETECT", fmt.Sprintf("File watcher active on %s (%d ISAM files mapped)", s.cfg.Siigo.DataPath, len(fileMap)))
+
+		// Wait for watcher events
+		for {
+			select {
+			case tables := <-s.watcherCh:
+				if !s.paused && !s.detecting && s.cfg.SetupComplete {
+					s.doDetectTables(tables)
+				}
+			case <-s.stopCh:
+				s.fileWatcher.Stop()
+				s.db.AddLog("info", "DETECT", "Detect loop stopped (watcher)")
+				return
+			}
+		}
+	} else {
+		s.db.AddLog("warn", "DETECT", "No sync registry or data path — falling back to polling")
+		s.startDetectLoopPolling()
+	}
+}
+
+// startDetectLoopPolling is the legacy polling fallback when fsnotify is unavailable.
+func (s *Server) startDetectLoopPolling() {
 	interval := time.Duration(s.cfg.Sync.IntervalSeconds) * time.Second
 	if interval < 10*time.Second {
 		interval = 10 * time.Second
 	}
-
-	s.doDetectCycle()
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -1452,7 +1527,7 @@ func (s *Server) startDetectLoop() {
 				s.doDetectCycle()
 			}
 		case <-s.stopCh:
-			s.db.AddLog("info", "DETECT", "Detect loop stopped")
+			s.db.AddLog("info", "DETECT", "Detect loop stopped (polling)")
 			return
 		}
 	}
@@ -1485,11 +1560,60 @@ func (s *Server) startSendLoop() {
 	}
 }
 
+// doDetectTables processes only the specified tables (triggered by file watcher).
+func (s *Server) doDetectTables(tables []string) {
+	s.detecting = true
+	defer func() { s.detecting = false }()
+
+	if s.syncRegistry == nil && s.cfg.Siigo.DataPath != "" {
+		s.syncRegistry = initSyncTables(s.cfg.Siigo.DataPath)
+	}
+
+	s.db.AddLog("info", "DETECT", fmt.Sprintf("--- File change detected → scanning %d table(s): %s ---", len(tables), strings.Join(tables, ", ")))
+
+	// Temporary: Telegram notification for watcher testing
+	if s.bot != nil {
+		s.bot.Send(fmt.Sprintf("📂 <b>File watcher triggered</b>\n\nChanged tables: %s", strings.Join(tables, ", ")))
+	}
+
+	scanned := 0
+	for _, table := range tables {
+		if !s.cfg.SetupComplete || s.paused {
+			s.db.AddLog("info", "DETECT", "Detection aborted (setup incomplete or paused)")
+			return
+		}
+		if !s.cfg.IsDetectEnabled(table) {
+			continue
+		}
+		scanned++
+		if def, ok := s.syncRegistry[table]; ok {
+			s.diffGeneric(def)
+		} else if fn := s.getDiffFunc(table); fn != nil {
+			fn()
+		}
+	}
+
+	s.db.AddLog("info", "DETECT", fmt.Sprintf("--- Watcher scan completed --- %d table(s) processed", scanned))
+
+	// Update stats and notify
+	stats := s.db.GetStats()
+	for _, table := range config.AllSyncTables() {
+		total, _ := stats[table+"_total"].(int)
+		pending, _ := stats[table+"_pending"].(int)
+		synced, _ := stats[table+"_synced"].(int)
+		errors, _ := stats[table+"_errors"].(int)
+		s.db.RecordSyncStats(table, total, pending, synced, errors)
+	}
+	statsJSON, _ := json.Marshal(stats)
+	sseNotify("sync_complete", string(statsJSON))
+	s.webhookDispatch("sync_complete", stats)
+}
+
 func (s *Server) doDetectCycle() {
 	s.detecting = true
 	defer func() { s.detecting = false }()
 
-	s.db.AddLog("info", "DETECT", "--- Detection cycle started --- Reading ISAM files...")
+	s.db.AddLog("info", "DETECT", "--- Full detection cycle started --- Reading all ISAM files...")
 
 	// Re-initialize registry if not yet done (e.g. setup wizard just completed)
 	if s.syncRegistry == nil && s.cfg.Siigo.DataPath != "" {
@@ -2796,6 +2920,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "POST" {
 		var body struct {
 			DataPath          string `json:"data_path"`
+			Port              string `json:"port"`
 			BaseURL           string `json:"base_url"`
 			Email             string `json:"email"`
 			Password          string `json:"password"`
@@ -2811,6 +2936,9 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.cfg.Siigo.DataPath = body.DataPath
+		if body.Port != "" {
+			s.cfg.Server.Port = body.Port
+		}
 		s.cfg.Finearom.BaseURL = body.BaseURL
 		s.cfg.Finearom.Email = body.Email
 		s.cfg.Finearom.Password = body.Password
@@ -2840,7 +2968,8 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	// Return config WITHOUT secrets
 	jsonResponse(w, map[string]interface{}{
-		"siigo": s.cfg.Siigo,
+		"siigo":  s.cfg.Siigo,
+		"server": map[string]interface{}{"port": s.cfg.Server.Port},
 		"finearom": map[string]interface{}{
 			"base_url": s.cfg.Finearom.BaseURL,
 			"email":    s.cfg.Finearom.Email,
@@ -3241,6 +3370,7 @@ func (s *Server) handleSyncStatus(w http.ResponseWriter, r *http.Request) {
 		"send_interval":    s.cfg.Sync.SendIntervalSeconds,
 		"send_enabled":     s.cfg.SendEnabled,
 		"detect_enabled":   s.cfg.DetectEnabled,
+		"watcher_active":   s.fileWatcher != nil,
 	})
 }
 
@@ -4775,7 +4905,14 @@ func (s *Server) registerBotCommands() {
 	})
 
 	s.bot.RegisterCommand("/url", func(args string) string {
-		msg := "🌐 <b>URLs</b>\n\n🖥 Local: http://localhost:3210"
+		port := "3210"
+		if s.cfg.Server.Port != "" {
+			port = s.cfg.Server.Port
+		}
+		msg := fmt.Sprintf("🌐 <b>URLs</b>\n\n🖥 Local: http://localhost:%s", port)
+		if ip := getLocalIP(); ip != "" {
+			msg += fmt.Sprintf("\n🏠 LAN: http://%s:%s", ip, port)
+		}
 		if tunnelURL := readTunnelURL(); tunnelURL != "" {
 			msg += fmt.Sprintf("\n🌍 Public: %s", tunnelURL)
 			msg += fmt.Sprintf("\n📄 Swagger: %s/api/v1/docs", tunnelURL)

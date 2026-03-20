@@ -66,6 +66,7 @@ export default function Config() {
   const [sendInterval, setSendInterval] = useState(30);
 
   // --- Servidor & API ---
+  const [serverPort, setServerPort] = useState('3210');
   const [baseURL, setBaseURL] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -109,6 +110,7 @@ export default function Config() {
   useEffect(() => {
     api.getConfig().then(cfg => {
       setDataPath(cfg.siigo?.data_path || '');
+      setServerPort(cfg.server?.port || '3210');
       setBaseURL(cfg.finearom?.base_url || '');
       setEmail(cfg.finearom?.email || '');
       setPassword(cfg.finearom?.password || '');
@@ -150,6 +152,7 @@ export default function Config() {
   const handleSaveGeneral = async () => {
     const r = await api.saveConfig({
       data_path: dataPath,
+      port: serverPort,
       base_url: baseURL,
       email,
       password,
@@ -199,9 +202,13 @@ export default function Config() {
                 <input value={dataPath} onChange={e => setDataPath(e.target.value)} placeholder="C:\DEMOS01\" />
               </FormGroup>
 
-              <SectionTitle>Intervalos de Sincronizacion</SectionTitle>
+              <SectionTitle>Sincronizacion</SectionTitle>
+              <Alert variant="info" style={{ marginBottom: 12 }}>
+                <strong>Deteccion:</strong> Los cambios en archivos ISAM se detectan automaticamente en tiempo real (file watcher). El intervalo solo se usa como fallback si el watcher no puede iniciar.<br />
+                <strong>Envio:</strong> Los registros pendientes se envian al API cada {sendInterval}s.
+              </Alert>
               <div className="form-row">
-                <FormGroup label="Deteccion ISAM (seg)" hint="Cada cuanto se revisan cambios en los archivos ISAM">
+                <FormGroup label="Deteccion fallback (seg)" hint="Solo se usa si el file watcher no esta disponible">
                   <input type="number" value={interval} onChange={e => setInterval(parseInt(e.target.value) || 60)} />
                 </FormGroup>
                 <FormGroup label="Envio al servidor (seg)" hint="Cada cuanto se envian pendientes al API">
@@ -276,7 +283,7 @@ export default function Config() {
               </div>
 
               <Alert variant="info" style={{ marginTop: 12 }}>
-                <strong>Deteccion:</strong> Lee archivos ISAM cada {interval}s y actualiza SQLite local.<br />
+                <strong>Deteccion:</strong> Los cambios en archivos ISAM se detectan en tiempo real via file watcher. Cuando Siigo escribe un archivo, solo se procesa esa tabla.<br />
                 <strong>Envio:</strong> Envia registros pendientes a Laravel cada {sendInterval}s. Solo funciona si la deteccion tambien esta activa.
               </Alert>
             </>
@@ -285,6 +292,14 @@ export default function Config() {
           {/* ===== SERVIDOR & API ===== */}
           {activeTab === 'api' && (
             <>
+              <SectionTitle>Servidor</SectionTitle>
+              <FormGroup label="Puerto" hint="Puerto para localhost, LAN y tunel Cloudflare. Requiere reiniciar el servidor para aplicar cambios.">
+                <input value={serverPort} onChange={e => setServerPort(e.target.value)} placeholder="3210" style={{ maxWidth: 120 }} />
+              </FormGroup>
+              <div className="config-actions" style={{ marginBottom: 24 }}>
+                <button className="btn-save" onClick={handleSaveGeneral}>Guardar</button>
+              </div>
+
               <SectionTitle>Conexion a Finearom</SectionTitle>
               <ToggleRow checked={globalSend} onChange={async () => {
                     const val = !globalSend;

@@ -20,7 +20,14 @@ PID_FILE="/tmp/siigo-web.pid"
 TUNNEL_PID_FILE="/tmp/siigo-tunnel.pid"
 VITE_PID_FILE="/tmp/siigo-vite.pid"
 AIR_PID_FILE="/tmp/siigo-air.pid"
+# Read port from config.json, fallback to 3210
 PORT=3210
+if [ -f "$WEB_DIR/config.json" ]; then
+    CFG_PORT=$(grep -o '"port"[[:space:]]*:[[:space:]]*"[0-9]*"' "$WEB_DIR/config.json" | head -1 | grep -o '[0-9]*')
+    if [ -n "$CFG_PORT" ]; then
+        PORT=$CFG_PORT
+    fi
+fi
 VITE_PORT=5173
 SIIGO_EXE="siigo-web.exe"
 AIR_BIN="$(go env GOPATH)/bin/air"
