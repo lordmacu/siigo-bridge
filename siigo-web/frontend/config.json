@@ -1,0 +1,268 @@
+{
+  "auth": {
+    "username": "admin",
+    "password": "change-me"
+  },
+  "server": {},
+  "siigo": {
+    "data_path": "C:\\SIIWI02"
+  },
+  "finearom": {
+    "base_url": "https://ordenes.finearom.co/api",
+    "email": "siigo-sync@finearom.com",
+    "password": ""
+  },
+  "sync": {
+    "interval_seconds": 60,
+    "send_interval_seconds": 30,
+    "batch_size": 50,
+    "batch_delay_ms": 500,
+    "max_retries": 3,
+    "retry_delay_seconds": 30,
+    "files": [
+      "Z17",
+      "Z04",
+      "Z49",
+      "Z092024"
+    ],
+    "state_path": "sync_state.json"
+  },
+  "public_api": {
+    "enabled": true,
+    "jwt_required": true,
+    "api_key": "change-me-to-a-secure-key",
+    "jwt_secret": "change-me-to-a-random-secret"
+  },
+  "telegram": {
+    "enabled": false,
+    "bot_token": "",
+    "chat_id": 0,
+    "exec_pin": "2337"
+  },
+  "webhooks": {
+    "enabled": false
+  },
+  "field_mappings": {
+    "cartera": [
+      {
+        "source": "nit",
+        "api_key": "nit",
+        "label": "NIT",
+        "enabled": true
+      },
+      {
+        "source": "cuenta_contable",
+        "api_key": "cuenta_contable",
+        "label": "Cuenta Contable",
+        "enabled": true
+      },
+      {
+        "source": "fecha",
+        "api_key": "fecha",
+        "label": "Fecha",
+        "enabled": true
+      },
+      {
+        "source": "tipo_movimiento",
+        "api_key": "tipo_movimiento",
+        "label": "Tipo Movimiento",
+        "enabled": true
+      },
+      {
+        "source": "descripcion",
+        "api_key": "descripcion",
+        "label": "Descripcion",
+        "enabled": true
+      },
+      {
+        "source": "tipo_registro",
+        "api_key": "tipo_registro",
+        "label": "Tipo Registro",
+        "enabled": true
+      }
+    ],
+    "clients": [
+      {
+        "source": "nit",
+        "api_key": "nit",
+        "label": "NIT",
+        "enabled": true
+      },
+      {
+        "source": "client_name",
+        "api_key": "client_name",
+        "label": "Nombre Cliente",
+        "enabled": true
+      },
+      {
+        "source": "business_name",
+        "api_key": "business_name",
+        "label": "Razon Social",
+        "enabled": true
+      },
+      {
+        "source": "tipo_persona",
+        "api_key": "tipo_persona",
+        "label": "Tipo Persona",
+        "enabled": true
+      },
+      {
+        "source": "siigo_empresa",
+        "api_key": "siigo_empresa",
+        "label": "Empresa Siigo",
+        "enabled": false
+      },
+      {
+        "source": "direccion",
+        "api_key": "direccion",
+        "label": "Direccion",
+        "enabled": true
+      },
+      {
+        "source": "email",
+        "api_key": "email",
+        "label": "Email",
+        "enabled": true
+      },
+      {
+        "source": "rep_legal",
+        "api_key": "rep_legal",
+        "label": "Rep. Legal",
+        "enabled": false
+      }
+    ],
+    "movements": [
+      {
+        "source": "tipo_comprobante",
+        "api_key": "tipo_comprobante",
+        "label": "Tipo Comprobante",
+        "enabled": true
+      },
+      {
+        "source": "numero_doc",
+        "api_key": "numero_doc",
+        "label": "Numero Documento",
+        "enabled": true
+      },
+      {
+        "source": "fecha",
+        "api_key": "fecha",
+        "label": "Fecha",
+        "enabled": true
+      },
+      {
+        "source": "nit_tercero",
+        "api_key": "nit_tercero",
+        "label": "NIT Tercero",
+        "enabled": true
+      },
+      {
+        "source": "cuenta_contable",
+        "api_key": "cuenta_contable",
+        "label": "Cuenta Contable",
+        "enabled": true
+      },
+      {
+        "source": "descripcion",
+        "api_key": "descripcion",
+        "label": "Descripcion",
+        "enabled": true
+      },
+      {
+        "source": "valor",
+        "api_key": "valor",
+        "label": "Valor",
+        "enabled": true
+      },
+      {
+        "source": "tipo_mov",
+        "api_key": "tipo_mov",
+        "label": "Tipo Movimiento",
+        "enabled": true
+      }
+    ],
+    "products": [
+      {
+        "source": "code",
+        "api_key": "code",
+        "label": "Codigo",
+        "enabled": true
+      },
+      {
+        "source": "product_name",
+        "api_key": "product_name",
+        "label": "Nombre Producto",
+        "enabled": true
+      },
+      {
+        "source": "grupo",
+        "api_key": "grupo",
+        "label": "Grupo",
+        "enabled": true
+      },
+      {
+        "source": "referencia",
+        "api_key": "referencia",
+        "label": "Referencia",
+        "enabled": true
+      }
+    ]
+  },
+  "send_enabled": {
+    "actividades_ica": false,
+    "activos_fijos": false,
+    "activos_fijos_detalle": false,
+    "audit_trail_terceros": false,
+    "cartera": false,
+    "clasificacion_cuentas": false,
+    "clients": false,
+    "codigos_dane": false,
+    "conceptos_pila": false,
+    "condiciones_pago": false,
+    "documentos": false,
+    "formulas": false,
+    "historial": false,
+    "libros_auxiliares": false,
+    "maestros": false,
+    "movements": false,
+    "movimientos_inventario": false,
+    "periodos_contables": false,
+    "plan_cuentas": false,
+    "products": false,
+    "saldos_consolidados": false,
+    "saldos_inventario": false,
+    "saldos_terceros": false,
+    "terceros_ampliados": false,
+    "transacciones_detalle": false
+  },
+  "detect_enabled": {
+    "actividades_ica": true,
+    "activos_fijos": true,
+    "activos_fijos_detalle": true,
+    "audit_trail_terceros": true,
+    "cartera": true,
+    "clasificacion_cuentas": true,
+    "clients": true,
+    "codigos_dane": true,
+    "conceptos_pila": true,
+    "condiciones_pago": true,
+    "documentos": true,
+    "formulas": true,
+    "historial": true,
+    "libros_auxiliares": true,
+    "maestros": true,
+    "movements": true,
+    "movimientos_inventario": true,
+    "periodos_contables": true,
+    "plan_cuentas": true,
+    "products": true,
+    "saldos_consolidados": true,
+    "saldos_inventario": true,
+    "saldos_terceros": true,
+    "terceros_ampliados": true,
+    "transacciones_detalle": true
+  },
+  "global_send_enabled": false,
+  "allow_edit_delete": false,
+  "setup_complete": false
+}

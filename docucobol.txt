@@ -1,0 +1,321 @@
+Chapter 31: File Status Code Tables
+This chapter lists all possible values that can be returned in file status. See the chapter Using File Status for an explanation of file status, and how to use it.
+
+Unless otherwise specified, each file status code can be received for operations on any file organizations in any access mode. The ANSI'74, ANSI'85 and Extended File Status codes are given in your Error Messages. The following sections contain the RM/COBOL file status codes and the Microsoft V2 file status codes.
+
+In addition to the above file status conventions you can produce more detailed extended file status codes. Extended file status codes have the following format:
+
+9/nnn
+
+where:
+
+nnn	is a binary (COMP-X) number, equivalent to a run-time error number.
+Run-time errors are documented in the chapter Run-time System Messages in your Error Messages.
+
+For example, if you are writing a file to disk and the disk runs out of space, the ANSI'74 file status would be "30", which translates into a "Permanent error - no other information is available" error message. That error message is very general; a "permanent error" could mean that the disk has failed, or that the disk drive door is open. So, rather than return a generic file status, this COBOL system returns an extended file status of 9/007.
+
+When using ANSI'74 or ANSI'85 file status codes, the run-time system returns extended status codes if the extended file status is more specific than what would normally be returned.
+
+Unless otherwise specified, each file status code can be received for operations on any file organizations in any access mode.
+
+31.1 List of Messages
+'74	'85	Meaning
+00	00	Successful completion
+02	02	Indexed files only.
+
+One of two possibilities:
+For a READ statement, the key value for the current key is equal to the value of that same key in the next record in the current key of reference.
+For a WRITE or REWRITE statement, the record just written created a duplicate key value for at least one alternate record key for which duplicates are allowed.
+00	04	The length of the record being processed does not conform to the fixed file attributes for that file.
+00	05	The referenced optional file is not present at the time the OPEN statement is executed.
+00	07	Sequential files only. For an OPEN or CLOSE statement with the REEL/UNIT phrase the referenced file is a non-reel/unit medium.
+10	10	No next logical record exists.
+
+You have reached the end of the file.
+ 	14	Relative files only.
+
+The number of significant digits in the relative record number is larger than the size of the relative key data item described for that file.
+21	21	Sequentially accessed files only.
+
+Indicates a sequence error. The ascending key requirements of successive record key values has been violated, or, the prime record key value has been changed by a COBOL program between successful execution of a READ statement and execution of the next REWRITE statement for that file.
+22	22	Indexed and relative files only.
+
+Indicates a duplicate key condition. Attempt has been made to store a record that would create a duplicate key in the indexed or relative file OR a duplicate alternate record key that does not allow duplicates.
+23	23	Indicates no record found.
+
+An attempt has been made to access a record, identified by a key, and that record does not exist in the file.
+
+Alternatively a START or READ operation has been tried on an optional input file that is not present.
+24	24	Relative and indexed files only.
+
+Indicates a boundary violation arising from one of the following conditions:
+An attempt is made to write beyond the externally defined boundaries of a file.
+A sequential WRITE operation has been tried on a relative file, but the number of significant digits in the relative record number is larger than the size of the relative key data item described for the file.
+ 	30	The I/O statement was unsuccessfully executed as the result of a boundary violation for a sequential file or as the result of an I/O error, such as a data check parity error, or a transmission error.
+ 	34	The I/O statement failed because of a boundary violation.
+
+This condition indicates that an attempt has been made to write beyond the externally defined boundaries of a sequential file.
+ 	35	An OPEN operation with the I-O, INPUT, or EXTEND phrases has been tried on a non-OPTIONAL file that is not present.
+ 	37	An OPEN operation has been tried on a file which does not support the open mode specified in the OPEN statement.
+ 	38	An OPEN operation has been tried on a file previously closed with a lock.
+ 	39	A conflict has been detected between the fixed file attributes and the attributes specified for that file in the program.
+ 	41	An OPEN operation has been tried on file already opened.
+ 	42	A CLOSE operation has been tried on file already closed.
+ 	43	Files in sequential access mode.
+
+The last I/O statement executed for the file, before the execution of a DELETE or REWRITE statement, was not a READ statement.
+ 	44	A boundary violation exists. Possible violations are:
+An attempt has been made to WRITE or REWRITE a record that is larger than the largest, or smaller than the smallest record allowed by the RECORD IS VARYING clause of the associated file.
+An attempt has been made to REWRITE a record to a file, and the record is not the same size as the record being replaced.
+ 	46	A sequential READ operation has been tried on a file open in the INPUT or I-O mode but no valid next record has been established.
+ 	47	A READ or START operation has been tried on a file not opened INPUT or I-O.
+ 	48	A WRITE operation has been tried on a file not opened in the OUTPUT, I-O, or EXTEND mode, or on a file open I-O in the sequential access mode.
+ 	49	A DELETE or REWRITE operation has been tried on a file that is not opened I-O.
+ 	9/nnn	Extended file status code as shown below.
+ 	 	RT001 Insufficient buffer space. On OS/2, could
+indicate that the SWAPPATH has not been set
+correctly or the SWAPPATH drive is full.
+Could also indicate an out of memory
+situation.
+
+RT002 File not open when access tried.
+
+RT003 Serial mode error.
+
+RT004 Illegal file name.
+
+RT005 Illegal device specification.
+
+RT006 Attempt to write to a file opened for input.
+
+RT007 Disk space exhausted.
+
+RT008 Attempt to input from a file opened for output.
+
+RT009 No room in directory (also, directory does not exist).
+
+RT010 File name not supplied.
+
+RT012 Attempt to open a file which is already open.
+ 	35	RT013 File not found.
+
+RT014 Too many files open simultaneously.
+
+RT015 Too many indexed files open.
+
+RT016 Too many device files open.
+
+RT017 Record error: probably zero length.
+
+RT018 Read part record error: EOF before EOR or
+file open in wrong mode.
+
+RT019 Rewrite error: open mode or access mode
+wrong.
+
+RT020 Device or resource busy.
+
+RT021 File is a directory.
+
+RT022 Illegal or impossible access mode for OPEN.
+
+RT023 Illegal or impossible access mode for CLOSE.
+
+RT024 Disk I/O error.
+
+RT025 Operating system data error.
+
+RT026 Block I/O error.
+ 	35	RT027 Device not available.
+
+RT028 No space on device.
+
+RT029 Attempt to delete open file.
+
+RT030 File system is read only.
+
+RT031 Not owner of file.
+
+RT032 Too many indexed files, or no such process.
+ 	30	RT033 Physical I/O error.
+ 	30	RT034 Incorrect mode or file descriptor.
+ 	37	RT035 Attempt to access a file with incorrect
+permission.
+
+RT036 File already exists.
+
+RT037 File access denied.
+
+RT038 Disk not compatible.
+
+RT039 File not compatible.
+
+RT040 Language initialization not set up correctly.
+
+RT041 Corrupt index file.
+
+RT042 Attempt to write on broken pipe.
+
+RT043 File information missing for indexed file.
+
+RT045 Attempt to open an NLS file using an
+incompatible program.
+
+RT047 Indexed structure overflow. (Could indicate
+that you have reached the maximum number
+of duplicate keys.)
+
+RT065 File locked.
+
+RT066 Attempt to add duplicate record key to indexed
+file.
+
+RT068 Record locked.
+
+RT069 Illegal argument to ISAM module.
+
+RT070 Too many indexed files open.
+
+RT071 Bad indexed file format.
+
+RT072 End of indexed file.
+
+RT099 Invalid sort operation.
+ 	37	RT100 Invalid file operation.
+
+RT104 Null file name used in a file operation.
+
+RT105 Memory allocation error.
+
+RT138 File closed with lock - cannot be opened.
+ 	39/44	RT139 Record length or key data inconsistency.
+ 	41	RT141 File already open - cannot be opened.
+ 	42	RT142 File not open - cannot be closed.
+ 	43	RT143 REWRITE/DELETE in sequential mode not preceded by successful READ.
+ 	46	RT146 No current record defined for sequential read.
+ 	47	RT147 Wrong open mode or access mode for READ/START.
+
+RT148 Wrong open mode or access mode for WRITE.
+
+RT149 Wrong open mode or access mode for
+REWRITE/ DELETE.
+
+RT161 File header not found.
+
+RT173 Called program not found.
+
+RT188 File name too large.
+ 	34	RT194 File size too large.
+
+RT195 DELETE/REWRITE not preceded by a READ.
+ 	14	RT196 Record number too large in relative or indexed
+file.
+ 	38	RT210 File is closed with lock.
+ 	38	RT213 Too many locks.
+
+RT218 Malformed MULTIPLE REEL/UNIT file.
+
+RT219 Operating system shared file limit exceeded.
+31.1.1 RM/COBOL File Status Codes
+RM/COBOL file status codes are either ANSI'74 file status codes or can be mapped onto extended file status codes, as shown below. The first table of RM/COBOL file status codes is for DOS, Windows and OS/2, the second for UNIX.
+
+DOS, Windows and OS/2:
+
+Status
+Key 1
+Status
+Key 2
+See Code
+
+Description
+9	0	9/006	Attempt to write to a file opened for input.
+9/008	Attempt to read from a file opened for output.
+9/018	Attempt to read part of a record.
+9/019	Rewrite error: open mode or access mode wrong.
+9/100	Invalid file operation.
+9/101	Illegal operation on indexed file.
+9/139	Record length or key inconsistent.
+9/143	REWRITE/DELETE not after successful READ.
+9/147	Wrong open or access mode for READ/ START.
+9/148	Wrong open or access mode for WRITE.
+9/149	Wrong open or access mode for REWRITE/ DELETE.
+9/152	REWRITE on file not opened I/O.
+9/195	DELETE/REWRITE not preceded by READ.
+9	1	9/002	File not open when access attempted.
+9/067	Indexed file not open.
+9/142	File not open - cannot be closed.
+9	2	9/012	Attempt to open a file which is already open.
+9/066	Attempt to add duplicate key to indexed file.
+9/141	File already open - cannot be opened.
+3	9/065	File locked.
+9/138	File is closed with lock - cannot open.
+9/210	File is closed with lock.
+4	9/002	Illegal filename.
+9/013	File not found.
+9/030	File system is read only.
+9/031	Not owner of this file.
+9/035	Incorrect access permission.
+9/037	File access denied.
+9/104	Null filename used in file operation.
+9/188	Filename too large.
+9/194	File size too large.
+5	9/005	Illegal device specification.
+9/038	Disk not compatible.
+9/039	File not compatible.
+6	9/146	No current record defined for sequential read.
+7	9/017	Record error: probably zero length.
+8	9/041	Corrupt indexed file.
+9/043	File information missing for indexed file.
+9	8	9/047	Index structure overflow.
+9/069	Illegal argument to ISAM module.
+9/071	Bad indexed file format.
+9/072	End of indexed file.
+9/196	Record number too big in relative/indexed file.
+9	9/068	Record is locked.
+UNIX:
+
+Status
+Key 1
+Status
+Key 2
+See Code
+
+Description
+9	0	9/143	REWRITE/DELETE not after successful READ
+9/147	Wrong open or access mode for READ/ START.
+9/148	Wrong open or access mode for WRITE.
+9/149	Wrong open or access mode for REWRITE/ DELETE.
+1	9/142	File not open - cannot be closed.
+2	9/141	File already open - cannot be opened.
+3	9/138	File is closed with lock - cannot open.
+9/210	File is closed with lock.
+4	9/013	File not found.
+9/035	Incorrect access permission.
+9/037	File access denied.
+9/139	Record length or key inconsistent.
+9	4	9/188	Filename too large.
+6	9/146	No current record defined for sequential read.
+8	9/071	Bad indexed file format.
+9	9/065	File locked.
+9/068	Record is locked.
+31.1.2 Microsoft COBOL V2 File Status Codes
+DOS, Windows and OS/2:
+
+Status
+Key 1
+Status
+Key 2
+
+Description
+0	0	Successful completion.
+2	Duplicate key and duplicates are allowed.
+1	0	End of file.
+2	1	Sequence error in writing sequential access file.
+2	Duplicate key and duplicates are not allowed.
+3	Key not found.
+4	Disk space full.
+3	0	Permanent error or file not found.
+4	Disk space full.
+9	1	File structure error.
+4	File or record locked.
+5	Indexed file system not available.

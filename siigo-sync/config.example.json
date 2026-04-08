@@ -1,0 +1,15 @@
+{
+  "siigo": {
+    "data_path": "C:\\SIIWI02"
+  },
+  "finearom": {
+    "base_url": "http://localhost:8000/api",
+    "email": "sync@finearom.com",
+    "password": "password"
+  },
+  "sync": {
+    "interval_seconds": 60,
+    "files": ["Z17", "Z06", "Z49"],
+    "state_path": "sync_state.json"
+  }
+}

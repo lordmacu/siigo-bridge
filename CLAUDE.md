@@ -1,0 +1,473 @@
+# Siigo Middleware - Project Instructions
+
+## What This Is
+Middleware between **Siigo Pyme** (Colombian COBOL accounting software, ISAM files) and **Finearom** (Laravel B2B platform for aromas/fragrances). We read Siigo's ISAM files, detect changes, and sync to Finearom's REST API.
+
+## Project Structure
+```
+siigo/
+├── siigo-common/     # (listed below with telegram/)
+├── siigo-common/     # SHARED Go module (isam/, parsers/, api/, config/, storage/, telegram/)
+├── siigo-web/        # Web interface (Go HTTP :3210 + React/Vite) - PRIMARY
+├── siigo-sync/       # CLI sync service (polling + API client)
+├── siigo-app/        # Desktop app (Wails + Go) - LEGACY, replaced by siigo-web
+├── docs/             # Documentation (9 MD files)
+└── start.sh          # Build, run & deploy script
+```
+
+## Critical Rules
+
+### 1. Never duplicate shared packages
+All projects import from `siigo-common` via:
+```
+require siigo-common v0.0.0
+replace siigo-common => ../siigo-common
+```
+**NEVER** create isam/, parsers/, api/, config/, or storage/ packages inside siigo-sync, siigo-app, or siigo-web.
+
+### 2. ISAM Reader v2 is the source of truth
+The official ISAM file reader is **`reader_v2.go`** in `siigo-common/isam/` (`ReadFileV2`, `ReadFileV2All`, `ReadFileV2WithStats`). It parses the 128-byte Micro Focus header (magic, idxformat, reclen, alignment) and uses record type nibbles to classify records. `ReadIsamFile()` in `extfh.go` already delegates to v2 as fallback when EXTFH DLL is unavailable. Since `cblrtsm.dll` does NOT exist on this system, **v2 is the active reader for everything**: parsers, SQLite ingestion, sync, and analysis. All new parsers and tools MUST use `ReadIsamFile()` (which routes to v2) or `ReadFileV2WithStats()` for diagnostics.
+
+### 3. EXTFH vs Binary offsets (legacy note)
+ISAM records have DIFFERENT offsets depending on the reader:
+- **EXTFH** (via cblrtsm.dll): Clean records, no markers — NOT available on current system
+- **Binary/v2 reader**: Uses spec-based parsing with record type nibbles, no offset shifting needed
+
+Every parser MUST check `isam.ExtfhAvailable()` and use dual offsets.
+
+### 3. Verified offsets (EXTFH mode) — DO NOT CHANGE without hex dump evidence
+- **Z17**: tipoDoc@18, nombre@36 (NOT @20 and @38 — those were wrong)
+- **Z06CP**: nombre@46, fecha@38
+- **Z49**: tipo@0(letter), codigo@1, numDoc@4, nombreTercero@15, desc zones@72-128 and @129-192
+- **Z09**: nit@16, cuenta@29, fecha@42, desc@93, D/C@143
+- **Z06**: tipo@0, codigo@2, nombre@31
+- **Z03**: empresa@0, cuenta@3(9), activa@12, nombre@25(70)
+- **Z27**: empresa@0(5), codigo@5(6), nombre@11(50), nit@61(13), fecha@122(8)
+- **Z11**: tipo@0, codigo@1(3), nit@21(13), cuenta@29(13), fecha@55(8), desc@93(50), D/C@143
+- **Z08A**: nit@5(8), tipoPersona@16(2), nombre@18(60), dir@194(56), email@323(70)
+- **Z25**: empresa@0(3), cuenta@3(9), nit@12(13), BCD@140 (NOT @25 — 115 bytes ASCII keys before BCD)
+- **Z28**: empresa@0(3), cuenta@3(9), BCD@38 (NOT @12 — 26 bytes ASCII keys before BCD)
+- **ZDANE**: codigo@0(5), nombre@5(40)
+
+### 4. Data directory
+Siigo data lives in `C:\SIIWI02` (configured in `C:\Siigo\FILEPATH.TXT`).
+Files use Windows-1252 encoding — decode with `golang.org/x/text/encoding/charmap`.
+
+### 5. Packed decimal (BCD) decoder
+BCD decoder in `siigo-common/parsers/bcd.go` (`DecodePacked`, `ExtractPacked`).
+Integrated into Z25 and Z28 parsers for saldo/debito/credito fields.
+Sign nibble: C=positive, D=negative, F=unsigned positive.
+**WARNING**: BCD fields often start far after ASCII data ends (Z25: @140, Z28: @38). Always verify offset visually in hex dump — look for where 0x30-0x39 (ASCII) stops and 0x00-0x0F (binary) begins.
+
+### 6. Finearom Laravel backend
+Located at `C:\laragon\www\finearom\backend` (Laragon, port 8000).
+PHP: `C:\laragon\bin\php\php-8.3.21-Win32-vs16-x64\php.exe`
+- `SiigoSyncController` handles all sync endpoints
+- `POST /api/siigo/login` → Sanctum token
+- `POST /api/siigo/sync` → generic `{table, action, key, data}` (primary endpoint)
+- Also: `/api/siigo/bulk`, `/api/siigo/webhook`, `/api/siigo/status`, per-table GETs
+- Sync user: `siigo-sync@finearom.com` / `siigo123`
+- Production URL: `https://ordenes.finearom.co/api`
+- Connection verified end-to-end on 2026-03-08 (all 4 tables OK)
+
+## start.sh — Build, Run & Deploy Script
+
+The `start.sh` script in the project root manages building, running, and deploying.
+**Default mode: use `dev` during development, `start` for production.**
+
+### Commands
+
+| Command | What it does |
+|---------|-------------|
+| `./start.sh dev` | Go server (:3210) + Vite dev (:5173, hot reload). No tunnel. Use during development. |
+| `./start.sh start` | Full build (React + Go) + server + Cloudflare tunnel. For production/sharing. |
+| `./start.sh restart` | Recompile Go only, restart server. **Tunnel stays alive (same URL)**. |
+| `./start.sh restart force` | Restart everything including tunnel. **New URL**. |
+| `./start.sh stop` | Stop all services (server, tunnel, vite). |
+| `./start.sh status` | Show running state, URLs, and API stats. |
+| `./start.sh logs` | Show last 50 server log lines. |
+
+### Workflow
+- **Developing**: Run `./start.sh dev`. Edit React files (auto-reload via Vite). For Go changes, run `./start.sh restart`.
+- **Sharing/demo**: Run `./start.sh start`. Get a public Cloudflare URL. Use `./start.sh restart` to apply Go changes without losing the URL.
+- **Done**: Run `./start.sh stop`.
+
+### Key behavior
+- `restart` (without `force`) only restarts the Go server — the Cloudflare tunnel keeps running so the public URL does not change.
+- `restart force` kills everything and creates a new tunnel (new URL).
+- Config is auto-created at `siigo-web/config.json` with defaults if missing.
+- Uses `taskkill` on Windows for reliable process cleanup.
+
+## How to Add a New Parser
+1. Hex dump: `cd siigo-sync && go run ./cmd/hexdump/ 'C:\SIIWI02\ZXXX'`
+2. Identify ASCII vs BCD boundaries (BCD can start far from end of text — e.g. Z25 has 140 bytes of ASCII keys before BCD)
+3. Write diagnostic script testing offsets on 15+ **distributed** records (not just the first ones)
+4. Create parser in `siigo-common/parsers/` following existing patterns (dual-mode EXTFH/Binary)
+5. **MANDATORY: Validate with real data** — add validation to `siigo-sync/cmd/validate_all/main.go`
+6. Run validation: `cd siigo-sync && go run ./cmd/validate_all/`
+7. **Acceptance criteria**: 0 empty key fields, valid dates (1990-2030), reasonable BCD values (<10^9), coherent distributed samples
+8. Add to peek tool: `siigo-sync/cmd/peek/main.go`
+9. Build: `cd siigo-web && go build -o /tmp/test.exe ./...` (exe may be locked, use temp path)
+10. If syncing: add to detector, config, and Laravel endpoint
+
+## How to Validate Parsers
+```bash
+cd siigo-sync && go run ./cmd/validate_all/
+```
+This runs all parsers against real ISAM data and checks:
+- Key fields not empty (empresa, nombre, codigo, NIT)
+- Dates in valid range (1990-2030)
+- BCD values reasonable (not ASCII garbage like 3030303...)
+- 5 distributed samples per parser showing coherent data
+- Type codes are recognizable letters (F/G/L/P, D/C)
+
+Also available: `cd siigo-sync && go run ./cmd/peek/` for quick previews.
+
+### Common parsing pitfalls
+- **BCD at wrong offset**: COBOL files have repeated ASCII key data (38-140 bytes) before BCD starts. Always check hex dump visually.
+- **Z49 has no dates/amounts**: Z49 is a document INDEX (headers only). Use Z09 for accounting detail lines.
+- **Truncated names**: Usually offset is +2 too high. Try subtracting 2.
+- **Values like 3030303.xx**: BCD decoder is reading ASCII '0' bytes (0x30). Offset is in ASCII zone, not BCD.
+
+## API Publica v1 & Swagger
+
+The public API v1 is documented via OpenAPI/Swagger at `siigo-web/swagger.json` and served at `/api/v1/docs`.
+
+### IMPORTANT: Keep Swagger updated
+When adding, modifying, or removing any `/api/v1/*` endpoint in `siigo-web/main.go`:
+1. **Update `siigo-web/swagger.json`** to reflect the change (new path, parameters, schemas, responses)
+2. Follow the existing patterns: use `$ref` for shared parameters/responses, add appropriate tags
+3. Test that `/api/v1/docs` renders correctly after changes
+
+### Current v1 endpoints
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/v1/auth` | Get JWT token (api_key OR username+password) |
+| GET | `/api/v1/stats` | Stats summary |
+| GET | `/api/v1/{table}` | List any of 24 tables (paginated, search) |
+| GET | `/api/v1/{table}/{key}` | Detail by key for any table |
+| GET | `/api/v1/postman` | Export dynamic Postman v2.1 collection |
+
+**24 tables**: clients, products, movements, cartera, plan_cuentas, activos_fijos, saldos_terceros, saldos_consolidados, documentos, terceros_ampliados, transacciones_detalle, periodos_contables, condiciones_pago, libros_auxiliares, codigos_dane, actividades_ica, conceptos_pila, activos_fijos_detalle, audit_trail_terceros, clasificacion_cuentas, movimientos_inventario, saldos_inventario, historial, maestros
+
+### OData endpoints (for Power BI / BI tools)
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/odata` | Service document |
+| GET | `/odata/$metadata` | CSDL XML schema (entity types, properties) |
+| GET | `/odata/{table}` | Query with `$top`, `$skip`, `$filter`, `$orderby`, `$select`, `$count` |
+| GET | `/odata/{table}('key')` | Single entity by key |
+| GET | `/odata/{table}/$count` | Count only |
+
+All 24 data tables available. Protected by same JWT as v1.
+
+**$filter operators**: `eq`, `ne`, `gt`, `ge`, `lt`, `le`, `contains()`, `startswith()`
+**Example**: `/odata/clients?$top=100&$filter=sync_status eq 'synced'&$orderby=nombre&$count=true`
+
+**Power BI connection**: Get Data → OData Feed → URL: `http://host:3210/odata` → Header `Authorization: Bearer {token}`
+
+### v1 Auth (dual method)
+`POST /api/v1/auth` accepts two authentication methods:
+- **API Key**: `{"api_key": "your-key"}` — uses configured api_key
+- **Credentials**: `{"username": "user", "password": "pass"}` — checks root user (config.json) and app_users table
+
+Both return a JWT valid for 24h. Response includes `method` ("api_key" or "credentials") and `user`.
+
+## User Management (app_users)
+
+Multi-user system with roles and per-module permissions.
+
+### Architecture
+- **Root user**: defined in `config.json` (`auth.username` / `auth.password`), always has full access, cannot be deleted
+- **App users**: stored in SQLite `app_users` table, managed from web UI (/users page)
+- Login checks root user first, then app_users table
+- Token stores username, role, and permissions; checked on every request
+
+### Roles
+| Role | Access | Can manage users |
+|------|--------|-----------------|
+| `root` | All modules | Yes (implicit) |
+| `admin` | All modules | Yes |
+| `editor` | Assigned modules only | No |
+| `viewer` | Assigned modules only (read-only) | No |
+
+### Modules (permission keys)
+`dashboard`, `clients`, `products`, `movements`, `cartera`, `field-mappings`, `errors`, `logs`, `explorer`, `config`, `users`
+
+### API endpoints
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/users` | List all users (admin/root only) |
+| POST | `/api/users` | Create user (admin/root only) |
+| PUT | `/api/users/{id}` | Update user role/perms/active/password |
+| DELETE | `/api/users/{id}` | Delete user |
+
+### Frontend
+- Users page with table, create/edit modals (toggle switches for permissions)
+- Sidebar filters nav items based on user permissions
+- Routes guarded: unauthorized modules redirect to Dashboard
+- Username and role shown in sidebar footer
+
+## Record Edit/Delete
+
+Optional feature to edit or delete individual records from data pages.
+
+### How it works
+- **Disabled by default** — must be enabled in Config → Advanced → "Edicion de Registros"
+- Config flag: `allow_edit_delete` in config.json
+- When enabled, Edit/Delete buttons appear on each row in data tables
+- Edited records are marked as `sync_status=pending`, `sync_action=edit` for re-sync
+- Deleted records are permanently removed
+- Protected fields (hash, sync_status, etc.) cannot be edited
+
+### API endpoints
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/allow-edit-delete` | Get current flag |
+| POST | `/api/allow-edit-delete` | Set flag (true/false) |
+| GET | `/api/record?table=X&id=N` | Get single record |
+| PUT | `/api/record?table=X&id=N` | Update fields |
+| DELETE | `/api/record?table=X&id=N` | Delete record |
+
+## Telegram Bot (siigo-common/telegram/)
+
+Integrated Telegram bot for notifications and remote control.
+
+### Notifications (automatic, individually toggleable)
+- Server start/restart (includes local + Cloudflare tunnel URLs) — **enabled by default**
+- Sync cycle results (adds, edits, errors) — disabled by default
+- Sync errors per table — disabled by default
+- Login failures — disabled by default
+- Changes detected per table — disabled by default
+- DB cleared — disabled by default
+- Max retries exhausted — disabled by default
+
+Each notification type can be enabled/disabled independently from Config → Telegram → "Tipos de Notificacion" (toggle switches). Config fields: `telegram.notify_server_start`, `telegram.notify_sync_complete`, etc. (`*bool` pointers, nil = default).
+
+### Commands (interactive, via Telegram chat)
+| Command | Description |
+|---------|-------------|
+| `/status` | Server status (detect/send loops, uptime, pending, errors) |
+| `/stats` | Record counts per module |
+| `/errors` | Error summary |
+| `/sync` | Trigger manual sync (detect + send) |
+| `/pause` | Pause both loops |
+| `/resume` | Resume both loops |
+| `/retry` | Retry error records |
+| `/url` | Show local + Cloudflare tunnel URLs + Swagger |
+| `/logs` | Last log entries |
+| `/health` | Health check |
+| `/exec {pin} {cmd}` | Execute shell command (30s timeout, PIN protected) |
+| `/claude {pin}` | Start Claude remote |
+| `/help` | List commands |
+
+### Config
+- `config.json` → `telegram.enabled`, `telegram.bot_token`, `telegram.chat_id`, `telegram.exec_pin`
+- Notification toggles: `telegram.notify_server_start`, `notify_sync_complete`, `notify_sync_errors`, `notify_login_failed`, `notify_changes`, `notify_db_cleared`, `notify_max_retries`
+- Configurable from web UI (Config page → Telegram tab)
+
+## Dual Sync Loops (independent)
+
+The sync system runs **two independent loops** to isolate ISAM reading from API sending:
+
+| Loop | What it does | Default interval | Config key |
+|------|-------------|-----------------|------------|
+| **Detect** (ISAM → SQLite) | Reads ISAM files, detects changes, updates SQLite | 60s | `sync.interval_seconds` |
+| **Send** (SQLite → API) | Sends pending records to Finearom API | 30s | `sync.send_interval_seconds` |
+
+**Why**: If the API is down or slow, ISAM detection continues uninterrupted. Records stay in SQLite as `pending` until successfully sent.
+
+## Per-Table Sync Control
+
+Both detection and sending are controlled **per-table** from Config → Sincronizacion:
+
+| Config | What it controls | Default | Config key |
+|--------|-----------------|---------|------------|
+| `detect_enabled` | ISAM → SQLite (per table) | All **enabled** | `detect_enabled` in config.json |
+| `send_enabled` | SQLite → Laravel (per table) | All **disabled** | `send_enabled` in config.json |
+
+- **24 tables** support both detect and send toggles
+- API endpoints: `GET/POST /api/detect-enabled`, `GET/POST /api/send-enabled`
+- `config.AllSyncTables()` is the canonical list of all syncable tables
+- `GetPendingGeneric()` in storage provides a universal pending query for any table
+- Send loop skips entirely when no module has sending enabled
+- Circuit breaker: auto-pauses sending after consecutive failures
+
+## Postman Collection Export
+- `GET /api/v1/postman` generates a dynamic Postman v2.1 collection
+- Includes all endpoints organized by folders: Auth, Stats, Data Tables (24), OData, Sync Control, Config, Users
+- Uses `{{base_url}}` and `{{token}}` variables
+- Content-Disposition header triggers download as `siigo-sync-postman.json`
+
+## SQL Explorer
+- Interactive SQL query tool at `/explorer` page
+- SQL syntax highlighting in textarea (overlay technique: `<pre>` behind transparent textarea)
+- Token types: keywords (purple), functions (blue), strings (yellow), numbers (green), tables (cyan), columns (orange)
+- Autocomplete for table/column names
+- Paginated results with export
+
+## Data Table Styling
+- Syntax-like coloring on table cells by field type:
+  - Keys (amber), Names (cyan), Dates (violet), Codes (emerald), Types (orange), Descriptions (gray italic), Values (green)
+- CSS classes: `col-key`, `col-name`, `col-date`, `col-code`, `col-type`, `col-desc`, `col-value`
+
+## ISAM CRUD Engine (Pure Go, zero DLL)
+
+Complete read/write operations for Micro Focus ISAM IDXFORMAT 8 files, implemented in pure Go.
+
+### Architecture
+```
+siigo-common/isam/
+├── reader_v2.go    # Read: parse header, extract data records
+├── writer_v2.go    # Write: REWRITE, DELETE, INSERT with B-tree updates
+├── btree_v2.go     # B-tree reader/writer (node split, key propagation)
+├── orm.go          # ORM layer: Table, Row, fluent schema builder
+├── model.go        # Eloquent-style Model with ConnectAll()
+├── models.go       # All 24 tables as self-describing package vars
+├── tables.go       # Registry pattern (backward compatible)
+└── safemode.go     # Write protection (Siigo process + file locks)
+```
+
+### CRUD Operations (writer_v2.go)
+| Operation | Function | What it does |
+|-----------|----------|-------------|
+| REWRITE | `RewriteRecord()` | Update existing record in-place, update B-tree key if changed |
+| DELETE | `DeleteRecord()` | Mark record as deleted (type nibble 0→8), remove from B-tree |
+| INSERT | `InsertRecord()` | Append new data record, insert key into B-tree leaf |
+
+- **B-tree node splitting**: When a leaf is full (92 entries), splits into left+right and promotes median key to parent. Cascades up to root if needed.
+- **Backup**: Every write creates a `.bak` file first
+- **Tested**: 57 low-level tests across 5 file formats (2-byte/4-byte markers, various record sizes)
+
+### Eloquent-Style ORM (model.go + models.go)
+
+Each table is a self-describing package-level variable:
+
+```go
+// Connect all 24 models at once
+isam.ConnectAll(`C:\SIIWI02`, "2016")
+
+// Use like Laravel Eloquent
+all, _ := isam.Clients.All()                    // Client::all()
+rec, _ := isam.Clients.Find("00000000002001")   // Client::find()
+rec.Set("nombre", "NUEVO NOMBRE")               // $rec->nombre = "..."
+rec.Save()                                       // $rec->save()
+
+newRec := isam.Clients.New()                     // new Client()
+newRec.Set("codigo", "99999999999999")
+newRec.Save()                                    // INSERT
+
+rec.Delete()                                     // $rec->delete()
+```
+
+**24 model vars**: `isam.Clients`, `isam.Products`, `isam.Movements`, `isam.Cartera`, `isam.Maestros`, `isam.PlanCuentas`, `isam.ActivosFijos`, `isam.Documentos`, `isam.TercerosAmpliados`, `isam.SaldosTerceros`, `isam.SaldosConsolidados`, `isam.CodigosDane`, `isam.Historial`, `isam.ActividadesICA`, `isam.ConceptosPILA`, `isam.LibrosAuxiliares`, `isam.TransaccionesDetalle`, `isam.PeriodosContables`, `isam.CondicionesPago`, `isam.MovimientosInventario`, `isam.SaldosInventario`, `isam.ClasificacionCuentas`, `isam.ActivosFijosDetalle`, `isam.AuditTrailTerceros`
+
+**Extending models** (like Laravel):
+```go
+type ClientModel struct { *isam.Model }
+var Client = &ClientModel{isam.Clients}
+func (c *ClientModel) Activos() ([]*isam.Row, error) { /* custom scope */ }
+func (c *ClientModel) FindByNIT(nit string) (*isam.Row, error) { /* business logic */ }
+```
+
+### SafeMode (safemode.go)
+
+Write protection enabled by default on all tables:
+- **Siigo process detection**: Checks if `cblrtsm.exe` / `siigo.exe` is running (cached 2s)
+- **Windows file locks**: Tries exclusive `LockFileEx` before writing
+- If either check fails → write is rejected with clear error message
+- Disable per-table: `table.SafeMode = false` (e.g. for test copies)
+
+### ORM Test
+```bash
+cd siigo-sync && go run ./cmd/test_orm/    # 18 Eloquent-style CRUD tests
+cd siigo-sync && go run ./cmd/test_writer/  # 57 low-level CRUD tests
+```
+
+## Custom Endpoints (ISAM → SQLite → API)
+
+Both cartera and ventas follow the pattern: ISAM → SQLite (via wizard + watcher) → API endpoint.
+Custom diff functions (`diffCarteraCxC`, `diffVentasProductos`) handle the ISAM parsing.
+Both dispatch webhooks on changes when enabled.
+
+### Cartera Endpoint
+
+`GET /api/cartera-cliente/{nit}` — Real cartera report per client.
+`GET /api/cartera-cliente/all` — All clients.
+
+**Source**: Z07YYYY (current year only) — cuenta `0001305050000` (CxC Nacionales).
+Z07 of current year already contains pending invoices from prior years with updated balances.
+Do NOT read Z07 from prior years — they have stale/paid balances.
+
+### Z07 Record Structure (256 bytes, for CxC records)
+| Offset | Length | Field | Type |
+|--------|--------|-------|------|
+| 7 | 13 | cuenta_contable | ASCII |
+| 20 | 4 | tipo_comprobante (F003, R001, L030, J003) | ASCII |
+| 24 | 6 | num_documento | BCD (0 dec) |
+| 33 | 8 | fecha YYYYMMDD | ASCII |
+| 41 | 13 | NIT | ASCII |
+| 67 | 8 | fecha_vencimiento YYYYMMDD | ASCII |
+| 110 | 8 | saldo | BCD (2 dec) |
+
+### Parameters
+| Param | Default | Description |
+|-------|---------|-------------|
+| `dias_mora` | -9999 | Min days (e.g. -270) |
+| `dias_cobro` | 9999 | Max days (e.g. 10) |
+| `vencido` | false | Only overdue (dias < 0) |
+
+### Finearom Import Equivalence
+Finearom imports cartera from Excel with `dias_mora=-270, dias_cobro=10`.
+The endpoint with those params produces identical results. Validated with 8+ clients.
+
+### Why Z07, not Z09
+- Z09 has 26K+ records per year (all accounting lines) vs Z07's ~404 CxC records
+- Z09 type F records have saldo=0 at BCD offset 175
+- Z09 doesn't have fecha_vencimiento
+- Z07 has the exact per-invoice saldo and real vencimiento date from Siigo
+
+### Ventas Endpoint
+
+`GET /api/ventas/{nit}` — Sales by product for one client.
+`GET /api/ventas/all` — All clients.
+
+**Source**: Z09YYYY tipo F, cuenta containing "412" (costo de ventas = sale price × qty).
+Only current year Z09. Includes OC (orden de compra) and lote from Z49 (notas_documentos).
+
+### Z09 F-412 Record Offsets for Ventas
+| Offset | Length | Field | Type |
+|--------|--------|-------|------|
+| 0 | 1 | tipo (must be 'F') | ASCII |
+| 1 | 3 | empresa | ASCII |
+| 4 | 6 | num_documento | BCD (0 dec) |
+| 16 | 13 | NIT | ASCII |
+| 29 | 13 | cuenta (must contain "412") | ASCII |
+| 42 | 8 | fecha YYYYMMDD | ASCII |
+| 67 | 7 | codigo_producto | ASCII |
+| 93 | 40 | descripcion | ASCII |
+| 145 | 8 | **total_venta** | BCD (**3 dec**) |
+| 334 | 8 | **cantidad** | BCD (**1 dec**) |
+| 553 | 8 | **precio_unitario** | BCD (**3 dec**) |
+
+precio_unitario = total_venta / cantidad (verified). BCD@487(2dec) is NOT the unit price — it's an internal cost code.
+
+### Ventas Parameters
+| Param | Default | Description |
+|-------|---------|-------------|
+| `desde` | YYYY-01 | Month range start |
+| `hasta` | current month | Month range end |
+| `fecha_desde`/`fecha_hasta` | - | Exact date range |
+| `empresa` | - | Filter by empresa |
+| `cuenta` | - | Filter by cuenta |
+| `producto` | - | Filter by product code |
+
+### Ventas Deduplication
+International clients (NIT 444444xxx) generate two invoices per sale. Dedup by `nit|product|date|total`.
+
+### OC (Orden de Compra) in Ventas
+Linked from `notas_documentos` (Z49) by `num_documento`. Extracted from `texto` field: `ORDEN DE COMPRA:(\S+)`, `LOTE:(\S+)`.
+
+## Key Documentation
+- `docs/09-PARSING-PROCESS.md` — Complete parsing methodology with verified offsets
+- `docs/07-SYNC-MAP-FINEAROM.md` — Siigo↔Finearom field mapping

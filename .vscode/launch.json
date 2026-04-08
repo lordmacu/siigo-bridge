@@ -1,0 +1,27 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Siigo App (Wails)",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceFolder}/siigo-app",
+            "cwd": "${workspaceFolder}/siigo-app",
+            "buildFlags": "-tags dev",
+            "preLaunchTask": "kill-siigo-app",
+            "env": {
+                "CGO_ENABLED": "1"
+            }
+        },
+        {
+            "name": "Siigo Sync (CLI)",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceFolder}/siigo-sync",
+            "cwd": "${workspaceFolder}/siigo-sync",
+            "preLaunchTask": "kill-siigo-sync"
+        }
+    ]
+}

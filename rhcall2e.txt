@@ -1,0 +1,29 @@
+CBL_GET_KBD_STATUS
+Checks whether there is a character waiting to be read from the keyboard.
+
+Syntax:
+call "CBL_GET_KBD_STATUS" using     key-status
+                          returning status-code
+Parameters:
+Using call prototype (see Key)	Picture (32-bit systems)
+key-status	cblt-x1-compx	pic x comp-x.
+status-code	See Key
+On Entry:
+None
+
+On Exit:
+key-status	The status of the keyboard:
+0	No character available
+1	Character available
+Comments:
+Some UNIX implementations do not allow you to poll the keyboard in this way. See the documentation supplied with your UNIX system to determine if this is the case in your implementation.
+
+This routine should be preceded by an enhanced ACCEPT or DISPLAY statement (see the chapter Adis in your Character User Interfaces) or by calling one of the CBL_ display routines (see the topic Screen Routines). Otherwise, the behavior is undefined.
+
+Unpredictable results can occur if the user attempts to use both X"AF" and CBL_ keyboard routines. This is because X"AF" invokes ADIS to perform the required keyboard function and ADIS uses the CBL_ keyboard routines.
+
+ Example of using keyboard routines
+
+See Also:
+ Related Topics
+

@@ -1,0 +1,65 @@
+# Binaries
+*.exe
+*.dll
+*.pdb
+*.db
+*.db-shm
+*.db-wal
+
+# Build artifacts
+SiigoExplorer/bin/
+SiigoExplorer/obj/
+
+# Node modules (all projects)
+**/node_modules/
+
+# Frontend build output
+**/frontend/dist/
+
+# Go caches
+**/.gocache/
+**/.gomodcache/
+
+# Temp directories
+**/.tmp/
+**/tmp/
+
+# Config with credentials
+siigo-sync/config.json
+siigo-app/config.json
+siigo-web/config.json
+isam-admin/config.json
+
+# Secrets and keys
+.env
+ghakey.txt
+*.key
+*.pem
+
+# Logs and temp
+*.log
+sync_state.json
+sync_output.log
+z17_dump.seq
+
+# Analysis/comparison output (generated data)
+siigo-sync/compare_*.json
+siigo-sync/compare_*.csv
+siigo-sync/compare_readers_baseline.txt
+
+# Data files (Excel reports, JSON exports)
+*.xlsx
+*.xls
+ventas_*.json
+recaudo_*.json
+isam_tables_v3.json
+
+# Installer output
+siigo-web/installer_output/
+siigo-web/*.old
+
+# IDE
+.claude/
+
+# MF header (downloaded reference)
+common.h

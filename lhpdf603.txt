@@ -1,0 +1,105 @@
+Arithmetic Expressions
+An arithmetic expression can be an identifier of a numeric elementary item, a numeric literal, such identifiers and literals separated by arithmetic operators or bitwise operators (or both), two arithmetic expressions separated by an arithmetic or bitwise operator, or an arithmetic expression enclosed in parentheses. Any arithmetic expression can be preceded by a unary arithemetic or bitwise operator.
+
+OSVSVSC2MFIn the following discussion:
+
+The term "numeric data item" encompasses floating-point data items in addition to fixed-point data items
+The term "numeric literal" encompasses floating-point literals in addition to fixed-point literals
+Those identifiers and literals appearing in an arithmetic expression must represent either numeric elementary items or numeric literals on which arithmetic can be performed.
+
+Arithmetic Operators
+Five binary arithmetic operators and two unary arithmetic operators can be used in arithmetic expressions. They are represented by specific characters that must be preceded by a space and followed by a space.
+
+Binary Arithmetic Operators	Meaning
++	Addition
+-	Subtraction
+*	Multiplication
+/	Division
+**	Exponentiation
+Unary Arithmetic Operators	Meaning
++	The effect of multiplication by numeric literal +1
+-	The effect of multiplication by numeric literal -1
+Bitwise Operators
+Four binary bitwise operators and one unary bitwise operator can be used in arithmetic expressions. They are represented by reserved words that must be preceded by a space and followed by a space.
+
+Binary Bitwise Operators	Meaning
+B-AND	The effect of performing a logical AND between the two data items
+B-OR	The effect of performing a logical OR between the two data items
+B-XOR	The effect of performing a logical XOR (exclusive OR) between the two data items
+B-EXOR	The effect of performing a logical XOR (exclusive OR) between the two data items
+Unary Bitwise Operator	Meaning
+B-NOT	The effect of performing a logical NOT on the data item
+B-XOR and B-EXOR are equivalent.
+
+These operators can only be used in any arithmetic expressions with COMP-5, COMP-X or numeric literal operands. B-NOT takes one operand. The rest take two operands. The result is as if the equivalent logical operator library routine were used on the operands and the result returned in a temporary data item the size of the largest item used. If the items differ in size then the smaller item is moved to a temporary data item of the same size as the larger item. If the operands are of mixed type (COMP-5, COMP-X) then the smaller operand is moved to a temporary item of the same type as the larger. For best performance use consistent data types.
+
+Here is an example program:
+
+data division.
+working-storage section.
+01 n1 pic 9(9).
+ 01 n2 pic xx comp-5.
+ 01 n3 pic xxxx comp-5.
+ procedure division.
+     move 2 to n2
+     move 4 to n3
+     compute n1 = n2 b-or n3        *> n1 = 6
+     if n2 b-and n3 = n2
+         display 'true'
+     end-if
+     compute n1 = b-not n2          *> n1 = 65533
+     compute n1 = n2 b-xor n3 + 1   *> n1 = 7
+     compute n1 = n2 b-and 2        *> n1 = 2
+Permissible Combinations of Symbols
+The permissible combinations of variables, numeric literals, arithmetic operator and parentheses are given in Table 1.
+
+First Symbol	Second Symbol
+Variable	* / ** + - B-AND B-OR B-XOR B-EXOR	Unary + - B-NOT	(	)
+Variable	-	P	-	-	P
+* / ** + - B-AND B-OR B-XOR B-EXOR	P	-	P	P	-
+Unary + - B-NOT	P	-	-	P	-
+(	P	-	P	P	-
+)	-	P	-	-	P
+Table 1: Combination Of Symbols In Arithmetic Expressions
+P	indicates a permissible pair of symbols
+-	indicates an invalid pair
+Variable	indicates an identifier or literal
+Formation and Evaluation Rules
+The following formation and evaluation rules aplly to arithmetic expressions:
+
+Parentheses can be used in arithmetic expressions to specify the order in which elements are to be evaluated. Expressions within parentheses are evaluated first, and within nested parentheses, evaluation proceeds from the least inclusive set to the most inclusive set. When parentheses are not used, or parenthesized expressions are at the same level of inclusiveness, the following hierarchical order of execution is implied:
+1st	Unary plus and minus, B-NOT
+2nd	Exponentiation
+3rd	Multiplication and division
+4th	Addition and subtraction
+5th	B-AND
+6th	B-XOR and B-EXOR
+7th	B-OR
+Thus, in the expression:
+
+ 1 + 2 * 3 
+the order of evaluation is:
+
+2 * 3
+yielding an intermediate result of 6
+
+1 + 6
+giving a result of 7.
+
+Parentheses are used either to eliminate ambiguities in logic where consecutive operations of the same hierarchical level appear or to modify the normal hierarchical sequence of execution in expressions where it is necessary to have some deviation from the normal precedence. When the sequence of execution is not specified by parentheses, the order of execution of consecutive operations of the same hierarchical level is from left to right.
+An arithmetic expression can only begin with the symbol "(", "+", "-", the bitwise operator B-NOT, or a variable, and can only end with a ")" or a variable. There must be a one-to-one correspondence between left and right parenthesis of an arithmetic expression such that each left parenthesis is to the left of its corresponding right parenthesis.
+Arithmetic expressions allow you to combine arithmetic operations without the restrictions on composite of operands and/or receiving data items. See, for example, Syntax Rule 3 of The ADD Statement in this chapter.
+Intermediate Results
+As the expression is evaluated, one or more intermediate results is derived. Conceptually, each intermediate result is stored in a temporary data item, the value of which is determined by the parameter you select in the ARITHMETIC Compiler directive.
+
+If you select the ARITHMETIC"MF" Compiler directive, the Micro Focus COBOL system evaluates each intermediate result using an internal floating-point register of 40 decimal digits. The most significant nonzero digit of each nonzero intermediate result is stored in the first digit of the register. The decimal point location depends on the value. Intermediate results are truncated to 40 digits.
+
+If you select the ARITHMETIC"TRUNC20" Compiler directive, the Micro Focus COBOL system evaluates each intermediate result in the same manner as when ARITHMETIC"MF" is selected, except that the number of digits to the right of the decimal point is truncated to 20 at each step in the evaluation of the expression. You should use this directive only when you require truncation similar to that provided in COBOL WorkBench. If you use this directive, you must not change the setting of the INTLEVEL compiler directive from its default value of "2". This means that you cannot use some of the newer features, such as numeric pictures with more than 18 total digits, with the TRUNC20 parameter.
+
+The OS/VS COBOL, VS COBOL II, DOS/VS COBOL, COBOL/370 and OS/390 systems compute intermediate results to an accuracy determined by the pictures of the operands in the expressions. The rules, which are slightly different for each version of COBOL, are documented in appendices of the IBM VS COBOL for OS/VS manual, the VS COBOL II Application Programming Guide, and the COBOL for OS/390 & VM V2R2 Programming Guide. Each intermediate result has a picture of 9(n)V9(m). The maximum value of n+m is either 30 or 31 depending on the system and the chosen arithmetic option.
+
+If you specify the OSVS or VSC2 options for intermediate results, this COBOL system emulates the selected mainframe behavior by truncating its results accordingly, with the following limitations:
+
+The maximum number of integer and decimal places allowed by this COBOL system is 18 for each. Truncation of intermediate results ceases at the point in the expression where this limit is reached. A warning message is issued at compile time if this occurs.
+The rules apply to fixed-point numerical expressions only. If the expression contains any floating-point operands or any operation which causes it to be evaluated in floating point (see the topic Intrinsic Functions), all truncation of intermediate results ceases.
+Floating-point results are, by their nature, inexact and may vary across platforms by a small degree.

@@ -1,0 +1,253 @@
+The CALL Statement
+The CALL statement causes control to be transferred to a specific program within the run unit.
+
+ISO2002MFYou can call the program indirectly, by address. Data, pointers to data, and pointers to procedures can be passed as parameters to the called program, and returned by it. Parameter passing conventions can be controlled in order to allow the called program to be written in languages other than COBOL, using different conventions.
+
+ISO2002MFOS390A called COBOL program can recursively call itself when it has the recursive attribute.
+
+General Formats
+Format 1
+
+
+ISO2002MFFormat 2 (program-prototype)
+ISO2002MF
+
+Directives
+In addition to Compiler directives which provide flagging and modify the reserved word list, the following directives may impact either the syntax or the semantics described in this section.
+ALIGN - specifies the memory boundaries on which data items of 01-level or 77-level are aligned.
+CASE - determines whether upper-case and lower-case letters are considered equivalent.
+DEFAULTCALLS - controls which calling convention is the default.
+DYNAM - determines whether programs invoked by a CALL literal statement can be canceled or not.
+FOLD-CALL-NAME - determines whether you are guaranteed to find a called subprogram when the calling and called programs do not use the same upper-case and lower-case letters for the program-name.
+IBMCOMP - turns on word-storage mode.
+MAPNAME - impacts the handling of non-alphabetic characters in the program-name.
+Syntax Rules
+Syntax rules marked with an asterisk (*) are common to the CALL statement and to the CHAIN statement. In these rules, where "CALL or CHAIN statement" is specified, you should read "CALL statement" or "CHAIN statement" when applying the rules to the CALL statement or the CHAIN statement respectively.
+
+All Formats
+* Identifier-1 must be defined as an alphanumeric
+ISO2002MFor national
+
+data item.
+
+* Literal-1
+MF, literal-2
+
+VSC2MF, and literal-3
+
+cannot be a figurative constant and must be an alphanumeric literal
+
+ISO2002MFor a national literal.
+
+* Identifier-2 and identifier-4 must be defined as data items in the File Section, Working-Storage Section,
+ISO2002MFLocal-Storage Section
+
+or Linkage Section, and must be a level 01 data item, or a level 77 data item
+
+ANS85, or an elementary item
+
+ISO2002MF, or any group item.
+
+MFIdentifier-2 must not be defined in the Working-Storage or File Section of a factory or an instance object.
+
+MF* Neither identifier-5, identifier-6, identifier-7, nor identifier-8 can be a function-identifier.
+MF* GIVING and RETURNING are equivalent.
+MFIdentifier-9 must be defined as a data item in the Linkage Section with a level number of 01 or 77.
+MF*Identifier-2, identifier-4, identifier-6 and identifier-8 must not be described with the ANY LENGTH clause.
+Format 1
+MFMnemonic-name is necessary only if the object program that is to be invoked expects a calling convention other than that used as the default by your COBOL system. Typically, the default COBOL calling convention is consistent with that used by a significant implementation of a non-COBOL language for the run-time environment.
+Mnemonic-name must be defined in the Special-Names paragraph. See the topic The Special-Names Paragraph for details of how to do this and your COBOL system documentation on interfacing for details of which calling conventions are supported in your run-time environment.
+
+MF* Integer-1 may be signed.
+VSC2MF* Identifier-3 must be defined as a data item in the Linkage Section
+MF, Local-Storage Section or Working-Storage Section,
+
+and must be a level 01 data item, a level 77 data item
+
+MF, or other level data item.
+
+MF If the CALL statement specifies literal-1 (but not if it specifies identifier-1 or procedure-pointer-1), and if a call prototype (a program with the EXTERNAL clause in its Program-ID paragraph) has been included in the current compilation unit with a name that matches literal-1, then the following items are validated during syntax checking:
+The number of parameters required
+The type of parameters
+The call convention
+ISO2002* Identifier-2 must not be a data item of class object or pointer.
+ISO2002MFFormat 2
+ISO2002MFThe NESTED phrase must be specified only in a program definition.
+ISO2002MFIf the NESTED phrase is specified, literal-1 must be specified. Literal-1 must be the same as the program-name specified in the Program-ID paragraph of a common program as specified in the topic Conventions for Program-names in the chapter Concepts of the COBOL Language or of a program that is directly contained in the calling program.
+ISO2002MFProgram-prototype-name-1 must be specified in a program-specifier in the Repository paragraph.
+ISO2002MFIf the BY CONTENT or BY REFERENCE phrase is specified or implied for an argument, the BY REFERENCE phrase must be specified for the corresponding formal parameter in the PROCEDURE DIVISION header.
+ISO2002MFBY CONTENT must not be omitted when identifier-4 is an identifier that is permitted as a receiving operand, except that BY CONTENT may be omitted when identifier-4 is an object property.
+ISO2002MFIf the BY VALUE phrase is specified for an argument, the BY VALUE phrase must be specified for the corresponding formal parameter in the PROCEDURE DIVISION header.
+ISO2002MFIdentifier-6 must be of class numeric, object, or pointer.
+ISO2002MFLiteral-4 must be a numeric literal.
+ISO2002MFIf the OMITTED phrase is specified, the OPTIONAL phrase must be specified for the corresponding formal parameter in the PROCEDURE DIVISION header.
+ISO2002MFThe rules for conformance specified in the topic Conformance for Parameters and Returning Items in the chapter Procedure Division apply.
+General Rules
+General rules marked with an asterisk (*) are common to the CALL statement and to the CHAIN statement. In these rules, where "CALL or CHAIN statement" are specified, you should read "CALL statement" or "CHAIN statement" when applying the rules to the CALL statement or the CHAIN statement respectively.
+
+All Formats
+Literal-1 or the content of the data item referenced by identifier-1 is the name of the called program
+MFor called procedure.
+
+The program in which the CALL statement appears is the calling program. If the program being called is a COBOL program, literal-1 or the content of the data item referenced by identifier-1 must contain the program-name contained in the Program-ID paragraph of the called program (see the topic The Program-ID Paragraph, particularly in regard to case sensitivity),
+
+MFor the entry-name contained in the ENTRY statement of a called program that must have been called previously and not canceled since. Alternatively, the name of the called program may be a name which identifies a file that contains executable program code for the called program. The result of specifying different names that identify the same file in two CALL statements or a CALL and a CANCEL statement are operating-system specific. See your COBOL system documentation for details of how your system matches the given name to previously called programs, program filenames or programs held in library files.
+
+MFIf the program being called is not a COBOL program, the rules for the formation of the program or procedure name are given in the COBOL system documentation on interfacing.
+
+MFThe content of the data item referenced by procedure-pointer-1 is the address of the called program that must be already resident in memory. If the program being called is a COBOL program, the address of the called program must originally have been derived from a SET statement with an ENTRY phrase and no CANCEL statement for that program must have been subsequently executed. If the program being called is not a COBOL program then the address of the called program must originally have been derived from a CALL to a non-COBOL program or procedure. It is an error to attempt to CALL a program with an address that is equal to NULL.
+If, when a CALL statement is executed, the program specified by the CALL statement is made available for execution, control is transferred to the called program. After control is returned from the called program, the ON OVERFLOW
+ANS85or ON EXCEPTION
+
+phrase is ignored and control is passed to the end of the CALL statement
+
+ANS85or, if the NOT ON EXCEPTION phrase is specified control is passed to imperative-statement-2. If control is passed to imperative-statement-2, execution continues according to the rules for each statement specified in imperative-statement-2. If a procedure branching or conditional statement which causes explicit transfer of control is executed, control is transferred in accordance with the rules for that statement; otherwise, upon completion of the execution of imperative-statement-2, control is transferred to the end of the CALL statement.
+
+When a CALL statement is executed, the program specified by the CALL statement is made available if it is already resident in memory. If it is not already resident in memory then an attempt may be made to dynamically load the program (see your COBOL system documentation on interfacing). If a program with the specified name can be dynamically located and a sufficient, contiguous area of free memory is available, then the program is dynamically loaded and made available for execution.
+If the program specified by the CALL is not resident in memory, is not available for dynamic loading or is available but is too large for the available memory, then the program cannot be made available at that time and one of the following two actions occurs:
+
+If the ON OVERFLOW
+ANS85or ON EXCEPTION
+
+phrase is specified in the CALL statement, control is transferred to imperative-statement-1. Execution then continues according to the rules for each statement specified in imperative-statement-1. If a procedure branching or conditional statement which causes explicit transfer of control is executed, control is transferred in accordance with the rules for that statement; otherwise, upon completion of execution of imperative-statement-1, control is transferred to the end of the CALL statement
+
+ANS85and the NOT ON EXCEPTION phrase, if specified, is ignored.
+
+ANS85If the ON OVERFLOW or ON EXCEPTION phrase is not specified in the CALL statement, the NOT ON EXCEPTION phrase, if specified, is ignored.
+MFProgram execution stops, without an implicit CLOSE statement for any file that is in open mode in the run unit, and a run time error is displayed.
+
+ANS85 Two or more COBOL programs in the run unit can have the same program-name, and the reference in a CALL statement to such a program-name is resolved by using the scope-of-names conventions for program-names. See the topic Conventions for Program-names in the chapter Concepts of the COBOL Language. For example, when two programs in the run unit have the same name as that specified in a CALL statement:
+One of those two programs must also be contained directly or indirectly either within the separate program which includes the CALL statement or within the separate program which itself directly or indirectly contains the program which includes that CALL statement, and
+The other one of those two programs must be a different separate program.
+The mechanism used in this example is as follows:
+
+If one of the two programs having the same name as that specified in the CALL statement is directly contained within the program which includes that CALL statement, that program is called.
+If one of the two programs having the same name as that specified in the CALL statement possesses the common attribute and is directly contained within another program which directly or indirectly contains the program which includes the CALL statement, that common program is called unless the calling program is contained in that common program.
+Otherwise, the separate program is called.
+If the called program is a COBOL program and does not possess the initial attribute, it and each COBOL program directly or indirectly contained within it, is in its initial state the first time it is called within a run unit and the first time it is called after a CANCEL of the called program.
+If the called program is not COBOL, it is only in its initial state the first time it is called within a run unit. A CANCEL of such a program has no effect.
+
+On all other entries into the called program, the state of the program and each program directly or indirectly contained within it remains unchanged from its state when last exited. Some implementations of languages other than COBOL may provide alternative semantics and, if available, these are detailed in your COBOL system documentation on interfacing.
+
+ANS85If the called program possesses the intial attribute, it and each program directly or indirectly contained within it, is placed into its initial state every time the called program is called in a run unit. Whether a called program is in the initial state or last-used state is sensitive to the DYNAM Compiler directive.
+ANS85Files associated with a called program's internal file connectors are not in the open mode when the program is in an initial state. See the topicIntial State Of A Program earlier in this chapter. On all other entries into the called program, the states and positioning of all such files are the same as when the called program was last exited.
+ANS85The process of calling a program or exiting from a called program does not alter the status or positioning of a file associated with any external file connector.
+If the program being called is a COBOL program, the USING phrase is included in the CALL statement only if there is a USING phrase in the PROCEDURE DIVISION header
+OSVSVSC2MFor ENTRY statement
+
+of the called program, in which case the number of operands in each USING phrase must be identical.
+
+MFThe number of operands need not be identical.
+
+MFIf the program being called is not a COBOL program, the USING phrase is included in the CALL statement only if one or more parameters are declared for the called program, in which case the number of operands in the USING phrase must be identical to the number of parameters in the called program. (Some implementations of languages other than COBOL may allow the number of operands to be other than identical.) The COBOL language places no restrictions on the alignment of the addresses of data items, whereas non-COBOL languages typically do make assumptions about addresses and will fail in some way if a misaligned data item is referenced. Alignment can be achieved by one or more of the following actions:
+Modifying group items to include additional filler items
+Ensuring operands in the USING phrase are level 01 or level 77 data items in conjunction with the ALIGN Compiler directive or
+Use of the SYNCHRONIZED clause in conjunction with the IBMCOMP Compiler directive.
+* The sequence of appearance of the operands in the USING phrase of the CALL
+MFor CHAIN
+
+statement and in the corresponding USING phrase in the called program's PROCEDURE DIVISION header
+
+MFor ENTRY statement or parameter list if the called program is not COBOL
+
+determines the correspondence between the data names used by the calling and called programs. This correspondence is positional and not by name equivalence; the first operand in the CALL
+
+MFor CHAIN
+
+statement's USING phrase corresponds to the first operand in the called program's USING phrase or parameter list, the second to the second, etc.
+
+MFIf the correspondence cannot be completed because the numbers of operands are different, then if the remaining unmatched operands are in the CALL or CHAIN statement they are ignored and if they are in the PROCEDURE DIVISION header or ENTRY statement or parameter list then they must not be referenced within the called program. The positional correspondence may vary depending on the calling conventions implied by mnemonic-name.
+
+In the case of index-name, no such correspondence is established. Index-names in the called and calling programs always refer to separate indices.
+
+ANS85* The values of the parameters referenced in the USING phrase of the CALL statement are made available to the called program at the time the CALL statement is executed.
+* If the BY REFERENCE identifier-2 phrase is
+ANS85either specified or
+
+implied for a parameter, the program operates as if the corresponding data item in the called program occupies the same storage area as the data item in the calling program. The description of the data item in the called program must describe the same number of character positions as described by the description of the corresponding data item in the calling program.
+
+VSC2MFIf the BY REFERENCE ADDRESS OF phrase is specified or implied then the program operates as if an additional data item had been declared with USAGE POINTER and that data item passed BY REFERENCE with a value acquired by a SET data item TO ADDRESS OF identifier-3 statement.
+
+VSC2MFIf identifier-3 is in the Linkage Section and has a level number other than 01 or 77 or is in the Working-Storage Section, this is equivalent to passing the item BY CONTENT; the address of identifier-3 cannot be modified by the called subprogram.
+
+MFIf the BY REFERENCE literal-2 phrase is specified or implied then the object program processes literal-2 as described for literal-3.
+
+MFXOPEN* If the BY CONTENT phrase is specified or implied for a parameter, the called program cannot change the value of this parameter as referenced in the CALL statement's USING phrase, though the called program can change the value of the data item referenced by the corresponding data-name in the called program's PROCEDURE DIVISION header. The data description of each parameter in the BY CONTENT phrase of the CALL statement must be the same, meaning no conversion or extension or truncation, as the data description of the corresponding parameter in the USING phrase of the PROCEDURE DIVISION header.
+MFIf the BY CONTENT phrase is specified or implied for a parameter, the object program operates as if an additional data item had been declared and this additional data item used as the parameter in a BY REFERENCE phrase. If identifier-4 is specified, then both the implied data description of the additional data item and its contents are identical to that of identifier-4. If literal-3 is specified, then the implied data description of the additional item is equivalent to an alphanumeric data item with the same size as literal-3 and with its contents set to the value of literal-3. If LENGTH OF identifier-5 is specified, then the data description of the additional item is equivalent to PIC S9(n) USAGE COMP-5, where the value of n is at least 9 and defines a data item that is large enough to hold the maximum length of a data item in the COBOL system. The contents of the additional data item are set to the number of bytes of storage allocated to identifier-5.
+
+MF*If the BY VALUE phrase is specified or implied for a parameter, the called program cannot change the value of this parameter as referenced in the CALL statement's USING phrase, though the called program can change the value of the data item referenced by the corresponding data-name in the called program's PROCEDURE DIVISION header. The object program operates, conceptually, as if an additional data item had been declared in a system area (typically the stack), available to non-COBOL languages for passing parameters and that this additional data item occupies the same storage area as the data item in the called program.
+If identifier-6 is specified and is BINARY, COMP-4, COMP-5 or COMP-X, then the data description of the additional data item is identical to that of identifier-6, except its usage is COMP-5. The contents of the additional data item are identical to the COMP-5 representation of the contents of identifier-6. This conversion and representation facilitates calling non-COBOL programs.
+
+Otherwise, if identifier-6 is specified then the implied data description of the additional data item and its contents are identical to that of identifier-6.
+
+If integer-1 is specified, then the data description of the additional item is equivalent to a signed numeric item USAGE COMP-5 that occupies the number of bytes of storage indicated by the value of integer-2, if specified, or the size of the system area otherwise (typically the size of a POINTER on the system).
+
+If LENGTH OF identifier-7 is specified, then the data description of the additional item is equivalent to PIC S9(n) USAGE COMP-5, where the value of n is at least 9 and defines a data item that is large enough to hold the maximum length of a data item in the COBOL system. The contents of the additional data item are set to the number of bytes of storage allocated to identifier-7.
+
+If the program being called is a COBOL program, each parameter in the BY VALUE phrase of the CALL statement must have a corresponding parameter declared in the USING phrase of the PROCEDURE DIVISION header that also has the BY VALUE phrase specified or implied.
+
+The additional data item generated as a result of the CALL statement, described above, is related to this corresponding parameter in the called program, as follows.
+
+If the additional data item was subject to conversion from BINARY, COMP-4, COMP-5 or COMP-X to COMP-5, then the data description of the corresponding parameter in the called program must be identical to that of the data description of the additional data item with the exception that the corresponding parameter's USAGE can be any of BINARY, COMP-4, COMP-5 or COMP-X. On entry to the called COBOL program, a conversion from the USAGE COMP-5 of the additional data item to the USAGE of the corresponding parameter in the called program is performed.
+
+If the additional data item was not subject to conversion to COMP-5, the data description of each parameter in the called program must be the same as the corresponding additional data item. This means there is no conversion or extension or truncation, of the additional data item to match the corresponding parameter in the called program.
+
+If the program being called is not COBOL, the size of the additional data item should not exceed the maximum size of the system area (typically the size of a POINTER on the system); otherwise the system might become catastrophically corrupt.
+
+MFA called program can pass data to the calling program either by using a parameter declared in the USING phrase of the calling program or by means of a returned value. A called program returns a value by means of an EXIT GIVING or GOBACK GIVING statement. As control is returned from the called program to the calling program, the returned value is held in a system area generally available for non-COBOL programs to return a value.
+The size of the system area (typically the size of a POINTER on the system) is determined outside the COBOL system and limits the maximum value the return value can take, but the return value might not utilize the full size of the system area. The returned value is available to the calling program after control is returned, either implicitly in the special register RETURN-CODE or explicitly in the data item specified in the GIVING phrase.
+
+MFIf the GIVING phrase is not specified and the calling convention specifies updating the RETURN-CODE special register (see the topic The Special-Names Paragraph) then the object program operates as if the system area were declared as a COBOL numeric data item with USAGE COMP-5 and the same size as the system area and as if a MOVE statement had been executed with the system area as the sending item and the RETURN-CODE special register as the receiving item.
+MFIf the GIVING INTO phrase is specified in the calling program, identifier-8 must describe the same number of character positions as is required to hold the return value in the system area and must be of the type and usage that is implied for the returned value by the manner in which the value was returned from the called program. When control returns to the calling program, identifier-8 contains the return value.
+MFIf the GIVING ADDRESS OF phrase is specified in the calling program, the called program must return a value with explicit or implicit USAGE POINTER. The object program operates as if the system area were declared as a COBOL data item with USAGE POINTER and as if a SET statement had been executed with the system area as the first operand and TO ADDRESS OF identifier-9 as the second operand.
+MFIt is an error to specify the GIVING phrase for a called program that does not return a value.
+Called programs can contain CALL statements. However, a called program may not execute a CALL that directly or indirectly calls the calling program,
+ISO2002MFOS390unless that calling program has the recursive attribute.
+
+If a CALL statement is executed within the range of a declarative, that CALL statement cannot directly or indirectly reference any called program to which control has been transferred and which has not completed execution.
+ANS85The END-CALL phrase delimits the scope of the CALL statement.
+VSC2MFAny values with implicit or explicit USAGE POINTER
+MFor USAGE PROCEDURE-POINTER
+
+that were originally derived from the address of a data item
+
+MFor procedure
+
+that is contained within a called program become invalid and must not be used after a CANCEL statement that references that called program is executed.
+
+MFThe OMITTED phrase is used to pass unused parameters to a subprogram without having to declare a dummy data item.
+MFThe OMITTED parameter is a BY REFERENCE parameter, equivalent to passing a null address to the calling subprogram. It is identical to BY VALUE 0 SIZE 4 but is subject to the type checking of call prototypes as a BY REFERENCE parameter.
+MFIf BY REFERENCE does not immediately precede OMITTED, subsequent parameters are passed by the convention previously in force and the omitted parameter is treated as if the program had specified BY VALUE 0 SIZE 4.
+Format 1
+MFMnemonic-name identifies the calling convention that this program uses when invoking the called program. If the calling convention assumed by the called program is different to that implied by mnemonic-name, then the COBOL system may become corrupt.
+MFThe run unit remains unaware of whether a called program is a COBOL program or a non-COBOL program or procedure until the called program has been located, prior to being made available for execution. The form of the program-name cannot be used, in general, to determine whether the program is a COBOL program or not. It is an error for a COBOL program and a non-COBOL program or for two non-COBOL programs to have the same program-name.
+ANS85* The BY CONTENT, BY REFERENCE
+MFand BY VALUE
+
+phrases are transitive across the parameters which follow them until another BY CONTENT, BY REFERENCE
+
+MFor BY VALUE
+
+phrase is encountered.
+
+If no BY CONTENT, BY REFERENCE
+
+MFor BY VALUE
+
+phrase is specified prior to the first parameter, the BY REFERENCE phrase is assumed.
+
+ISO2002MFFormat 2
+ISO2002MFIf none of identifier-1, literal-1 or procedure-pointer-1 is specified, program-prototype-name-1 determines the externalized program-name of the program being called, according to the rules specified in the topic The Repository Paragraph
+ISO2002MFIf the NESTED phrase is specified, the common or contained program that has literal-1 specified in the Program-ID paragraph is used to determine the characteristics of the called program.
+ISO2002MFIf the NESTED phrase is not specified, program-prototype-name-1 is used to determine the characteristics of the called program.
+An argument that consists merely of a single identifier or literal is regarded as an identifier or literal rather than an arithmetic expression.
+ISO2002MFIf an argument is specified without any of the keywords BY REFERENCE, BY CONTENT, or BY VALUE, the manner used for passing this argument is determined as follows:
+When the BY REFERENCE phrase is specified or implied for the corresponding formal parameter:
+If the argument meets the requirements of syntax rule 3, BY REFERENCE is assumed.
+If the argument does not meet the requirements of syntax rule 3, BY CONTENT is assumed.
+When the BY VALUE phrase is specified or implied for the corresponding formal parameter, BY VALUE is assumed.
+ISO2002MFControl is transferred to the called program in a manner consistent with the entry convention specified for the program.
+ISO2002MFIf an OMITTED phrase is specified or a trailing argument is omitted, the omitted-argument condition for that parameter evaluates to true in the called program. (See the topic The Omitted-Argument Condition in the chapter Procedure Division.)
+ISO2002MFIf a parameter for which the omitted-argument condition is true is referenced in a called program, except as an argument or in the omitted-argument condition, you will get runtime error 203.
+Example
+An example of using procedure-pointer in a CALL statement is provided in section Calling and Setting a Procedure-Pointer.
