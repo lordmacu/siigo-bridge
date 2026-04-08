@@ -47,6 +47,17 @@ siigo-sync/compare_*.json
 siigo-sync/compare_*.csv
 siigo-sync/compare_readers_baseline.txt
 
+# Data files (Excel reports, JSON exports)
+*.xlsx
+*.xls
+ventas_*.json
+recaudo_*.json
+isam_tables_v3.json
+
+# Installer output
+siigo-web/installer_output/
+siigo-web/*.old
+
 # IDE
 .claude/
 

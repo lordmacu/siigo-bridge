@@ -218,6 +218,9 @@ func main() {
 		log.Println("[Telegram] Bot disabled — skipping polling")
 	}
 
+	// Start auto-updater (checks GitHub releases at 2 AM daily)
+	srv.startAutoUpdater()
+
 	if srv.cfg.SetupComplete {
 		go srv.startSyncLoop()
 	} else {
@@ -855,6 +858,8 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/webhook-test", s.permMiddleware(s.handleWebhookTest))
 	mux.HandleFunc("/api/server-info", s.authMiddleware(s.handleServerInfo))
 	mux.HandleFunc("/api/user-prefs", s.authMiddleware(s.handleUserPrefs))
+	mux.HandleFunc("/api/check-update", s.authMiddleware(s.handleCheckUpdate))
+	mux.HandleFunc("/api/apply-update", s.authMiddleware(s.handleApplyUpdate))
 
 	// Cartera por cliente
 	mux.HandleFunc("/api/cartera-cliente/", s.authMiddleware(s.handleCarteraCliente))
@@ -3539,6 +3544,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 	jsonResponse(w, map[string]interface{}{
 		"status":    status,
+		"version":   Version,
 		"uptime":    uptime,
 		"db":        dbOK,
 		"detecting": s.detecting,
