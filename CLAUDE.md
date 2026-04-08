@@ -50,7 +50,7 @@ Every parser MUST check `isam.ExtfhAvailable()` and use dual offsets.
 - **ZDANE**: codigo@0(5), nombre@5(40)
 
 ### 4. Data directory
-Siigo data lives in `C:\DEMOS01\` (configured in `C:\Siigo\FILEPATH.TXT`).
+Siigo data lives in `C:\SIIWI02` (configured in `C:\Siigo\FILEPATH.TXT`).
 Files use Windows-1252 encoding — decode with `golang.org/x/text/encoding/charmap`.
 
 ### 5. Packed decimal (BCD) decoder
@@ -99,7 +99,7 @@ The `start.sh` script in the project root manages building, running, and deployi
 - Uses `taskkill` on Windows for reliable process cleanup.
 
 ## How to Add a New Parser
-1. Hex dump: `cd siigo-sync && go run ./cmd/hexdump/ 'C:\DEMOS01\ZXXX'`
+1. Hex dump: `cd siigo-sync && go run ./cmd/hexdump/ 'C:\SIIWI02\ZXXX'`
 2. Identify ASCII vs BCD boundaries (BCD can start far from end of text — e.g. Z25 has 140 bytes of ASCII keys before BCD)
 3. Write diagnostic script testing offsets on 15+ **distributed** records (not just the first ones)
 4. Create parser in `siigo-common/parsers/` following existing patterns (dual-mode EXTFH/Binary)
@@ -345,7 +345,7 @@ Each table is a self-describing package-level variable:
 
 ```go
 // Connect all 24 models at once
-isam.ConnectAll(`C:\DEMOS01`, "2016")
+isam.ConnectAll(`C:\SIIWI02`, "2016")
 
 // Use like Laravel Eloquent
 all, _ := isam.Clients.All()                    // Client::all()
@@ -383,6 +383,90 @@ Write protection enabled by default on all tables:
 cd siigo-sync && go run ./cmd/test_orm/    # 18 Eloquent-style CRUD tests
 cd siigo-sync && go run ./cmd/test_writer/  # 57 low-level CRUD tests
 ```
+
+## Custom Endpoints (ISAM → SQLite → API)
+
+Both cartera and ventas follow the pattern: ISAM → SQLite (via wizard + watcher) → API endpoint.
+Custom diff functions (`diffCarteraCxC`, `diffVentasProductos`) handle the ISAM parsing.
+Both dispatch webhooks on changes when enabled.
+
+### Cartera Endpoint
+
+`GET /api/cartera-cliente/{nit}` — Real cartera report per client.
+`GET /api/cartera-cliente/all` — All clients.
+
+**Source**: Z07YYYY (current year only) — cuenta `0001305050000` (CxC Nacionales).
+Z07 of current year already contains pending invoices from prior years with updated balances.
+Do NOT read Z07 from prior years — they have stale/paid balances.
+
+### Z07 Record Structure (256 bytes, for CxC records)
+| Offset | Length | Field | Type |
+|--------|--------|-------|------|
+| 7 | 13 | cuenta_contable | ASCII |
+| 20 | 4 | tipo_comprobante (F003, R001, L030, J003) | ASCII |
+| 24 | 6 | num_documento | BCD (0 dec) |
+| 33 | 8 | fecha YYYYMMDD | ASCII |
+| 41 | 13 | NIT | ASCII |
+| 67 | 8 | fecha_vencimiento YYYYMMDD | ASCII |
+| 110 | 8 | saldo | BCD (2 dec) |
+
+### Parameters
+| Param | Default | Description |
+|-------|---------|-------------|
+| `dias_mora` | -9999 | Min days (e.g. -270) |
+| `dias_cobro` | 9999 | Max days (e.g. 10) |
+| `vencido` | false | Only overdue (dias < 0) |
+
+### Finearom Import Equivalence
+Finearom imports cartera from Excel with `dias_mora=-270, dias_cobro=10`.
+The endpoint with those params produces identical results. Validated with 8+ clients.
+
+### Why Z07, not Z09
+- Z09 has 26K+ records per year (all accounting lines) vs Z07's ~404 CxC records
+- Z09 type F records have saldo=0 at BCD offset 175
+- Z09 doesn't have fecha_vencimiento
+- Z07 has the exact per-invoice saldo and real vencimiento date from Siigo
+
+### Ventas Endpoint
+
+`GET /api/ventas/{nit}` — Sales by product for one client.
+`GET /api/ventas/all` — All clients.
+
+**Source**: Z09YYYY tipo F, cuenta containing "412" (costo de ventas = sale price × qty).
+Only current year Z09. Includes OC (orden de compra) and lote from Z49 (notas_documentos).
+
+### Z09 F-412 Record Offsets for Ventas
+| Offset | Length | Field | Type |
+|--------|--------|-------|------|
+| 0 | 1 | tipo (must be 'F') | ASCII |
+| 1 | 3 | empresa | ASCII |
+| 4 | 6 | num_documento | BCD (0 dec) |
+| 16 | 13 | NIT | ASCII |
+| 29 | 13 | cuenta (must contain "412") | ASCII |
+| 42 | 8 | fecha YYYYMMDD | ASCII |
+| 67 | 7 | codigo_producto | ASCII |
+| 93 | 40 | descripcion | ASCII |
+| 145 | 8 | **total_venta** | BCD (**3 dec**) |
+| 334 | 8 | **cantidad** | BCD (**1 dec**) |
+| 553 | 8 | **precio_unitario** | BCD (**3 dec**) |
+
+precio_unitario = total_venta / cantidad (verified). BCD@487(2dec) is NOT the unit price — it's an internal cost code.
+
+### Ventas Parameters
+| Param | Default | Description |
+|-------|---------|-------------|
+| `desde` | YYYY-01 | Month range start |
+| `hasta` | current month | Month range end |
+| `fecha_desde`/`fecha_hasta` | - | Exact date range |
+| `empresa` | - | Filter by empresa |
+| `cuenta` | - | Filter by cuenta |
+| `producto` | - | Filter by product code |
+
+### Ventas Deduplication
+International clients (NIT 444444xxx) generate two invoices per sale. Dedup by `nit|product|date|total`.
+
+### OC (Orden de Compra) in Ventas
+Linked from `notas_documentos` (Z49) by `num_documento`. Extracted from `texto` field: `ORDEN DE COMPRA:(\S+)`, `LOTE:(\S+)`.
 
 ## Key Documentation
 - `docs/09-PARSING-PROCESS.md` — Complete parsing methodology with verified offsets

@@ -13,12 +13,12 @@ func main() {
 		max   int
 		bytes int
 	}{
-		{`C:\DEMOS01\Z07T`, "Z07T (transacciones detalle)", 15, 256},
-		{`C:\DEMOS01\Z07S`, "Z07S (resumen)", 15, 256},
-		{`C:\DEMOS01\Z12201`, "Z12201 (mapeos)", 10, 512},
-		{`C:\DEMOS01\Z052014`, "Z05 (creditos/pagos)", 10, 250},
-		{`C:\DEMOS01\Z262016`, "Z26 (periodos)", 10, 200},
-		{`C:\DEMOS01\Z122`, "Z122 (mapeos v2)", 10, 512},
+		{`C:\SIIWI02\Z07T`, "Z07T (transacciones detalle)", 15, 256},
+		{`C:\SIIWI02\Z07S`, "Z07S (resumen)", 15, 256},
+		{`C:\SIIWI02\Z12201`, "Z12201 (mapeos)", 10, 512},
+		{`C:\SIIWI02\Z052014`, "Z05 (creditos/pagos)", 10, 250},
+		{`C:\SIIWI02\Z262016`, "Z26 (periodos)", 10, 200},
+		{`C:\SIIWI02\Z122`, "Z122 (mapeos v2)", 10, 512},
 	}
 
 	for _, f := range files {

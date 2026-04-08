@@ -96,7 +96,7 @@ Siigo esta escrito en **COBOL** (Micro Focus COBOL Server 9.0). Los datos se alm
 | Ruta | Que contiene |
 |------|-------------|
 | `C:\Siigo\` | Instalacion: programas .gnt, DLLs, configuracion |
-| `C:\DEMOS01\` | Datos de la empresa demo (~957 archivos) |
+| `C:\SIIWI02\` | Datos de la empresa demo (~957 archivos) |
 | `C:\Siigo\FILEPATH.TXT` | Contiene la ruta al directorio de datos activo |
 | `C:\Siigo\EXTFH.CFG` | Configuracion del File Handler ISAM |
 | `C:\Siigo\COBCONFIG.CFG` | Config COBOL: `set no_mfredir=TRUE` |

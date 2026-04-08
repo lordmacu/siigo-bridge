@@ -265,7 +265,7 @@ func main() {
 		fileArg    string
 		probeOnly  string
 	)
-	flag.StringVar(&dataPath, "data", `C:\DEMOS01`, "Directorio de datos ISAM")
+	flag.StringVar(&dataPath, "data", `C:\SIIWI02`, "Directorio de datos ISAM")
 	flag.StringVar(&reportPath, "report", "compare_readers_safe.json", "Ruta del reporte JSON")
 	flag.StringVar(&fileArg, "files", "", "CSV list of files to compare (e.g.: Z17,Z06,Z49)")
 	flag.StringVar(&probeOnly, "probe-extfh", "", "Internal use: test EXTFH for a single file")

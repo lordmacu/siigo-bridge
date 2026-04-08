@@ -6,7 +6,7 @@ import (
 )
 
 func main() {
-	recs, stats, err := isam.ReadFileV2WithStats(`C:\DEMOS01\ZDANE`)
+	recs, stats, err := isam.ReadFileV2WithStats(`C:\SIIWI02\ZDANE`)
 	if err != nil {
 		fmt.Println("ERROR:", err)
 		return
@@ -19,7 +19,7 @@ func main() {
 	fmt.Printf("DataTypes: %v\n", stats.DataTypes)
 
 	// Show first 3 records offset and first bytes
-	info, hdr, _ := isam.ReadFileV2(`C:\DEMOS01\ZDANE`)
+	info, hdr, _ := isam.ReadFileV2(`C:\SIIWI02\ZDANE`)
 	fmt.Printf("\nReadFileV2: %d records (indexed=%v hdrSize=%d)\n", len(info.Records), hdr.IsIndexed, hdr.HeaderSize)
 	for i := 0; i < 5 && i < len(info.Records); i++ {
 		r := info.Records[i]

@@ -321,12 +321,21 @@ export default function Explorer() {
     setActiveTab('sql');
   };
 
+  // Tables removed from active sync (kept in SQLite for backward compat, hidden from UI)
+  const HIDDEN_TABLES = new Set([
+    'movements', 'saldos_consolidados', 'transacciones_detalle', 'periodos_contables',
+    'clasificacion_cuentas', 'activos_fijos', 'activos_fijos_detalle', 'actividades_ica',
+    'conceptos_pila', 'movimientos_inventario', 'saldos_inventario', 'docs_inventario',
+    'terceros_ampliados', 'audit_trail_terceros',
+  ]);
+
   // Load table list with row counts on mount
   useEffect(() => {
     api.query("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name", 100, 0)
       .then(async (r) => {
         if (!r.data) return;
-        const names = r.data.map((row: Record<string, unknown>) => String(row.name));
+        const names = r.data.map((row: Record<string, unknown>) => String(row.name))
+          .filter((name: string) => !HIDDEN_TABLES.has(name));
         const infos: TableInfo[] = await Promise.all(
           names.map(async (name: string) => {
             try {

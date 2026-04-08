@@ -130,7 +130,7 @@ is_running() {
 }
 
 tunnel_url() {
-    grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' /tmp/cloudflared.log 2>/dev/null | head -1
+    echo "https://siigo.cristiangarcia.co"
 }
 
 ensure_config() {
@@ -139,7 +139,7 @@ ensure_config() {
         cat > "$CONFIG_FILE" << 'JSONEOF'
 {
   "siigo": {
-    "data_path": "C:\\DEMOS01\\"
+    "data_path": "C:\\SIIWI02"
   },
   "finearom": {
     "base_url": "https://ordenes.finearom.co/api",
@@ -239,19 +239,13 @@ start_tunnel() {
     kill_by_pid "$TUNNEL_PID_FILE" "Tunnel" || kill_by_name "cloudflared.exe" || true
     sleep 1
 
-    log "Iniciando Cloudflare Tunnel..."
-    cloudflared tunnel --url "http://localhost:$PORT" > /tmp/cloudflared.log 2>&1 &
+    log "Iniciando Cloudflare Tunnel (siigo.cristiangarcia.co)..."
+    cloudflared tunnel run siigo > /tmp/cloudflared.log 2>&1 &
     echo $! > "$TUNNEL_PID_FILE"
     sleep 5
 
-    local url
-    url=$(tunnel_url)
-    if [ -n "$url" ]; then
-        log "Tunnel activo: $url"
-    else
-        warn "Tunnel iniciado pero URL no detectada aun."
-        info "Revisa: cat /tmp/cloudflared.log"
-    fi
+    # Named tunnel always uses the same URL
+    log "Tunnel activo: https://siigo.cristiangarcia.co"
 }
 
 # -------------------------------------------------------

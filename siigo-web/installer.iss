@@ -3,42 +3,45 @@
 ; Open this file in Inno Setup Compiler and click Build
 
 [Setup]
+AppId={{B8F3E2A1-5C4D-4E6F-A7B9-1234567890AB}
 AppName=Siigo Web
 AppVersion=1.0
 AppPublisher=Siigo Middleware
 AppPublisherURL=https://finearom.co
-DefaultDirName={autopf}\SiigoWeb
+DefaultDirName={localappdata}\SiigoWeb
 DefaultGroupName=Siigo Web
 OutputDir=installer_output
 OutputBaseFilename=SiigoWeb-Setup
 Compression=lzma2
 SolidCompression=yes
-PrivilegesRequired=admin
-; Uncomment next line if you have a custom icon file:
-; SetupIconFile=siigo-web.ico
+PrivilegesRequired=lowest
+SetupIconFile=siigobridge.ico
+WizardImageFile=wizard_big.bmp
+WizardSmallImageFile=wizard_small.bmp
 DisableProgramGroupPage=yes
 UninstallDisplayName=Siigo Web
 
 [Files]
 ; Main executable (built with build.bat)
 Source: "siigo-web.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "siigobridge.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "README.txt"; DestDir: "{app}"; Flags: ignoreversion isreadme
 
 [Icons]
 ; Desktop shortcut
-Name: "{autodesktop}\Siigo Web"; Filename: "{app}\siigo-web.exe"; WorkingDir: "{app}"; Comment: "Abrir Siigo Web"
+Name: "{autodesktop}\Siigo Bridge"; Filename: "{app}\siigo-web.exe"; WorkingDir: "{app}"; IconFilename: "{app}\siigobridge.ico"; Comment: "Abrir Siigo Bridge"
 ; Start Menu shortcut
-Name: "{group}\Siigo Web"; Filename: "{app}\siigo-web.exe"; WorkingDir: "{app}"; Comment: "Abrir Siigo Web"
+Name: "{group}\Siigo Bridge"; Filename: "{app}\siigo-web.exe"; WorkingDir: "{app}"; IconFilename: "{app}\siigobridge.ico"; Comment: "Abrir Siigo Bridge"
 ; Start Menu uninstall
 Name: "{group}\Desinstalar Siigo Web"; Filename: "{uninstallexe}"
 
 [Run]
 ; Launch after install
 Filename: "{app}\siigo-web.exe"; Description: "Iniciar Siigo Web"; Flags: nowait postinstall skipifsilent
-Filename: "notepad.exe"; Parameters: "{app}\README.txt"; Description: "Ver informacion del programa"; Flags: nowait postinstall skipifsilent unchecked shellexec
+; README removed - opens via web panel instead
 
 [Tasks]
-Name: "autostart"; Description: "Iniciar Siigo Web automaticamente al encender Windows"; GroupDescription: "Opciones adicionales:"; Flags: checked
+Name: "autostart"; Description: "Iniciar Siigo Web automaticamente al encender Windows"; GroupDescription: "Opciones adicionales:"
 
 [Registry]
 ; Auto-start with Windows (only if user checked the task)
@@ -66,7 +69,7 @@ var
   DataPathPage: TInputDirWizardPage;
   FirewallOpened: Boolean;
 
-// Escape backslashes for JSON strings: C:\DEMOS01\ -> C:\\DEMOS01\\
+// Escape backslashes for JSON strings: C:\SIIWI02 -> C:\\SIIWI02
 function EscapeJSON(const S: String): String;
 begin
   Result := S;
@@ -158,7 +161,7 @@ begin
     'Si la carpeta no contiene archivos reconocidos, no podra continuar.',
     False, '');
   DataPathPage.Add('');
-  DataPathPage.Values[0] := 'C:\Archivos Siigo';
+  DataPathPage.Values[0] := 'C:\SIIWI02';
 end;
 
 function IsValidPort(const S: String): Boolean;
@@ -313,7 +316,7 @@ begin
     Lines.Add('    "batch_delay_ms": 500,');
     Lines.Add('    "max_retries": 3,');
     Lines.Add('    "retry_delay_seconds": 30,');
-    Lines.Add('    "files": ["Z17", "Z04", "Z49", "Z092024"],');
+    Lines.Add('    "files": ["Z17", "Z04", "Z49"],');
     Lines.Add('    "state_path": "sync_state.json"');
     Lines.Add('  },');
     Lines.Add('  "public_api": {');
@@ -327,11 +330,53 @@ begin
     Lines.Add('    "bot_token": "",');
     Lines.Add('    "chat_id": 0,');
     Lines.Add('    "exec_pin": "2337"');
-    Lines.Add('  }');
+    Lines.Add('  },');
+    Lines.Add('  "webhooks": {');
+    Lines.Add('    "enabled": false,');
+    Lines.Add('    "hooks": []');
+    Lines.Add('  },');
+    Lines.Add('  "setup_complete": false');
     Lines.Add('}');
     Lines.SaveToFile(ConfigFile);
   finally
     Lines.Free;
+  end;
+end;
+
+// Check if already installed and offer to uninstall first
+function InitializeSetup: Boolean;
+var
+  UninstallKey: String;
+  UninstallString: String;
+  ResultCode: Integer;
+begin
+  Result := True;
+  UninstallKey := 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{B8F3E2A1-5C4D-4E6F-A7B9-1234567890AB}_is1';
+
+  if RegQueryStringValue(HKCU, UninstallKey, 'UninstallString', UninstallString) or
+     RegQueryStringValue(HKLM, UninstallKey, 'UninstallString', UninstallString) then
+  begin
+    case MsgBox('Siigo Web ya esta instalado.' + #13#10 + #13#10 +
+      'Seleccione una opcion:' + #13#10 +
+      '  SI = Desinstalar version anterior y continuar con la instalacion' + #13#10 +
+      '  NO = Actualizar sin desinstalar (conserva datos)' + #13#10 +
+      '  CANCELAR = No hacer nada',
+      mbConfirmation, MB_YESNOCANCEL) of
+      IDYES:
+        begin
+          // Uninstall first
+          Exec('taskkill', '/F /IM siigo-web.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+          if not Exec(RemoveQuotes(UninstallString), '/SILENT', '', SW_SHOWNORMAL, ewWaitUntilTerminated, ResultCode) then
+            MsgBox('No se pudo desinstalar. Intente manualmente.', mbError, MB_OK);
+        end;
+      IDNO:
+        begin
+          // Just kill and continue (update)
+          Exec('taskkill', '/F /IM siigo-web.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+        end;
+      IDCANCEL:
+        Result := False;
+    end;
   end;
 end;
 

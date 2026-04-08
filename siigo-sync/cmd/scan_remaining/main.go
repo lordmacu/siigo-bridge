@@ -18,7 +18,7 @@ type fileInfo struct {
 }
 
 func main() {
-	dataPath := `C:\DEMOS01`
+	dataPath := `C:\SIIWI02`
 
 	// Files already handled by parsers (base names without year suffix)
 	handled := map[string]bool{

@@ -11,7 +11,7 @@ import (
 )
 
 func main() {
-	dataPath := `C:\DEMOS01\`
+	dataPath := `C:\SIIWI02\`
 
 	// All 19 ISAM files we parse
 	files := []struct {

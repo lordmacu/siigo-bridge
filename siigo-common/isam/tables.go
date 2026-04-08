@@ -15,7 +15,7 @@ import (
 //
 // Usage:
 //
-//	registry := isam.NewRegistry(`C:\DEMOS01`, "2016")
+//	registry := isam.NewRegistry(`C:\SIIWI02`, "2016")
 //	clients := registry.Table("clients")
 //	rec, _ := clients.Find("00000000002001")
 //	fmt.Println(rec.Get("nombre"))
@@ -24,7 +24,7 @@ import (
 
 // Registry holds all table definitions for a Siigo data directory
 type Registry struct {
-	DataDir string // e.g. C:\DEMOS01
+	DataDir string // e.g. C:\SIIWI02
 	Year    string // e.g. "2016" — used for year-suffixed files
 	tables  map[string]*Table
 }

@@ -9,7 +9,7 @@ import (
 func main() {
 	fmt.Println("=== Z07 DETAILED ANALYSIS ===")
 
-	records, recSize, err := isam.ReadIsamFile(`C:\DEMOS01\Z072016`)
+	records, recSize, err := isam.ReadIsamFile(`C:\SIIWI02\Z072016`)
 	if err != nil {
 		fmt.Printf("ERROR: %v\n", err)
 		return

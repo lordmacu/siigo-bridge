@@ -438,7 +438,7 @@ async function renderConfig(el) {
         <h3 style="margin-bottom:16px;color:#94a3b8;font-size:14px;">Siigo</h3>
         <div class="form-group">
             <label>Data Path (ruta de archivos ISAM)</label>
-            <input id="cfg-datapath" value="${cfg.siigo?.data_path || ''}" placeholder="C:\\DEMOS01\\">
+            <input id="cfg-datapath" value="${cfg.siigo?.data_path || ''}" placeholder="C:\\SIIWI02">
         </div>
 
         <h3 style="margin:24px 0 16px;color:#94a3b8;font-size:14px;">Finearom API</h3>

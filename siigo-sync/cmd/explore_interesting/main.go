@@ -61,7 +61,7 @@ var interestingFiles = []struct {
 }
 
 func main() {
-	dataPath := `C:\DEMOS01`
+	dataPath := `C:\SIIWI02`
 
 	for _, f := range interestingFiles {
 		path := filepath.Join(dataPath, f.name)

@@ -77,7 +77,7 @@ El wrapper extrae offset y length de cada componente de clave del KDB.
 Esto permite construir un `IsamIndex` automaticamente sin hardcodear offsets:
 
 ```go
-f, _ := isam.OpenIsamFile(`C:\DEMOS01\Z17`)
+f, _ := isam.OpenIsamFile(`C:\SIIWI02\Z17`)
 defer f.Close()
 
 // f.Keys[0] = primary key con Components[].Offset y Components[].Length
@@ -86,7 +86,7 @@ keyBytes := f.Keys[0].ExtractKey(record)
 keyString := f.Keys[0].ExtractKeyString(record)
 
 // O usar ReadIsamFileAutoIndexed para indexar automaticamente por clave primaria:
-idx, _ := isam.ReadIsamFileAutoIndexed(`C:\DEMOS01\Z17`, fallbackKeyFn)
+idx, _ := isam.ReadIsamFileAutoIndexed(`C:\SIIWI02\Z17`, fallbackKeyFn)
 rec := idx.Lookup("G0010000000000020")
 ```
 
@@ -214,7 +214,7 @@ Si EXTFH no esta disponible o el KDB no tiene info de componentes, usa fallbackK
 
 ### IsamIndex - Busquedas por clave en memoria
 ```go
-idx, _ := isam.ReadIsamFileAutoIndexed(`C:\DEMOS01\Z17`, fallbackKeyFn)
+idx, _ := isam.ReadIsamFileAutoIndexed(`C:\SIIWI02\Z17`, fallbackKeyFn)
 
 rec := idx.Lookup("G0010000000000020")   // primer registro con esa clave
 recs := idx.LookupAll("G001...")         // todos con esa clave

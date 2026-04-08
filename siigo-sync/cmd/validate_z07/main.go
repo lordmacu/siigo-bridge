@@ -7,7 +7,7 @@ import (
 )
 
 func main() {
-	dataPath := `C:\DEMOS01\`
+	dataPath := `C:\SIIWI02\`
 
 	fmt.Println("=== VALIDACION EXHAUSTIVA Z07 (LIBROS AUXILIARES) ===")
 	fmt.Println()

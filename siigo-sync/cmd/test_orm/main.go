@@ -16,7 +16,7 @@ func main() {
 	// =====================================================================
 	// Connect all models at once (like Laravel's DB config)
 	// =====================================================================
-	isam.ConnectAll(`C:\DEMOS01`, "2016")
+	isam.ConnectAll(`C:\SIIWI02`, "2016")
 
 	// Show available models
 	available := isam.AvailableModels()
@@ -112,7 +112,7 @@ func main() {
 	fmt.Println("\n--- WRITE TESTS (on copy) ---")
 
 	// Copy ZDANE to temp
-	srcPath := `C:\DEMOS01\ZDANE`
+	srcPath := `C:\SIIWI02\ZDANE`
 	testPath := `C:\tmp\ZDANE_ELOQUENT_TEST`
 	copyFile(srcPath, testPath)
 	defer os.Remove(testPath)

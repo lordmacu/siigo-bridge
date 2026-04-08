@@ -949,5 +949,5 @@ La comparacion 3-way (EXTFH vs V1 vs V2) fue crucial. Sin ella, no habriamos sab
 - **Fecha de creacion**: 2026-03-08
 - **DLL analizada**: Micro Focus COBOL Server 9.0.00184 (cblrtsm.dll, 64-bit)
 - **EXTFH.CFG**: IDXFORMAT=8, IGNORELOCK=ON, FASTREAD=ON
-- **Archivos probados**: 19 archivos ISAM en `C:\DEMOS01\`
+- **Archivos probados**: 19 archivos ISAM en `C:\SIIWI02\`
 - **Registros totales verificados**: 9,403 (byte-identical entre EXTFH y V2)

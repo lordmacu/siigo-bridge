@@ -45,7 +45,7 @@ type scanResult struct {
 }
 
 func main() {
-	dataPath := `C:\DEMOS01`
+	dataPath := `C:\SIIWI02`
 	showAll := false
 	showHandled := false
 

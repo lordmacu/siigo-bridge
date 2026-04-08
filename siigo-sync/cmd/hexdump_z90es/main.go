@@ -7,7 +7,7 @@ import (
 )
 
 func main() {
-	records, recSize, err := isam.ReadIsamFile(`C:\DEMOS01\Z90ES`)
+	records, recSize, err := isam.ReadIsamFile(`C:\SIIWI02\Z90ES`)
 	if err != nil {
 		fmt.Printf("ERROR: %v\n", err)
 		return

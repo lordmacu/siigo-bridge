@@ -23,31 +23,15 @@ const TAB_LABELS: Record<Tab, string> = {
 const TABLE_LABELS: Record<string, string> = {
   clients: 'Clientes (Z17)',
   products: 'Productos (Z04)',
-  movements: 'Movimientos (Z49)',
   cartera: 'Cartera (Z09)',
-  plan_cuentas: 'Plan de Cuentas (Z03)',
-  activos_fijos: 'Activos Fijos (Z27)',
-  saldos_terceros: 'Saldos Terceros (Z25)',
-  saldos_consolidados: 'Saldos Consolidados (Z28)',
   documentos: 'Documentos (Z11)',
-  terceros_ampliados: 'Terceros Ampliados (Z08A)',
-  transacciones_detalle: 'Trans. Detalle (Z07T)',
-  periodos_contables: 'Periodos Contables (Z26)',
   condiciones_pago: 'Condiciones Pago (Z05)',
-  libros_auxiliares: 'Libros Auxiliares (Z07)',
   codigos_dane: 'Codigos DANE',
-  actividades_ica: 'Actividades ICA',
-  conceptos_pila: 'Conceptos PILA',
-  activos_fijos_detalle: 'Activos Fijos Det. (Z27A)',
-  audit_trail_terceros: 'Audit Trail (Z11N)',
-  clasificacion_cuentas: 'Clasif. Cuentas (Z279CP)',
-  movimientos_inventario: 'Mov. Inventario (Z16)',
-  saldos_inventario: 'Saldos Inventario (Z23)',
-  historial: 'Historial Docs (Z18)',
-  maestros: 'Maestros Config (Z06)',
   formulas: 'Formulas/Recetas (Z06)',
-  docs_inventario: 'Docs Inventario (Z11I)',
   vendedores_areas: 'Vendedores/Areas (Z06A)',
+  notas_documentos: 'Notas Documentos (Z49)',
+  facturas_electronicas: 'Fact. Electronicas (Z09ELE)',
+  detalle_movimientos: 'Detalle Movimientos (Z17)',
 };
 
 interface WebhookDef {
@@ -62,6 +46,8 @@ export default function Config() {
 
   // --- General ---
   const [dataPath, setDataPath] = useState('');
+  const [pathValidation, setPathValidation] = useState<{ valid?: boolean; message?: string; error?: string; files?: string[]; count?: number } | null>(null);
+  const [validatingPath, setValidatingPath] = useState(false);
   const [interval, setInterval] = useState(60);
   const [sendInterval, setSendInterval] = useState(30);
 
@@ -150,6 +136,21 @@ export default function Config() {
   }, []);
 
   const handleSaveGeneral = async () => {
+    // Validate ISAM path before saving
+    if (dataPath.trim()) {
+      try {
+        const v = await api.validatePath(dataPath);
+        setPathValidation(v);
+        if (!v.valid) {
+          showToast('error', v.error || 'Ruta de datos invalida');
+          return;
+        }
+      } catch {
+        showToast('error', 'No se pudo validar la ruta');
+        return;
+      }
+    }
+
     const r = await api.saveConfig({
       data_path: dataPath,
       port: serverPort,
@@ -199,18 +200,36 @@ export default function Config() {
             <>
               <SectionTitle>Origen de Datos (Siigo)</SectionTitle>
               <FormGroup label="Ruta de archivos ISAM" hint="Carpeta donde Siigo guarda los archivos Z17, Z04, Z49, Z09, etc.">
-                <input value={dataPath} onChange={e => setDataPath(e.target.value)} placeholder="C:\DEMOS01\" />
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <input style={{ flex: 1 }} value={dataPath} onChange={e => { setDataPath(e.target.value); setPathValidation(null); }} placeholder="C:\SIIWI02" />
+                  <button className="btn-small" style={{ padding: '8px 14px', whiteSpace: 'nowrap' }} disabled={validatingPath || !dataPath.trim()} onClick={async () => {
+                    setValidatingPath(true);
+                    try {
+                      const r = await api.validatePath(dataPath);
+                      setPathValidation(r);
+                    } catch { setPathValidation({ valid: false, error: 'Error de conexion' }); }
+                    setValidatingPath(false);
+                  }}>
+                    {validatingPath ? 'Validando...' : 'Validar'}
+                  </button>
+                </div>
+                {pathValidation && (
+                  <div className={`path-validation ${pathValidation.valid ? 'valid' : 'invalid'}`}>
+                    <span className="path-validation-icon">{pathValidation.valid ? '\u2713' : '\u2717'}</span>
+                    <span>{pathValidation.valid ? pathValidation.message : pathValidation.error}</span>
+                    {pathValidation.valid && pathValidation.count && (
+                      <span className="path-file-count">{pathValidation.count} archivos detectados</span>
+                    )}
+                  </div>
+                )}
               </FormGroup>
 
               <SectionTitle>Sincronizacion</SectionTitle>
               <Alert variant="info" style={{ marginBottom: 12 }}>
-                <strong>Deteccion:</strong> Los cambios en archivos ISAM se detectan automaticamente en tiempo real (file watcher). El intervalo solo se usa como fallback si el watcher no puede iniciar.<br />
+                <strong>Deteccion:</strong> Los cambios en archivos ISAM se detectan automaticamente en tiempo real (file watcher).<br />
                 <strong>Envio:</strong> Los registros pendientes se envian al API cada {sendInterval}s.
               </Alert>
               <div className="form-row">
-                <FormGroup label="Deteccion fallback (seg)" hint="Solo se usa si el file watcher no esta disponible">
-                  <input type="number" value={interval} onChange={e => setInterval(parseInt(e.target.value) || 60)} />
-                </FormGroup>
                 <FormGroup label="Envio al servidor (seg)" hint="Cada cuanto se envian pendientes al API">
                   <input type="number" value={sendInterval} onChange={e => setSendInterval(parseInt(e.target.value) || 30)} />
                 </FormGroup>
@@ -225,21 +244,33 @@ export default function Config() {
           {/* ===== SINCRONIZACION ===== */}
           {activeTab === 'sync' && (
             <>
-              <SectionTitle>Control de Sincronizacion por Tabla</SectionTitle>
-              <p className="form-hint" style={{ marginBottom: 12 }}>
-                Controla que tablas se detectan (ISAM a SQLite) y cuales se envian al servidor (SQLite a Laravel).
-              </p>
+              <div className="sync-legend">
+                <div className="sync-legend-item">
+                  <span className="sync-legend-dot detect"></span>
+                  <div>
+                    <strong>Deteccion (ISAM → SQLite)</strong>
+                    <p>Vigila los archivos ISAM en tiempo real. Cuando Siigo escribe un cambio, se detecta y se guarda en la base de datos local.</p>
+                  </div>
+                </div>
+                <div className="sync-legend-item">
+                  <span className="sync-legend-dot send"></span>
+                  <div>
+                    <strong>Envio (SQLite → Laravel)</strong>
+                    <p>Envia los registros detectados como nuevos o modificados al servidor de Finearom. Solo funciona si la deteccion esta activa.</p>
+                  </div>
+                </div>
+              </div>
 
               <div className="sync-toggles-grid">
                 <div className="sync-toggles-header">
                   <span className="sync-col-table">Tabla</span>
-                  <span className="sync-col-toggle">Deteccion (ISAM)</span>
-                  <span className="sync-col-toggle">Envio (Laravel)</span>
+                  <span className="sync-col-toggle sync-col-detect">Deteccion</span>
+                  <span className="sync-col-toggle sync-col-send">Envio</span>
                 </div>
                 {Object.keys(TABLE_LABELS).map(table => (
                   <div key={table} className="sync-toggles-row">
                     <span className="sync-col-table">{TABLE_LABELS[table]}</span>
-                    <span className="sync-col-toggle">
+                    <span className="sync-col-toggle sync-col-detect">
                       <Toggle checked={detectEnabled[table] !== false} onChange={async () => {
                         const v = detectEnabled[table] === false;
                         const updated = { ...detectEnabled, [table]: v };
@@ -250,7 +281,7 @@ export default function Config() {
                         } catch { showToast('error', 'Error al guardar'); }
                       }} />
                     </span>
-                    <span className="sync-col-toggle">
+                    <span className="sync-col-toggle sync-col-send">
                       <Toggle checked={sendEnabled[table] === true} onChange={async () => {
                         const v = !sendEnabled[table];
                         const updated = { ...sendEnabled, [table]: v };
@@ -281,11 +312,6 @@ export default function Config() {
                   showToast('success', 'Todas las detecciones desactivadas');
                 }}>Desactivar toda deteccion</button>
               </div>
-
-              <Alert variant="info" style={{ marginTop: 12 }}>
-                <strong>Deteccion:</strong> Los cambios en archivos ISAM se detectan en tiempo real via file watcher. Cuando Siigo escribe un archivo, solo se procesa esa tabla.<br />
-                <strong>Envio:</strong> Envia registros pendientes a Laravel cada {sendInterval}s. Solo funciona si la deteccion tambien esta activa.
-              </Alert>
             </>
           )}
 

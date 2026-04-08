@@ -6,7 +6,7 @@ import (
 )
 
 func main() {
-	dataPath := `C:\DEMOS01\`
+	dataPath := `C:\SIIWI02\`
 
 	// === THIRD PARTIES ===
 	fmt.Println("=== THIRD PARTIES (Z17) - DETAIL ===")

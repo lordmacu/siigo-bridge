@@ -156,7 +156,7 @@ export default function ImportWizard() {
                 value={filePath}
                 onChange={e => setFilePath(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && analyzeFile()}
-                placeholder="C:\DEMOS01\Z17"
+                placeholder="C:\SIIWI02\Z17"
               />
               <button className="btn btn-primary" onClick={analyzeFile} disabled={loading}>
                 {loading ? 'Analyzing...' : 'Analyze'}

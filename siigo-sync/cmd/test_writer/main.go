@@ -12,7 +12,7 @@ import (
 func main() {
 	// Test REWRITE on a copy of ZDANE (small file, 256-byte records)
 	// ZDANE: key=codigo@0(5), nombre@5(40)
-	srcPath := `C:\DEMOS01\ZDANE`
+	srcPath := `C:\SIIWI02\ZDANE`
 	testPath := `C:\tmp\ZDANE_TEST`
 
 	// Step 1: Copy ZDANE to temp
@@ -595,10 +595,10 @@ func main() {
 	}
 
 	multiTests := []fileTest{
-		{"Z06", `C:\DEMOS01\Z06`, 2, 7, 4, "ZZ99999", "TEST Z06 REWRITE", 31, 20},
-		{"Z49", `C:\DEMOS01\Z49`, 1, 3, 2, "ZZ9", "TEST Z49 REWRITE NOMBRE", 15, 35},
-		{"Z032016", `C:\DEMOS01\Z032016`, 3, 9, 2, "999999999", "TEST Z03 REWRITE", 25, 70},
-		{"Z17", `C:\DEMOS01\Z17`, 4, 14, 2, "99999999999999", "TEST Z17 REWRITE", 36, 40},
+		{"Z06", `C:\SIIWI02\Z06`, 2, 7, 4, "ZZ99999", "TEST Z06 REWRITE", 31, 20},
+		{"Z49", `C:\SIIWI02\Z49`, 1, 3, 2, "ZZ9", "TEST Z49 REWRITE NOMBRE", 15, 35},
+		{"Z032016", `C:\SIIWI02\Z032016`, 3, 9, 2, "999999999", "TEST Z03 REWRITE", 25, 70},
+		{"Z17", `C:\SIIWI02\Z17`, 4, 14, 2, "99999999999999", "TEST Z17 REWRITE", 36, 40},
 	}
 
 	stepNum := 36

@@ -15,21 +15,21 @@ type fileEntry struct {
 
 func main() {
 	files := []fileEntry{
-		{`C:\DEMOS01\Z03CA`, "chart of accounts?"},
-		{`C:\DEMOS01\Z052013`, "payroll?"},
-		{`C:\DEMOS01\Z072013`, "auxiliary ledgers?"},
-		{`C:\DEMOS01\Z082013`, "?"},
-		{`C:\DEMOS01\Z102013`, "?"},
-		{`C:\DEMOS01\Z112013`, "?"},
-		{`C:\DEMOS01\Z142013`, "?"},
-		{`C:\DEMOS01\Z152013`, "?"},
-		{`C:\DEMOS01\Z162013`, "?"},
-		{`C:\DEMOS01\Z19`, "?"},
-		{`C:\DEMOS01\Z24`, "?"},
-		{`C:\DEMOS01\Z06CP`, "vouchers"},
-		{`C:\DEMOS01\Z17B`, "third parties extended?"},
-		{`C:\DEMOS01\Z17T`, "third parties extended?"},
-		{`C:\DEMOS01\Z51`, "?"},
+		{`C:\SIIWI02\Z03CA`, "chart of accounts?"},
+		{`C:\SIIWI02\Z052013`, "payroll?"},
+		{`C:\SIIWI02\Z072013`, "auxiliary ledgers?"},
+		{`C:\SIIWI02\Z082013`, "?"},
+		{`C:\SIIWI02\Z102013`, "?"},
+		{`C:\SIIWI02\Z112013`, "?"},
+		{`C:\SIIWI02\Z142013`, "?"},
+		{`C:\SIIWI02\Z152013`, "?"},
+		{`C:\SIIWI02\Z162013`, "?"},
+		{`C:\SIIWI02\Z19`, "?"},
+		{`C:\SIIWI02\Z24`, "?"},
+		{`C:\SIIWI02\Z06CP`, "vouchers"},
+		{`C:\SIIWI02\Z17B`, "third parties extended?"},
+		{`C:\SIIWI02\Z17T`, "third parties extended?"},
+		{`C:\SIIWI02\Z51`, "?"},
 	}
 
 	for _, f := range files {

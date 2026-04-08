@@ -8,7 +8,7 @@ package isam
 //
 // Example:
 //
-//	isam.ConnectAll(`C:\DEMOS01`, "2016")
+//	isam.ConnectAll(`C:\SIIWI02`, "2016")
 //	rec, _ := isam.Clients.Find("00000000002001")
 //	fmt.Println(rec.Get("nombre"))
 //
@@ -36,25 +36,32 @@ var Products = DefineModel("products", "Z04", true, "", 3520, func(m *Model) {
 	m.String("referencia", 105, 30)
 })
 
-// Movements — Z49YYYY: Movimientos
+// Movements — Z49YYYY: Notas/Observaciones de Documentos
+// Free-text notes with embedded fields: LOTE, ORDEN DE COMPRA, FECHA DESPACHO, EMPAQUE
+// Fields from offset 15 onward are free-form text (parsed with regex in PostDetect)
 var Movements = DefineModel("movements", "Z49", true, "", 2295, func(m *Model) {
-	m.String("tipo_comp", 0, 1)
+	m.String("tipo", 0, 1)
 	m.Key("codigo", 1, 3)
 	m.String("num_doc", 4, 11)
-	m.String("nombre_tercero", 15, 35)
+	m.String("texto", 15, 2270)
 })
 
 // Cartera — Z09YYYY: Cartera
+// codigo_producto@67,7 matches Z04 product codes (e.g. "3589453" = TORONJA PLUS)
+// Only populated on product line-item records (O002, S001); summary records have "0000000"
 var Cartera = DefineModel("cartera", "Z09", true, "", 1152, func(m *Model) {
 	m.String("tipo", 0, 1)
 	m.String("empresa", 1, 3)
+	m.BCD("num_documento", 4, 6, 0)
 	m.Key("seq", 10, 5)
 	m.String("tipo_doc", 15, 1)
 	m.String("nit", 16, 13)
 	m.String("cuenta", 29, 13)
 	m.Date("fecha", 42, 8)
+	m.String("codigo_producto", 67, 7)
 	m.String("descripcion", 93, 40)
 	m.String("dc", 143, 1)
+	m.BCD("valor", 175, 10, 2)
 })
 
 // Maestros — Z06: Maestros
@@ -86,6 +93,8 @@ var ActivosFijos = DefineModel("activos_fijos", "Z27", true, "", 2048, func(m *M
 })
 
 // Documentos — Z11YYYY: Documentos
+// cuenta field contains embedded NIT: cuenta[1:11] = NIT with leading zeros
+// BCD valor at @144,10 = amount in pesos (2 decimals, /100 for real value)
 var Documentos = DefineModel("documentos", "Z11", true, "", 518, func(m *Model) {
 	m.String("tipo", 0, 1)
 	m.Key("codigo", 1, 3)
@@ -98,18 +107,21 @@ var Documentos = DefineModel("documentos", "Z11", true, "", 518, func(m *Model) 
 	m.Date("fecha", 55, 8)
 	m.String("descripcion", 93, 50)
 	m.String("dc", 143, 1)
+	m.BCD("valor", 144, 10, 2)
 	m.String("referencia", 167, 7)
 })
 
-// TercerosAmpliados — Z08YYYYA: Terceros Ampliados
-var TercerosAmpliados = DefineModel("terceros_ampliados", "Z08", true, "A", 1152, func(m *Model) {
+// TercerosAmpliados — Z08YYYY: Terceros Ampliados
+// SIIWI02 uses Z08YYYY (no "A" suffix), recsize 2560.
+// NIT at @3,10 captures full Colombian NITs (9-digit empresa NITs like 860048867)
+var TercerosAmpliados = DefineModel("terceros_ampliados", "Z08", true, "", 2560, func(m *Model) {
 	m.String("empresa", 0, 3)
-	m.Key("nit", 5, 8)
+	m.Key("nit", 3, 10)
+	m.String("dv", 13, 3)
 	m.String("tipo_persona", 16, 2)
 	m.String("nombre", 18, 60)
-	m.String("rep_legal", 96, 60)
-	m.String("direccion", 194, 56)
-	m.String("email", 328, 65)
+	m.String("direccion", 234, 56)
+	m.String("email", 368, 65)
 })
 
 // SaldosTerceros — Z25YYYY: Saldos Terceros
@@ -246,7 +258,7 @@ var SaldosInventario = DefineModel("saldos_inventario", "Z15", true, "", 441, fu
 	m.BCD("salidas", 43, 7, 2)
 })
 
-// ClasificacionCuentas — Z279CP11: Clasificación Cuentas (2-digit year suffix, CP11 in Archivos Siigo)
+// ClasificacionCuentas — Z279CP11: Clasificación Cuentas (2-digit year suffix, CP11 in SIIWI02)
 var ClasificacionCuentas = DefineModel("clasificacion_cuentas", "Z279CP11", false, "", 128, func(m *Model) {
 	m.Key("codigo", 0, 4)
 	m.String("codigo_grupo", 6, 4)
@@ -319,6 +331,36 @@ var VendedoresAreas = DefineModel("vendedores_areas", "Z06A", false, "", 2285, f
 	m.String("nit", 160, 12)
 	m.String("direccion", 131, 40)
 	m.String("email", 234, 40)
+})
+
+// FacturasElectronicas — Z09ELEYYYY: Facturación Electrónica
+// Electronic invoicing detail with fragrance product names, NIT, dates, BCD amounts.
+var FacturasElectronicas = DefineModel("facturas_electronicas", "Z09ELE", true, "", 1152, func(m *Model) {
+	m.String("tipo", 0, 1)
+	m.String("empresa", 1, 3)
+	m.Key("seq", 10, 5)
+	m.String("nit", 20, 14)
+	m.Date("fecha", 42, 8)
+	m.String("descripcion", 94, 48)
+	m.String("dc", 143, 1)
+	m.BCD("valor", 144, 10, 2)
+	m.String("vendedor", 297, 20)
+})
+
+// DetalleMovimientos — Z17: Detalle de Transacciones/Movimientos (productos, cantidades, valores)
+// Contains product codes, names, quantities and amounts for inventory movements.
+var DetalleMovimientos = DefineModel("detalle_movimientos", "Z17", false, "", 1438, func(m *Model) {
+	m.String("tipo", 0, 1)
+	m.String("empresa", 1, 3)
+	m.Key("codigo_producto", 4, 12)
+	m.String("linea", 16, 2)
+	m.String("tipo_comprobante", 18, 2)
+	m.String("num_comprobante", 20, 4)
+	m.String("bodega", 24, 2)
+	m.Date("fecha", 28, 8)
+	m.String("nombre", 36, 50)
+	m.String("dc", 86, 1)
+	m.String("valor", 87, 13)
 })
 
 func init() {

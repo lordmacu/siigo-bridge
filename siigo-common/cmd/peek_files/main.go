@@ -7,7 +7,7 @@ import (
 )
 
 func main() {
-	path := `C:\DEMOS01\Z042016`
+	path := `C:\SIIWI02\Z042016`
 	info, err := isam.ReadFile(path)
 	if err != nil {
 		fmt.Printf("ERROR: %v\n", err)

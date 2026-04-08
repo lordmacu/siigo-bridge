@@ -167,7 +167,7 @@ func Default() *Config {
 			Password: "change-me",
 		},
 		Siigo: SiigoConfig{
-			DataPath: `C:\DEMOS01\`,
+			DataPath: `C:\SIIWI02`,
 		},
 		Finearom: FinearomConfig{
 			BaseURL:  "https://ordenes.finearom.co/api",
@@ -204,14 +204,13 @@ func Default() *Config {
 
 // allSyncTables is the canonical list of all tables that support detect and send.
 var allSyncTables = []string{
-	"clients", "products", "movements", "cartera",
-	"plan_cuentas", "activos_fijos", "saldos_terceros", "saldos_consolidados",
-	"documentos", "terceros_ampliados", "transacciones_detalle", "periodos_contables",
-	"condiciones_pago", "libros_auxiliares", "codigos_dane", "actividades_ica",
-	"conceptos_pila", "activos_fijos_detalle", "audit_trail_terceros",
-	"clasificacion_cuentas", "movimientos_inventario", "saldos_inventario",
-	"historial", "maestros", "formulas", "docs_inventario",
+	"clients", "products", "cartera",
+	"documentos",
+	"condiciones_pago", "codigos_dane",
+	"formulas",
 	"vendedores_areas",
+	"notas_documentos", "facturas_electronicas", "detalle_movimientos",
+	"cartera_cxc", "ventas_productos",
 }
 
 // AllSyncTables returns the canonical list of all syncable tables.
@@ -268,44 +267,75 @@ func (c *Config) IsDetectEnabled(table string) bool {
 	return enabled
 }
 
-// DefaultFieldMappings returns the default field mapping for all modules
+// columnLabels provides human-readable labels for common SQLite column names.
+var columnLabels = map[string]string{
+	"nit": "NIT", "nombre": "Nombre", "empresa": "Empresa", "tipo_persona": "Tipo Persona",
+	"rep_legal": "Rep. Legal", "direccion": "Direccion", "email": "Email",
+	"codigo": "Codigo", "nombre_corto": "Nombre Corto", "grupo": "Grupo", "referencia": "Referencia",
+	"tipo_comprobante": "Tipo Comprobante", "numero_doc": "Numero Documento", "nit_tercero": "NIT Tercero",
+	"tipo_registro": "Tipo Registro", "secuencia": "Secuencia", "tipo_doc": "Tipo Documento",
+	"cuenta_contable": "Cuenta Contable", "fecha": "Fecha", "descripcion": "Descripcion",
+	"tipo_mov": "Tipo Movimiento", "tipo_movimiento": "Tipo Movimiento",
+	"naturaleza": "Naturaleza", "activa": "Activa", "auxiliar": "Auxiliar",
+	"nit_responsable": "NIT Responsable", "fecha_adquisicion": "Fecha Adquisicion",
+	"saldo_anterior": "Saldo Anterior", "debito": "Debito", "credito": "Credito", "saldo_final": "Saldo Final",
+	"codigo_comp": "Codigo Comprobante", "bodega": "Bodega", "centro_costo": "Centro Costo",
+	"producto_ref": "Producto Ref", "representante_legal": "Rep. Legal",
+	"fecha_documento": "Fecha Documento", "fecha_vencimiento": "Fecha Vencimiento", "valor": "Valor",
+	"numero_periodo": "Numero Periodo", "fecha_inicio": "Fecha Inicio", "fecha_fin": "Fecha Fin",
+	"saldo1": "Saldo 1", "saldo2": "Saldo 2", "saldo3": "Saldo 3",
+	"tipo": "Tipo", "fecha_registro": "Fecha Registro", "tipo_secundario": "Tipo Secundario",
+	"saldo": "Saldo", "tarifa": "Tarifa", "fondo": "Fondo", "concepto": "Concepto",
+	"flags": "Flags", "tipo_base": "Tipo Base", "base_calculo": "Base Calculo",
+	"valor_compra": "Valor Compra", "fecha_cambio": "Fecha Cambio", "timestamp": "Timestamp",
+	"usuario": "Usuario", "fecha_periodo": "Fecha Periodo", "nombre_representante": "Nombre Rep.",
+	"nit_representante": "NIT Rep.", "codigo_grupo": "Codigo Grupo", "codigo_detalle": "Codigo Detalle",
+	"codigo_producto": "Codigo Producto", "cantidad": "Cantidad",
+	"saldo_inicial": "Saldo Inicial", "entradas": "Entradas", "salidas": "Salidas",
+	"tipo_reg": "Tipo Registro", "sub_tipo": "Sub Tipo", "nombre_origen": "Nombre Origen",
+	"nombre_destin": "Nombre Destino", "responsable": "Responsable",
+	"grupo_producto": "Grupo Producto", "codigo_ingrediente": "Codigo Ingrediente",
+	"grupo_ingrediente": "Grupo Ingrediente", "porcentaje": "Porcentaje",
+	"hora": "Hora", "seq": "Secuencia", "usuario_crea": "Usuario Crea",
+	"usuario_modifica": "Usuario Modifica", "fecha_modifica": "Fecha Modifica",
+	"modulo_origen": "Modulo Origen", "campo_modificado": "Campo Modificado",
+	"ciudad": "Ciudad", "record_key": "Clave Registro", "code": "Codigo",
+}
+
+// tableColumns defines the SQLite columns (excluding internal ones) for each sync table.
+// Used to auto-generate field mappings. Key column is listed first.
+var tableColumns = map[string][]string{
+	"clients":                 {"nit", "nombre", "empresa", "tipo_persona", "rep_legal", "direccion", "email"},
+	"products":                {"code", "nombre", "nombre_corto", "grupo", "referencia", "empresa"},
+	"cartera":                 {"record_key", "tipo_registro", "empresa", "secuencia", "tipo_doc", "nit_tercero", "cuenta_contable", "fecha", "descripcion", "tipo_mov"},
+	"documentos":              {"record_key", "tipo_comprobante", "codigo_comp", "secuencia", "nit_tercero", "cuenta_contable", "producto_ref", "bodega", "centro_costo", "fecha", "descripcion", "tipo_mov", "referencia"},
+	"condiciones_pago":        {"record_key", "tipo", "empresa", "secuencia", "tipo_doc", "fecha", "nit", "tipo_secundario", "valor", "fecha_registro"},
+	"codigos_dane":            {"codigo", "nombre"},
+	"formulas":                {"record_key", "empresa", "grupo_producto", "codigo_producto", "grupo_ingrediente", "codigo_ingrediente", "porcentaje"},
+	"vendedores_areas":        {"record_key", "tipo", "codigo", "nombre", "nombre_corto", "ciudad", "nit", "direccion", "email"},
+}
+
+// DefaultFieldMappings returns the default field mapping for all modules.
+// All fields are enabled by default — the user disables what they don't need.
 func DefaultFieldMappings() map[string][]FieldMap {
-	return map[string][]FieldMap{
-		"clients": {
-			{Source: "nit", ApiKey: "nit", Label: "NIT", Enabled: true},
-			{Source: "client_name", ApiKey: "client_name", Label: "Nombre Cliente", Enabled: true},
-			{Source: "business_name", ApiKey: "business_name", Label: "Razon Social", Enabled: true},
-			{Source: "tipo_persona", ApiKey: "tipo_persona", Label: "Tipo Persona", Enabled: true},
-			{Source: "siigo_empresa", ApiKey: "siigo_empresa", Label: "Empresa Siigo", Enabled: false},
-			{Source: "direccion", ApiKey: "direccion", Label: "Direccion", Enabled: true},
-			{Source: "email", ApiKey: "email", Label: "Email", Enabled: true},
-			{Source: "rep_legal", ApiKey: "rep_legal", Label: "Rep. Legal", Enabled: false},
-		},
-		"products": {
-			{Source: "code", ApiKey: "code", Label: "Codigo", Enabled: true},
-			{Source: "product_name", ApiKey: "product_name", Label: "Nombre Producto", Enabled: true},
-			{Source: "grupo", ApiKey: "grupo", Label: "Grupo", Enabled: true},
-			{Source: "referencia", ApiKey: "referencia", Label: "Referencia", Enabled: true},
-		},
-		"movements": {
-			{Source: "tipo_comprobante", ApiKey: "tipo_comprobante", Label: "Tipo Comprobante", Enabled: true},
-			{Source: "numero_doc", ApiKey: "numero_doc", Label: "Numero Documento", Enabled: true},
-			{Source: "fecha", ApiKey: "fecha", Label: "Fecha", Enabled: true},
-			{Source: "nit_tercero", ApiKey: "nit_tercero", Label: "NIT Tercero", Enabled: true},
-			{Source: "cuenta_contable", ApiKey: "cuenta_contable", Label: "Cuenta Contable", Enabled: true},
-			{Source: "descripcion", ApiKey: "descripcion", Label: "Descripcion", Enabled: true},
-			{Source: "valor", ApiKey: "valor", Label: "Valor", Enabled: true},
-			{Source: "tipo_mov", ApiKey: "tipo_mov", Label: "Tipo Movimiento", Enabled: true},
-		},
-		"cartera": {
-			{Source: "nit", ApiKey: "nit", Label: "NIT", Enabled: true},
-			{Source: "cuenta_contable", ApiKey: "cuenta_contable", Label: "Cuenta Contable", Enabled: true},
-			{Source: "fecha", ApiKey: "fecha", Label: "Fecha", Enabled: true},
-			{Source: "tipo_movimiento", ApiKey: "tipo_movimiento", Label: "Tipo Movimiento", Enabled: true},
-			{Source: "descripcion", ApiKey: "descripcion", Label: "Descripcion", Enabled: true},
-			{Source: "tipo_registro", ApiKey: "tipo_registro", Label: "Tipo Registro", Enabled: true},
-		},
+	result := make(map[string][]FieldMap, len(tableColumns))
+	for table, cols := range tableColumns {
+		fields := make([]FieldMap, 0, len(cols))
+		for _, col := range cols {
+			label := columnLabels[col]
+			if label == "" {
+				label = col // fallback to column name
+			}
+			fields = append(fields, FieldMap{
+				Source:  col,
+				ApiKey:  col,
+				Label:   label,
+				Enabled: true,
+			})
+		}
+		result[table] = fields
 	}
+	return result
 }
 
 // ApplyFieldMapping filters a data map through the field mapping for a given table.
@@ -328,10 +358,29 @@ func (c *Config) ApplyFieldMapping(table string, data map[string]interface{}) ma
 	return result
 }
 
-// EnsureFieldMappings initializes field mappings if not set
+// EnsureFieldMappings initializes field mappings if not set.
+// Also ensures any new tables added since the config was created get their default mappings.
 func (c *Config) EnsureFieldMappings() {
+	defaults := DefaultFieldMappings()
+	validTables := make(map[string]bool, len(allSyncTables))
+	for _, t := range allSyncTables {
+		validTables[t] = true
+	}
 	if c.FieldMappings == nil {
-		c.FieldMappings = DefaultFieldMappings()
+		c.FieldMappings = defaults
+	} else {
+		// Add mappings for any tables that don't exist yet in config
+		for table, fields := range defaults {
+			if _, ok := c.FieldMappings[table]; !ok {
+				c.FieldMappings[table] = fields
+			}
+		}
+		// Remove mappings for tables no longer active
+		for table := range c.FieldMappings {
+			if !validTables[table] {
+				delete(c.FieldMappings, table)
+			}
+		}
 	}
 	if c.SendEnabled == nil {
 		c.SendEnabled = DefaultSendEnabled()
@@ -342,6 +391,12 @@ func (c *Config) EnsureFieldMappings() {
 			c.SendEnabled[t] = false
 		}
 	}
+	// Remove stale tables from SendEnabled
+	for t := range c.SendEnabled {
+		if !validTables[t] {
+			delete(c.SendEnabled, t)
+		}
+	}
 	if c.DetectEnabled == nil {
 		c.DetectEnabled = DefaultDetectEnabled()
 	}
@@ -349,6 +404,12 @@ func (c *Config) EnsureFieldMappings() {
 	for _, t := range allSyncTables {
 		if _, ok := c.DetectEnabled[t]; !ok {
 			c.DetectEnabled[t] = true
+		}
+	}
+	// Remove stale tables from DetectEnabled
+	for t := range c.DetectEnabled {
+		if !validTables[t] {
+			delete(c.DetectEnabled, t)
 		}
 	}
 }

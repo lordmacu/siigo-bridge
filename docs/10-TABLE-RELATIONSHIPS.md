@@ -1,88 +1,75 @@
-# Relaciones entre Tablas - Siigo Sync
+# Tablas Activas — Siigo → Finearom Integration
 
-## Resumen
+## Contexto
 
-El sistema tiene **27 tablas de datos** sincronizadas desde archivos ISAM de Siigo Pyme. Las relaciones son logicas (SQLite no soporta ALTER TABLE ADD FOREIGN KEY), implementadas mediante **indexes** y **views con NIT normalization**.
+El middleware Siigo lee archivos ISAM de Siigo Pyme y los importa a SQLite. Originalmente se importaban 27 tablas, pero tras una auditoria tabla por tabla (2026-03-20) se redujo a **13 tablas activas** + 1 oculta, eliminando todo lo que era pura contabilidad interna sin valor para la plataforma B2B Finearom.
 
-> **Nota**: Los NIT en Siigo tienen padding diferente segun la tabla (8 vs 13 digitos). Las views usan `CAST(CAST(x AS INTEGER) AS TEXT)` para normalizar y hacer JOIN correctamente.
-
----
-
-## Tablas Maestras (fuentes de FK)
-
-| Tabla | Clave Primaria | Descripcion | Archivo ISAM |
-|-------|---------------|-------------|--------------|
-| **clients** | `nit` | Terceros / Clientes | Z17 |
-| **products** | `code` | Productos / Inventario | Z04 |
-| **plan_cuentas** | `codigo_cuenta` | Plan Unico de Cuentas (PUC) | Z03 |
-| **terceros_ampliados** | `nit` | Datos extendidos de terceros (email, direccion) | Z08A |
-| **codigos_dane** | `codigo` | Municipios colombianos (referencia) | ZDANE |
-| **actividades_ica** | `codigo` | Actividades ICA con tarifas (referencia) | ZICA |
-| **maestros** | `record_key` | Config: centros costo, bodegas, sucursales | Z06 |
+**Criterio de seleccion**: Solo se mantienen tablas que aporten informacion de negocio util para la plataforma de ordenes de compra, gestion de clientes, productos, facturacion, y formulaciones de aromas/fragancias.
 
 ---
 
-## Mapa Completo de Relaciones
+## 13 Tablas Activas
 
-### clients.nit ← (11 tablas referencian clientes)
+### Tablas Maestras (datos base)
 
-```
-clients.nit
-  ├── movements.nit_tercero          (movimientos contables del tercero)
-  ├── cartera.nit_tercero            (cuentas por cobrar del tercero)
-  ├── documentos.nit_tercero         (facturas/docs del tercero)
-  ├── saldos_terceros.nit_tercero    (saldos por cuenta del tercero)
-  ├── transacciones_detalle.nit_tercero  (detalle transacciones)
-  ├── libros_auxiliares.nit_tercero  (libros auxiliares del tercero)
-  ├── condiciones_pago.nit           (condiciones de pago)
-  ├── activos_fijos.nit_responsable  (activos fijos asignados)
-  ├── activos_fijos_detalle.nit_responsable (detalle activos)
-  ├── audit_trail_terceros.nit_tercero (cambios en datos del tercero)
-  └── vendedores_areas.nit           (vendedores/areas del tercero)
-```
+| # | Tabla | ISAM | Registros | Descripcion | Valor para Finearom |
+|---|-------|------|-----------|-------------|---------------------|
+| 1 | **clients** | Z08A | ~1230 | Terceros/Clientes completos | NIT, nombre, DV, tipo persona, rep legal, email, direccion. Enriquecida automaticamente desde Z11N (audit trail) |
+| 2 | **products** | Z04 | ~1476 | Catalogo de productos/aromas | Codigo, nombre, nombre corto, referencia, grupo |
+| 3 | **codigos_dane** | ZDANE | 1119 | Municipios colombianos | Validar/normalizar ciudades de clientes y sucursales |
 
-### terceros_ampliados.nit ↔ clients.nit
+### Tablas Transaccionales (movimiento de negocio)
 
-```
-terceros_ampliados.nit ↔ clients.nit
-  (mismo tercero, datos extendidos: email, direccion, rep. legal)
-```
+| # | Tabla | ISAM | Registros | Descripcion | Valor para Finearom |
+|---|-------|------|-----------|-------------|---------------------|
+| 4 | **cartera** | Z09 | ~303 | Cuentas por cobrar/pagar | Saldo pendiente por cliente, fechas de vencimiento |
+| 5 | **documentos** | Z11 | ~4248 | Facturas y docs contables | **Valor facturado por cliente** (BCD), NIT real extraido de cuenta_contable. Tipo F = facturas |
+| 6 | **condiciones_pago** | Z05 | ~499 | Terminos de pago por cliente | Plazos, montos, fechas de registro |
+| 7 | **formulas** | Z06 tipo R | ~2461 | Recetas/formulaciones | Ingredientes por producto con % composicion. Complementa reference_formula_lines de Finearom |
 
-### plan_cuentas.codigo_cuenta ← (7 tablas referencian cuentas)
+### Tablas de Soporte (contabilidad util)
 
-```
-plan_cuentas.codigo_cuenta
-  ├── movements.cuenta_contable          (cuenta del movimiento)
-  ├── cartera.cuenta_contable            (cuenta de cartera)
-  ├── documentos.cuenta_contable         (cuenta del documento)
-  ├── saldos_terceros.cuenta_contable    (saldo por cuenta)
-  ├── saldos_consolidados.cuenta_contable (saldo consolidado)
-  ├── transacciones_detalle.cuenta_contable (cuenta transaccion)
-  └── libros_auxiliares.cuenta_contable  (cuenta libro auxiliar)
-```
+| # | Tabla | ISAM | Registros | Descripcion | Valor para Finearom |
+|---|-------|------|-----------|-------------|---------------------|
+| 8 | **plan_cuentas** | Z03 | ~697 | Plan Unico de Cuentas PUC | Nombres de cuentas contables para reportes |
+| 9 | **saldos_terceros** | Z25 | ~3958 | Saldos por cliente+cuenta (BCD) | Dashboard financiero: "este cliente debe X" |
+| 10 | **libros_auxiliares** | Z07 | ~1041 | Detalle contable por cuenta | Auditoria detallada de movimientos |
+| 11 | **historial** | Z18 | ~319 | Historia de documentos | Trazabilidad de cambios |
+| 12 | **maestros** | Z06 | ~665 | Centros costo, bodegas, config | Referencia para bodegas y CC |
+| 13 | **vendedores_areas** | Z06A | ~6 | Vendedores y areas comerciales | Enriquecer datos de ejecutivos en Finearom |
 
-### products.code ← (5 tablas referencian productos)
+### Tabla Oculta (solo para enriquecimiento interno)
 
-```
-products.code
-  ├── formulas.codigo_producto           (producto principal de formula)
-  ├── formulas.codigo_ingrediente        (ingrediente de formula)
-  ├── documentos.producto_ref            (producto en documento)
-  ├── movimientos_inventario.codigo_producto (mov. inventario)
-  ├── saldos_inventario.codigo_producto  (saldo inventario)
-  └── docs_inventario.codigo_producto    (doc inventario)
-```
-
-### clasificacion_cuentas → plan_cuentas
-
-```
-clasificacion_cuentas.codigo_cuenta → plan_cuentas.codigo_cuenta
-  (clasificacion/grupo de la cuenta contable)
-```
+| Tabla | ISAM | Descripcion |
+|-------|------|-------------|
+| **audit_trail_terceros** | Z11N | Log de cambios por tercero. No tiene UI ni API propia. Se usa en PostDetect para enriquecer clients con: tipo_doc, rep legal, fecha ultimo cambio, usuario |
 
 ---
 
-## Diagrama de Relaciones
+## 12 Tablas Eliminadas (2026-03-20)
+
+| Tabla | ISAM | Razon de eliminacion |
+|-------|------|---------------------|
+| movements | Z49 | Indice de comprobantes sin valores. Redundante con documentos (Z11) que SI tiene BCD valor |
+| saldos_consolidados | Z28 | Saldos por cuenta SIN NIT — solo para contabilidad, no identifica clientes |
+| transacciones_detalle | Z07T | Complemento tecnico de libros_auxiliares, demasiado granular |
+| periodos_contables | Z26 | Configuracion de periodos fiscales — irrelevante para B2B |
+| clasificacion_cuentas | Z279CP | Mapeo PUC interno — solo para contadores |
+| activos_fijos | Z27 | Muebles/equipos de la empresa — nada que ver con aromas |
+| activos_fijos_detalle | Z27A | Idem |
+| actividades_ica | ZICA | Codigos de impuesto ICA — solo para declaraciones |
+| conceptos_pila | ZPILA | Nomina/seguridad social — cero relacion con ventas |
+| movimientos_inventario | Z16 | VACIO (0 registros en la empresa) |
+| saldos_inventario | Z15 | VACIO (0 registros en la empresa) |
+| docs_inventario | Z11I | Audit trail de cambios en productos — tecnico, sin valor de negocio |
+
+> **Nota**: Los datos de estas tablas siguen en SQLite (no se borraron), pero ya no se detectan, sincronizan, ni aparecen en la UI/API/OData.
+
+---
+
+## Relaciones entre Tablas Activas
+
+### Diagrama
 
 ```
                     ┌──────────────────┐
@@ -90,193 +77,194 @@ clasificacion_cuentas.codigo_cuenta → plan_cuentas.codigo_cuenta
                     │  (codigo_cuenta) │
                     └────────┬─────────┘
                              │
-          ┌──────────────────┼──────────────────────────────────┐
-          │                  │                                  │
-          ▼                  ▼                                  ▼
-   ┌─────────────┐  ┌──────────────┐  ┌───────────────────┐  ┌──────────────────┐
-   │  movements  │  │   cartera    │  │ saldos_terceros   │  │saldos_consolidados│
-   │ (nit,cuenta)│  │ (nit,cuenta) │  │  (nit, cuenta)    │  │    (cuenta)      │
-   └──────┬──────┘  └──────┬───────┘  └───────┬───────────┘  └──────────────────┘
-          │                │                   │
-          ▼                ▼                   ▼
+          ┌──────────────────┼──────────────────┐
+          │                  │                  │
+          ▼                  ▼                  ▼
+   ┌──────────────┐  ┌──────────────┐  ┌───────────────────┐
+   │   cartera    │  │  documentos  │  │ saldos_terceros   │
+   │ (nit,cuenta) │  │(nit,cuenta,  │  │  (nit, cuenta)    │
+   └──────┬───────┘  │ valor, nit_  │  └───────┬───────────┘
+          │          │ cliente)     │          │
+          │          └──────┬───────┘          │
+          │                 │                  │
+          ▼                 ▼                  ▼
    ┌──────────────────────────────────────────────────────┐
    │                     clients                          │
-   │                     (nit)                            │
-   └──────────────────────┬───────────────────────────────┘
-          │               │               │
-          ▼               ▼               ▼
-   ┌─────────────┐ ┌────────────┐ ┌──────────────────┐
-   │  documentos │ │ condiciones│ │ audit_trail       │
-   │(nit,cuenta, │ │   _pago    │ │   _terceros       │
-   │ producto)   │ │  (nit)     │ │  (nit_tercero)    │
-   └──────┬──────┘ └────────────┘ └──────────────────┘
+   │              (nit) — tabla central                   │
+   │  Enriquecida desde: Z08A + Z11N (audit trail)       │
+   └──────────┬─────────────────┬─────────────────────────┘
+              │                 │
+              ▼                 ▼
+   ┌──────────────┐     ┌──────────────────┐
+   │condiciones   │     │ vendedores_areas │
+   │  _pago (nit) │     │     (nit)        │
+   └──────────────┘     └──────────────────┘
+
+   ┌──────────────┐
+   │   products   │ ◄── codigo
+   │   (code)     │
+   └──────┬───────┘
           │
           ▼
-   ┌──────────────┐    ┌──────────────────┐
-   │   products   │◄───│ terceros_ampliados│
-   │   (code)     │    │  (nit ↔ clients) │
-   └──────┬───────┘    └──────────────────┘
-          │
-   ┌──────┼─────────────────────┐
-   │      │                     │
-   ▼      ▼                     ▼
-┌────────┐ ┌──────────────┐ ┌───────────────────┐
-│formulas│ │movimientos   │ │ saldos_inventario │
-│(prod,  │ │ _inventario  │ │  (producto)       │
-│ ingred)│ │ (producto)   │ └───────────────────┘
-└────────┘ └──────────────┘
+   ┌──────────────┐
+   │   formulas   │  producto + ingrediente → products
+   │(cod_prod,    │
+   │ cod_ingred)  │
+   └──────────────┘
 
-   ┌────────────────┐    ┌────────────────────┐
-   │ activos_fijos  │    │activos_fijos_detalle│
-   │(nit_responsable│    │(nit_responsable)    │
-   └────────────────┘    └────────────────────┘
-          │                        │
-          └───────►clients◄────────┘
+   Independientes: codigos_dane, historial, maestros, libros_auxiliares
+```
 
-   ┌───────────────────────┐  ┌──────────────────────┐
-   │ transacciones_detalle │  │  libros_auxiliares    │
-   │ (nit, cuenta)         │  │  (nit, cuenta)        │
-   └───────────────────────┘  └──────────────────────┘
-          │    │                      │    │
-          ▼    ▼                      ▼    ▼
-       clients plan_cuentas       clients plan_cuentas
+### Mapa de FK logicas
+
+| Tabla origen | Campo FK | Tabla destino | Campo destino |
+|-------------|----------|---------------|---------------|
+| cartera | nit_tercero | clients | nit |
+| cartera | cuenta_contable | plan_cuentas | codigo_cuenta |
+| documentos | nit_tercero | clients | nit |
+| documentos | nit_cliente | clients | nit |
+| documentos | cuenta_contable | plan_cuentas | codigo_cuenta |
+| saldos_terceros | nit_tercero | clients | nit |
+| saldos_terceros | cuenta_contable | plan_cuentas | codigo_cuenta |
+| condiciones_pago | nit | clients | nit |
+| libros_auxiliares | nit_tercero | clients | nit |
+| libros_auxiliares | cuenta_contable | plan_cuentas | codigo_cuenta |
+| formulas | codigo_producto | products | code |
+| formulas | codigo_ingrediente | products | code |
+| vendedores_areas | nit | clients | nit |
+
+---
+
+## Vinculacion Siigo ↔ Finearom
+
+### Mapeo de entidades
+
+| Siigo (SQLite) | Finearom (Laravel/MySQL) | Clave de union | Tipo |
+|----------------|------------------------|----------------|------|
+| clients.nit | siigo_clients.nit → clients.nit | NIT (normalizado) | Sync directo |
+| products.code | siigo_products.codigo → products.code | Codigo producto | Sync directo |
+| cartera.nit_tercero | siigo_cartera → cartera | NIT | Sync directo |
+| documentos.nit_cliente | clients.nit → purchase_orders.client_id | NIT del cliente facturado | **Cruce OC vs Factura** |
+| formulas.codigo_producto | reference_formula_lines.product_id | Codigo producto | Complementa formulaciones |
+| condiciones_pago.nit | clients.payment_type, credit_term | NIT | Enriquecer terminos de pago |
+| vendedores_areas.codigo | executives | Codigo vendedor | Enriquecer ejecutivos |
+| codigos_dane.codigo | clients.city (branch_offices) | Codigo DANE | Validar ciudades |
+
+### Flujo de datos actual
+
+```
+Siigo ISAM → Go Middleware (SQLite) → API REST → Finearom Laravel
+                                                    │
+                                                    ├── siigo_clients    (Z08A)
+                                                    ├── siigo_products   (Z04)
+                                                    ├── siigo_movements  (ya no se envia)
+                                                    └── siigo_cartera    (Z09)
 ```
 
 ---
 
-## Tablas Independientes (sin FK)
+## Posibles Integraciones Futuras
 
-| Tabla | Descripcion | Archivo ISAM |
-|-------|-------------|--------------|
-| **codigos_dane** | Municipios colombianos (tabla referencia) | ZDANE |
-| **actividades_ica** | Actividades ICA con tarifas (tabla referencia) | ZICA |
-| **conceptos_pila** | Conceptos PILA seguridad social (tabla referencia) | ZPILA |
-| **periodos_contables** | Periodos contables con saldos BCD | Z26 |
-| **historial** | Historial de documentos transaccionales | Z18 |
-| **maestros** | Maestros de config (sucursales, bodegas, etc.) | Z06 |
-
----
-
-## Views SQL (pre-configuradas)
-
-Las views resuelven automaticamente las relaciones con NIT normalization:
-
-| View | Tablas que une | Campos agregados |
-|------|---------------|-----------------|
-| `v_cartera_detalle` | cartera + clients + plan_cuentas | nombre_tercero, nombre_cuenta |
-| `v_documentos_detalle` | documentos + clients + plan_cuentas + products | nombre_tercero, nombre_cuenta, nombre_producto |
-| `v_saldos_terceros_detalle` | saldos_terceros + clients + plan_cuentas | nombre_tercero, nombre_cuenta |
-| `v_libros_auxiliares_detalle` | libros_auxiliares + clients + plan_cuentas | nombre_tercero, nombre_cuenta |
-| `v_formulas_detalle` | formulas + products (x2) | nombre_producto, nombre_ingrediente |
-| `v_movements_detalle` | movements + clients + plan_cuentas | nombre_tercero, nombre_cuenta |
-| `v_saldos_consolidados_detalle` | saldos_consolidados + plan_cuentas | nombre_cuenta |
-
-### Ejemplo de uso
+### 1. Cruce Ordenes de Compra vs Facturas
+**Problema**: "Hice una OC en Finearom para el cliente X, ¿cuanto se le facturo realmente en Siigo?"
 
 ```sql
--- Cartera con nombre del tercero y cuenta
-SELECT * FROM v_cartera_detalle WHERE nombre_tercero LIKE '%FINEAROM%';
+-- Desde Siigo: total facturado por cliente (tipo F = facturas, D = debito = cargo)
+SELECT nit_cliente, SUM(CASE WHEN tipo_mov='D' THEN valor ELSE 0 END) as total_facturado
+FROM documentos
+WHERE tipo_comprobante='F'
+GROUP BY nit_cliente
 
--- Formulas con nombre de producto e ingrediente
-SELECT * FROM v_formulas_detalle WHERE nombre_producto LIKE '%ESENCIA%';
-
--- Movimientos con nombre del cliente
-SELECT * FROM v_movements_detalle WHERE fecha >= '20260101';
+-- Cruce con Finearom: OC vs facturado
+-- purchase_orders.total vs documentos.valor por nit_cliente
 ```
 
----
+**Implementacion**: Endpoint en Laravel que reciba NIT + rango de fechas y devuelva el total facturado desde Siigo. Mostrar en la vista de OC: "Facturado en Siigo: $X.XXX.XXX"
 
-## Indexes de Relacion
+### 2. Sincronizar Formulaciones (formulas → reference_formula_lines)
+**Problema**: Finearom tiene `reference_formula_lines` y `corazon_formula_lines` para recetas, pero las formulaciones maestras viven en Siigo (Z06 tipo R).
 
-Cada FK logica tiene un index para optimizar JOINs:
+**Implementacion**: Sync de formulas a Finearom:
+- `formulas.codigo_producto` → buscar product en Finearom
+- `formulas.codigo_ingrediente` → buscar ingrediente (tambien product)
+- `formulas.porcentaje` → porcentaje de composicion
+- Crear/actualizar reference_formula_lines automaticamente
 
-| Index | Tabla | Columna |
-|-------|-------|---------|
-| idx_movements_nit_fk | movements | nit_tercero |
-| idx_movements_cuenta | movements | cuenta_contable |
-| idx_cartera_cuenta | cartera | cuenta_contable |
-| idx_activos_fijos_nit | activos_fijos | nit_responsable |
-| idx_documentos_producto | documentos | producto_ref |
-| idx_transacciones_detalle_cuenta | transacciones_detalle | cuenta_contable |
-| idx_transacciones_detalle_nit | transacciones_detalle | nit_tercero |
-| idx_libros_auxiliares_cuenta | libros_auxiliares | cuenta_contable |
-| idx_libros_auxiliares_nit | libros_auxiliares | nit_tercero |
-| idx_condiciones_pago_nit | condiciones_pago | nit |
-| idx_activos_fijos_detalle_nit | activos_fijos_detalle | nit_responsable |
-| idx_audit_trail_terceros_nit | audit_trail_terceros | nit_tercero |
-| idx_vendedores_areas_nit | vendedores_areas | nit |
-| idx_clasificacion_cuentas_grupo | clasificacion_cuentas | codigo_grupo |
-| idx_saldos_consolidados_cuenta | saldos_consolidados | cuenta_contable |
-| idx_formulas_producto | formulas | codigo_producto |
-| idx_formulas_ingrediente | formulas | codigo_ingrediente |
-| idx_docs_inventario_producto | docs_inventario | codigo_producto |
-| idx_movimientos_inventario_producto | movimientos_inventario | codigo_producto |
-| idx_saldos_inventario_producto | saldos_inventario | codigo_producto |
+### 3. Dashboard Financiero por Cliente
+**Problema**: "¿Cuanto nos debe este cliente? ¿Cual es su historial de pagos?"
 
----
+Usando `saldos_terceros` + `cartera`:
+- Saldo actual (debito - credito) por NIT
+- Facturas pendientes con fecha de vencimiento
+- Historial de pagos (condiciones_pago)
 
-## OData NavigationProperty
+Mostrar en Finearom como tab "Financiero" dentro del detalle del cliente.
 
-Las relaciones estan expuestas en el `$metadata` OData para que Power BI las auto-detecte:
+### 4. Enriquecer Clientes desde Siigo
+**Ya parcialmente hecho**: clients tiene NIT, nombre, DV, rep legal, email desde Z08A + Z11N.
 
-| Tabla origen | Campo FK | Tabla destino | NavigationProperty |
-|-------------|----------|---------------|-------------------|
-| movements | nit_tercero | clients | Client |
-| movements | cuenta_contable | plan_cuentas | CuentaContable |
-| cartera | nit_tercero | clients | Client |
-| cartera | cuenta_contable | plan_cuentas | CuentaContable |
-| saldos_terceros | nit_tercero | clients | Client |
-| saldos_terceros | cuenta_contable | plan_cuentas | CuentaContable |
-| saldos_consolidados | cuenta_contable | plan_cuentas | CuentaContable |
-| documentos | nit_tercero | clients | Client |
-| documentos | cuenta_contable | plan_cuentas | CuentaContable |
-| terceros_ampliados | nit | clients | Client |
-| transacciones_detalle | nit_tercero | clients | Client |
-| transacciones_detalle | cuenta_contable | plan_cuentas | CuentaContable |
-| libros_auxiliares | nit_tercero | clients | Client |
-| libros_auxiliares | cuenta_contable | plan_cuentas | CuentaContable |
-| condiciones_pago | nit | clients | Client |
-| activos_fijos | nit_responsable | clients | Client |
-| activos_fijos_detalle | nit_responsable | clients | Client |
-| audit_trail_terceros | nit_tercero | clients | Client |
-| clasificacion_cuentas | codigo_cuenta | plan_cuentas | CuentaContable |
-| movimientos_inventario | codigo_producto | products | Producto |
-| saldos_inventario | codigo_producto | products | Producto |
-| formulas | codigo_producto | products | Producto |
-| formulas | codigo_ingrediente | products | Ingrediente |
-| docs_inventario | codigo_producto | products | Producto |
-| vendedores_areas | nit | clients | Client |
+**Pendiente**: Sincronizar campos adicionales a Finearom:
+- `clients.dv` → validar digito verificacion
+- `clients.tipo_persona` → persona natural/juridica
+- `clients.direccion`, `clients.email` → actualizar si Finearom no tiene
+- `condiciones_pago` → actualizar payment_type/credit_term en Finearom
+
+### 5. Validar Productos Siigo vs Finearom
+**Problema**: ¿Hay productos en Finearom que no existen en Siigo? ¿Los precios coinciden?
+
+Endpoint de reconciliacion: comparar products.code (Siigo) vs products.code (Finearom), reportar diferencias.
+
+### 6. Vendedores → Ejecutivos
+**Problema**: Finearom tiene `executives` pero Siigo tiene `vendedores_areas` con areas/centros de costo.
+
+Sincronizar vendedores_areas a executives para mantener actualizado el equipo comercial.
+
+### 7. Codigos DANE → Validacion de Ciudades
+**Problema**: Los clientes en Finearom tienen ciudad como texto libre. DANE tiene los codigos oficiales.
+
+Usar codigos_dane para autocompletar y validar ciudades en branch_offices y datos de cliente.
 
 ---
 
-## Resumen de Tablas (27 total)
+## Queries Utiles
 
-| # | Tabla | ISAM | Registros | FK a | Tiene view |
-|---|-------|------|-----------|------|------------|
-| 1 | clients | Z17 | 73 | - (maestra) | - |
-| 2 | products | Z04 | ~126 | - (maestra) | - |
-| 3 | movements | Z49 | 3322 | clients, plan_cuentas | v_movements_detalle |
-| 4 | cartera | Z09 | var | clients, plan_cuentas | v_cartera_detalle |
-| 5 | plan_cuentas | Z03 | 2836 | - (maestra) | - |
-| 6 | activos_fijos | Z27 | 18 | clients | - |
-| 7 | saldos_terceros | Z25 | 169 | clients, plan_cuentas | v_saldos_terceros_detalle |
-| 8 | saldos_consolidados | Z28 | 116 | plan_cuentas | v_saldos_consolidados_detalle |
-| 9 | documentos | Z11 | 38 | clients, plan_cuentas, products | v_documentos_detalle |
-| 10 | terceros_ampliados | Z08A | 87 | clients | - |
-| 11 | movimientos_inventario | Z16 | 27 | products | - |
-| 12 | saldos_inventario | Z15 | 12 | products | - |
-| 13 | activos_fijos_detalle | Z27A | 18 | clients | - |
-| 14 | audit_trail_terceros | Z11N | 152 | clients | - |
-| 15 | transacciones_detalle | Z07T | 116 | clients, plan_cuentas | - |
-| 16 | periodos_contables | Z26 | 34 | - (independiente) | - |
-| 17 | condiciones_pago | Z05 | 22 | clients | - |
-| 18 | libros_auxiliares | Z07 | 64 | clients, plan_cuentas | v_libros_auxiliares_detalle |
-| 19 | codigos_dane | ZDANE | 1119 | - (referencia) | - |
-| 20 | actividades_ica | ZICA | 431 | - (referencia) | - |
-| 21 | conceptos_pila | ZPILA | 48 | - (referencia) | - |
-| 22 | clasificacion_cuentas | Z279CP | 1 | plan_cuentas | - |
-| 23 | historial | Z18 | 12-106 | - (independiente) | - |
-| 24 | maestros | Z06 | ~585 | - (maestra/config) | - |
-| 25 | formulas | Z06 | var | products (x2) | v_formulas_detalle |
-| 26 | docs_inventario | Z11I | var | products | - |
-| 27 | vendedores_areas | Z06A | var | clients | - |
+### Total facturado por cliente (con nombre)
+```sql
+SELECT c.nombre, d.nit_cliente,
+       SUM(CASE WHEN d.tipo_mov='D' THEN d.valor ELSE 0 END) as debitos,
+       SUM(CASE WHEN d.tipo_mov='C' THEN d.valor ELSE 0 END) as creditos
+FROM documentos d
+JOIN clients c ON c.nit = d.nit_cliente
+WHERE d.tipo_comprobante = 'F'
+GROUP BY d.nit_cliente
+ORDER BY debitos DESC
+```
+
+### Receta/formula de un producto
+```sql
+SELECT f.codigo_producto, p1.nombre as producto,
+       f.codigo_ingrediente, p2.nombre as ingrediente,
+       f.porcentaje
+FROM formulas f
+LEFT JOIN products p1 ON p1.code = f.codigo_producto
+LEFT JOIN products p2 ON p2.code = f.codigo_ingrediente
+WHERE f.codigo_producto = 'XXXXX'
+ORDER BY f.porcentaje DESC
+```
+
+### Saldo actual de un cliente
+```sql
+SELECT c.nombre, st.cuenta_contable, st.saldo_anterior, st.debito, st.credito,
+       (st.saldo_anterior + st.debito - st.credito) as saldo_actual
+FROM saldos_terceros st
+JOIN clients c ON CAST(CAST(c.nit AS INTEGER) AS TEXT) = CAST(CAST(st.nit_tercero AS INTEGER) AS TEXT)
+WHERE c.nit = '860029997'
+```
+
+### Condiciones de pago de un cliente
+```sql
+SELECT cp.tipo, cp.fecha, cp.valor, cp.fecha_registro
+FROM condiciones_pago cp
+WHERE CAST(CAST(cp.nit AS INTEGER) AS TEXT) = '860029997'
+ORDER BY cp.fecha DESC
+```

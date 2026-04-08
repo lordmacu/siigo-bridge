@@ -13,7 +13,7 @@ import (
 // Usage:
 //
 //	// Register a table once at init
-//	clients := isam.NewTable("clients", `C:\DEMOS01\Z17`, 1438).
+//	clients := isam.NewTable("clients", `C:\SIIWI02\Z17`, 1438).
 //	    Key("codigo", 4, 14).
 //	    String("tipo", 0, 1).
 //	    String("empresa", 1, 3).

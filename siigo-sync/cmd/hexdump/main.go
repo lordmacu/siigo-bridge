@@ -7,7 +7,7 @@ import (
 )
 
 func main() {
-	file := `C:\DEMOS01\Z49`
+	file := `C:\SIIWI02\Z49`
 	if len(os.Args) > 1 {
 		file = os.Args[1]
 	}

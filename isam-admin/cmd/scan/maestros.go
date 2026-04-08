@@ -24,7 +24,7 @@ func printableStr(data []byte, start, length int) string {
 }
 
 func main() {
-	dir := `C:\Archivos Siigo`
+	dir := `C:\SIIWI02`
 	files := []string{"z06", "Z06A", "Z0620181008"}
 
 	for _, name := range files {

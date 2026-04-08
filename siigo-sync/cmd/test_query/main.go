@@ -13,7 +13,7 @@ func main() {
 	fmt.Println("=== QUERY BUILDER TEST ===")
 	fmt.Println()
 
-	isam.ConnectAll(`C:\DEMOS01`, "2016")
+	isam.ConnectAll(`C:\SIIWI02`, "2016")
 
 	// =====================================================================
 	// 1. Basic Query Builder — Where + Get

@@ -13,14 +13,14 @@ func main() {
 		max   int
 		bytes int
 	}{
-		{`C:\DEMOS01\Z91PRO`, "Z91PRO (LIBRO DIARIO? 4939 recs)", 3, 200},
-		{`C:\DEMOS01\Z120`, "Z120 (CONTROL VERSION? 1557 recs)", 3, 200},
-		{`C:\DEMOS01\ZICA`, "ZICA (ICA IMPUESTOS? 431 recs)", 3, 200},
-		{`C:\DEMOS01\Z052014`, "Z05 (NOMINA/CREDITOS? 29 recs)", 2, 250},
-		{`C:\DEMOS01\Z072016`, "Z07 (LIBROS AUXILIARES 64 recs)", 2, 200},
-		{`C:\DEMOS01\Z262016`, "Z26 (??? 34 recs)", 2, 200},
-		{`C:\DEMOS01\ZPILA`, "ZPILA (SEGURIDAD SOCIAL 239 recs)", 2, 200},
-		{`C:\DEMOS01\Z90ES`, "Z90ES (??? 1816 recs)", 2, 200},
+		{`C:\SIIWI02\Z91PRO`, "Z91PRO (LIBRO DIARIO? 4939 recs)", 3, 200},
+		{`C:\SIIWI02\Z120`, "Z120 (CONTROL VERSION? 1557 recs)", 3, 200},
+		{`C:\SIIWI02\ZICA`, "ZICA (ICA IMPUESTOS? 431 recs)", 3, 200},
+		{`C:\SIIWI02\Z052014`, "Z05 (NOMINA/CREDITOS? 29 recs)", 2, 250},
+		{`C:\SIIWI02\Z072016`, "Z07 (LIBROS AUXILIARES 64 recs)", 2, 200},
+		{`C:\SIIWI02\Z262016`, "Z26 (??? 34 recs)", 2, 200},
+		{`C:\SIIWI02\ZPILA`, "ZPILA (SEGURIDAD SOCIAL 239 recs)", 2, 200},
+		{`C:\SIIWI02\Z90ES`, "Z90ES (??? 1816 recs)", 2, 200},
 	}
 
 	for _, f := range files {

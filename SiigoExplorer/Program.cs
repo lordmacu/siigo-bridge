@@ -15,7 +15,7 @@ namespace SiigoExplorer
             Console.OutputEncoding = enc;
             Console.WriteLine("=== SIIGO ISAM Data Reader v2 ===\n");
 
-            string dataPath = @"C:\DEMOS01\";
+            string dataPath = @"C:\SIIWI02\";
 
             // Get record size from ISAM header and read records
             Console.WriteLine("========== TERCEROS / CLIENTES (Z17) ==========");

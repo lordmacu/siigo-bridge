@@ -9,7 +9,7 @@ dashboard, API v1, OData, sync bidireccional, Postman, frontend, y Swagger.
 
 - [ ] **Hex dump del archivo ISAM** para identificar offsets
   ```bash
-  cd siigo-sync && go run ./cmd/hexdump/ 'C:\Archivos Siigo\ZXXX'
+  cd siigo-sync && go run ./cmd/hexdump/ 'C:\SIIWI02\ZXXX'
   ```
 - [ ] **Identificar campos**: nombres, offsets, tipos (ASCII, BCD, bool)
 - [ ] **Identificar clave primaria**: que campo(s) hacen unico a cada registro

@@ -10,7 +10,7 @@ import (
 )
 
 func main() {
-	dir := `C:\DEMOS01`
+	dir := `C:\SIIWI02`
 	if len(os.Args) > 1 {
 		dir = os.Args[1]
 	}

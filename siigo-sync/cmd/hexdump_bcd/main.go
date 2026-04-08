@@ -8,14 +8,14 @@ import (
 
 func main() {
 	fmt.Println("=== Z252016 (SALDOS TERCEROS) ===")
-	dumpFile(`C:\DEMOS01\Z252016`, 3, 160)
+	dumpFile(`C:\SIIWI02\Z252016`, 3, 160)
 
 	fmt.Println("\n=== Z282016 (SALDOS CONSOLIDADOS) ===")
-	dumpFile(`C:\DEMOS01\Z282016`, 3, 160)
+	dumpFile(`C:\SIIWI02\Z282016`, 3, 160)
 
 	// Test BCD decode at corrected offsets for Z28
 	fmt.Println("\n=== Z28 BCD TEST (corrected offsets) ===")
-	testZ28BCD(`C:\DEMOS01\Z282016`)
+	testZ28BCD(`C:\SIIWI02\Z282016`)
 }
 
 func dumpFile(path string, maxRecs, maxBytes int) {

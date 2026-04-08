@@ -17,17 +17,21 @@ type DB struct {
 	conn *sql.DB
 }
 
+// GetConn returns the underlying *sql.DB connection for direct queries.
+func (db *DB) GetConn() *sql.DB {
+	return db.conn
+}
+
 var validTables = map[string]bool{
-	"clients": true, "products": true, "movements": true, "cartera": true,
-	"plan_cuentas": true, "activos_fijos": true, "saldos_terceros": true, "saldos_consolidados": true,
+	"clients": true, "products": true, "cartera": true,
 	"documentos": true, "terceros_ampliados": true,
-	"transacciones_detalle": true, "periodos_contables": true, "condiciones_pago": true,
-	"libros_auxiliares": true, "codigos_dane": true, "actividades_ica": true,
-	"conceptos_pila": true, "activos_fijos_detalle": true, "audit_trail_terceros": true,
-	"clasificacion_cuentas": true,
-	"movimientos_inventario": true, "saldos_inventario": true,
-	"historial": true, "maestros": true, "formulas": true, "docs_inventario": true,
+	"condiciones_pago": true,
+	"codigos_dane": true,
+	"audit_trail_terceros": true,
+	"formulas": true,
 	"vendedores_areas": true,
+	"notas_documentos": true, "facturas_electronicas": true, "detalle_movimientos": true,
+	"cartera_cxc": true, "ventas_productos": true, "recaudo": true,
 	"sync_history": true, "logs": true,
 }
 
@@ -110,21 +114,6 @@ type CarteraRecord struct {
 	SyncedAt       string `json:"synced_at"`
 }
 
-type PlanCuentasRecord struct {
-	ID             int64  `json:"id"`
-	CodigoCuenta   string `json:"codigo_cuenta"`
-	Nombre         string `json:"nombre"`
-	Empresa        string `json:"empresa"`
-	Activa         bool   `json:"activa"`
-	Auxiliar       bool   `json:"auxiliar"`
-	Naturaleza     string `json:"naturaleza"`
-	Hash           string `json:"hash"`
-	SyncStatus     string `json:"sync_status"`
-	SyncAction     string `json:"sync_action"`
-	SyncError      string `json:"sync_error"`
-	UpdatedAt      string `json:"updated_at"`
-	SyncedAt       string `json:"synced_at"`
-}
 
 type ActivoFijoRecord struct {
 	ID               int64  `json:"id"`
@@ -141,23 +130,6 @@ type ActivoFijoRecord struct {
 	SyncedAt         string `json:"synced_at"`
 }
 
-type SaldoTerceroRecord struct {
-	ID             int64   `json:"id"`
-	RecordKey      string  `json:"record_key"`
-	CuentaContable string  `json:"cuenta_contable"`
-	NitTercero     string  `json:"nit_tercero"`
-	Empresa        string  `json:"empresa"`
-	SaldoAnterior  float64 `json:"saldo_anterior"`
-	Debito         float64 `json:"debito"`
-	Credito        float64 `json:"credito"`
-	SaldoFinal     float64 `json:"saldo_final"`
-	Hash           string  `json:"hash"`
-	SyncStatus     string  `json:"sync_status"`
-	SyncAction     string  `json:"sync_action"`
-	SyncError      string  `json:"sync_error"`
-	UpdatedAt      string  `json:"updated_at"`
-	SyncedAt       string  `json:"synced_at"`
-}
 
 type SaldoConsolidadoRecord struct {
 	ID             int64   `json:"id"`
@@ -554,8 +526,13 @@ func (db *DB) migrate() error {
 			nit_tercero TEXT DEFAULT '',
 			cuenta_contable TEXT DEFAULT '',
 			fecha TEXT DEFAULT '',
+			codigo_producto TEXT DEFAULT '',
+			codigo_plataforma TEXT DEFAULT '',
 			descripcion TEXT DEFAULT '',
 			tipo_mov TEXT DEFAULT '',
+			valor REAL DEFAULT 0,
+			num_documento INTEGER DEFAULT 0,
+			documento_ref TEXT DEFAULT '',
 			hash TEXT NOT NULL,
 			sync_status TEXT DEFAULT 'pending',
 			sync_action TEXT DEFAULT 'add',
@@ -590,6 +567,12 @@ func (db *DB) migrate() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_logs_source ON logs(source)`,
 
+		// Key-value store for persistent state (setup progress, etc.)
+		`CREATE TABLE IF NOT EXISTS kv_store (
+			key TEXT PRIMARY KEY,
+			value TEXT NOT NULL
+		)`,
+
 		// Drop old generic table if it exists (migration from previous schema)
 		`DROP TABLE IF EXISTS siigo_records`,
 
@@ -604,6 +587,21 @@ func (db *DB) migrate() error {
 		`ALTER TABLE clients ADD COLUMN direccion TEXT DEFAULT ''`,
 		`ALTER TABLE clients ADD COLUMN email TEXT DEFAULT ''`,
 		`ALTER TABLE clients ADD COLUMN rep_legal TEXT DEFAULT ''`,
+
+		// Migration: add DV (digito verificacion) from Z08A @13,3
+		`ALTER TABLE clients ADD COLUMN dv TEXT DEFAULT ''`,
+		`ALTER TABLE terceros_ampliados ADD COLUMN dv TEXT DEFAULT ''`,
+
+		// Migration: enrich clients with audit trail data (Z11N fields)
+		`ALTER TABLE clients ADD COLUMN tipo_doc_id TEXT DEFAULT ''`,
+		`ALTER TABLE clients ADD COLUMN nit_rep TEXT DEFAULT ''`,
+		`ALTER TABLE clients ADD COLUMN nom_rep TEXT DEFAULT ''`,
+		`ALTER TABLE clients ADD COLUMN fecha_ultimo_cambio TEXT DEFAULT ''`,
+		`ALTER TABLE clients ADD COLUMN usuario_cambio TEXT DEFAULT ''`,
+
+		// Migration: documentos — add valor (BCD from Z11 @144) and nit_cliente (extracted from cuenta[1:11])
+		`ALTER TABLE documentos ADD COLUMN valor REAL DEFAULT 0`,
+		`ALTER TABLE documentos ADD COLUMN nit_cliente TEXT DEFAULT ''`,
 
 		// Migration: products table from Z06CP (comprobantes) to Z04 (real inventory)
 		`ALTER TABLE products ADD COLUMN nombre_corto TEXT DEFAULT ''`,
@@ -644,23 +642,6 @@ func (db *DB) migrate() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_changes_key ON change_history(table_name, record_key)`,
 
-		// Chart of Accounts table (from Z03YYYY)
-		`CREATE TABLE IF NOT EXISTS plan_cuentas (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			codigo_cuenta TEXT NOT NULL UNIQUE,
-			nombre TEXT NOT NULL DEFAULT '',
-			empresa TEXT DEFAULT '',
-			activa INTEGER DEFAULT 1,
-			auxiliar INTEGER DEFAULT 0,
-			naturaleza TEXT DEFAULT '',
-			hash TEXT NOT NULL,
-			sync_status TEXT DEFAULT 'pending',
-			sync_action TEXT DEFAULT 'add',
-			sync_error TEXT,
-			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			synced_at DATETIME
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_plan_cuentas_status ON plan_cuentas(sync_status)`,
 
 		// Activos Fijos table (from Z27YYYY)
 		`CREATE TABLE IF NOT EXISTS activos_fijos (
@@ -679,27 +660,6 @@ func (db *DB) migrate() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_activos_fijos_status ON activos_fijos(sync_status)`,
 
-		// Third-Party Balances table (from Z25YYYY)
-		`CREATE TABLE IF NOT EXISTS saldos_terceros (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			record_key TEXT NOT NULL UNIQUE,
-			cuenta_contable TEXT DEFAULT '',
-			nit_tercero TEXT DEFAULT '',
-			empresa TEXT DEFAULT '',
-			saldo_anterior REAL DEFAULT 0,
-			debito REAL DEFAULT 0,
-			credito REAL DEFAULT 0,
-			saldo_final REAL DEFAULT 0,
-			hash TEXT NOT NULL,
-			sync_status TEXT DEFAULT 'pending',
-			sync_action TEXT DEFAULT 'add',
-			sync_error TEXT,
-			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			synced_at DATETIME
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_saldos_terceros_status ON saldos_terceros(sync_status)`,
-		`CREATE INDEX IF NOT EXISTS idx_saldos_terceros_nit ON saldos_terceros(nit_tercero)`,
-		`CREATE INDEX IF NOT EXISTS idx_saldos_terceros_cuenta ON saldos_terceros(cuenta_contable)`,
 
 		// Saldos Consolidados table (from Z28YYYY)
 		`CREATE TABLE IF NOT EXISTS saldos_consolidados (
@@ -833,29 +793,6 @@ func (db *DB) migrate() error {
 		`CREATE INDEX IF NOT EXISTS idx_condiciones_pago_status ON condiciones_pago(sync_status)`,
 		`CREATE INDEX IF NOT EXISTS idx_condiciones_pago_nit ON condiciones_pago(nit)`,
 
-		// Libros Auxiliares table (from Z07YYYY)
-		`CREATE TABLE IF NOT EXISTS libros_auxiliares (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			record_key TEXT NOT NULL UNIQUE,
-			empresa TEXT DEFAULT '',
-			cuenta_contable TEXT DEFAULT '',
-			tipo_comprobante TEXT DEFAULT '',
-			codigo_comprobante TEXT DEFAULT '',
-			fecha_documento TEXT DEFAULT '',
-			nit_tercero TEXT DEFAULT '',
-			saldo REAL DEFAULT 0,
-			debito REAL DEFAULT 0,
-			credito REAL DEFAULT 0,
-			hash TEXT NOT NULL,
-			sync_status TEXT DEFAULT 'pending',
-			sync_action TEXT DEFAULT 'add',
-			sync_error TEXT,
-			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			synced_at DATETIME
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_libros_auxiliares_status ON libros_auxiliares(sync_status)`,
-		`CREATE INDEX IF NOT EXISTS idx_libros_auxiliares_cuenta ON libros_auxiliares(cuenta_contable)`,
-		`CREATE INDEX IF NOT EXISTS idx_libros_auxiliares_nit ON libros_auxiliares(nit_tercero)`,
 
 		// Codigos DANE table (from ZDANE)
 		`CREATE TABLE IF NOT EXISTS codigos_dane (
@@ -1014,45 +951,6 @@ func (db *DB) migrate() error {
 		`CREATE INDEX IF NOT EXISTS idx_saldos_inventario_status ON saldos_inventario(sync_status)`,
 		`CREATE INDEX IF NOT EXISTS idx_saldos_inventario_producto ON saldos_inventario(codigo_producto)`,
 
-		// Historial (Z18YYYY - document history)
-		`CREATE TABLE IF NOT EXISTS historial (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			record_key TEXT NOT NULL UNIQUE,
-			tipo_registro TEXT DEFAULT '',
-			sub_tipo TEXT DEFAULT '',
-			empresa TEXT DEFAULT '',
-			fecha TEXT DEFAULT '',
-			nombre_origen TEXT DEFAULT '',
-			nombre_destin TEXT DEFAULT '',
-			nit_origen TEXT DEFAULT '',
-			hash TEXT NOT NULL,
-			sync_status TEXT DEFAULT 'pending',
-			sync_action TEXT DEFAULT 'add',
-			sync_error TEXT,
-			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			synced_at DATETIME
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_historial_status ON historial(sync_status)`,
-
-		// Maestros (Z06 - master configuration)
-		`CREATE TABLE IF NOT EXISTS maestros (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			record_key TEXT NOT NULL UNIQUE,
-			tipo TEXT DEFAULT '',
-			codigo TEXT DEFAULT '',
-			nombre TEXT DEFAULT '',
-			responsable TEXT DEFAULT '',
-			direccion TEXT DEFAULT '',
-			email TEXT DEFAULT '',
-			hash TEXT NOT NULL,
-			sync_status TEXT DEFAULT 'pending',
-			sync_action TEXT DEFAULT 'add',
-			sync_error TEXT,
-			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			synced_at DATETIME
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_maestros_status ON maestros(sync_status)`,
-		`CREATE INDEX IF NOT EXISTS idx_maestros_tipo ON maestros(tipo)`,
 
 		`CREATE TABLE IF NOT EXISTS formulas (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1126,9 +1024,7 @@ func (db *DB) migrate() error {
 		// clients.nit ← movements.nit_tercero
 		// clients.nit ← cartera.nit_tercero
 		// clients.nit ← documentos.nit_tercero
-		// clients.nit ← saldos_terceros.nit_tercero
 		// clients.nit ← transacciones_detalle.nit_tercero
-		// clients.nit ← libros_auxiliares.nit_tercero
 		// clients.nit ← condiciones_pago.nit
 		// clients.nit ← activos_fijos.nit_responsable
 		// clients.nit ← activos_fijos_detalle.nit_responsable
@@ -1137,13 +1033,6 @@ func (db *DB) migrate() error {
 		//
 		// terceros_ampliados.nit ← clients.nit (same tercero, extended data)
 		//
-		// plan_cuentas.codigo_cuenta ← movements.cuenta_contable
-		// plan_cuentas.codigo_cuenta ← cartera.cuenta_contable
-		// plan_cuentas.codigo_cuenta ← documentos.cuenta_contable
-		// plan_cuentas.codigo_cuenta ← saldos_terceros.cuenta_contable
-		// plan_cuentas.codigo_cuenta ← saldos_consolidados.cuenta_contable
-		// plan_cuentas.codigo_cuenta ← transacciones_detalle.cuenta_contable
-		// plan_cuentas.codigo_cuenta ← libros_auxiliares.cuenta_contable
 		//
 		// products.code ← formulas.codigo_producto
 		// products.code ← formulas.codigo_ingrediente
@@ -1154,8 +1043,6 @@ func (db *DB) migrate() error {
 		//
 		// codigos_dane.codigo ← (reference table, joined by ciudad codes)
 		// actividades_ica.codigo ← (reference table)
-		// clasificacion_cuentas.codigo_cuenta ← plan_cuentas.codigo_cuenta (classification)
-		// maestros.record_key ← (config reference: centros costo, bodegas, etc.)
 		//
 
 		// --- clients (nit) relationships ---
@@ -1173,14 +1060,11 @@ func (db *DB) migrate() error {
 		`CREATE INDEX IF NOT EXISTS idx_documentos_fecha ON documentos(fecha)`,
 		`CREATE INDEX IF NOT EXISTS idx_documentos_producto ON documentos(producto_ref)`,
 
-		// --- transacciones_detalle → clients, plan_cuentas ---
+		// --- transacciones_detalle → clients ---
 		`CREATE INDEX IF NOT EXISTS idx_transacciones_detalle_cuenta ON transacciones_detalle(cuenta_contable)`,
 		`CREATE INDEX IF NOT EXISTS idx_transacciones_detalle_fecha ON transacciones_detalle(fecha_documento)`,
 		`CREATE INDEX IF NOT EXISTS idx_transacciones_detalle_tipo ON transacciones_detalle(tipo_comprobante)`,
 
-		// --- libros_auxiliares → clients, plan_cuentas ---
-		`CREATE INDEX IF NOT EXISTS idx_libros_auxiliares_tipo ON libros_auxiliares(tipo_comprobante)`,
-		`CREATE INDEX IF NOT EXISTS idx_libros_auxiliares_fecha ON libros_auxiliares(fecha_documento)`,
 
 		// --- condiciones_pago → clients ---
 		`CREATE INDEX IF NOT EXISTS idx_condiciones_pago_fecha ON condiciones_pago(fecha)`,
@@ -1193,7 +1077,7 @@ func (db *DB) migrate() error {
 		`CREATE INDEX IF NOT EXISTS idx_audit_trail_terceros_usuario ON audit_trail_terceros(usuario)`,
 		`CREATE INDEX IF NOT EXISTS idx_audit_trail_terceros_fecha ON audit_trail_terceros(fecha_cambio)`,
 
-		// --- clasificacion_cuentas → plan_cuentas ---
+		// --- clasificacion_cuentas ---
 		`CREATE INDEX IF NOT EXISTS idx_clasificacion_cuentas_grupo ON clasificacion_cuentas(codigo_grupo)`,
 
 		// --- periodos_contables ---
@@ -1208,8 +1092,178 @@ func (db *DB) migrate() error {
 		// --- vendedores_areas → clients (nit) ---
 		`CREATE INDEX IF NOT EXISTS idx_vendedores_areas_nit ON vendedores_areas(nit)`,
 
-		// --- saldos_consolidados → plan_cuentas ---
+		// --- saldos_consolidados ---
 		`CREATE INDEX IF NOT EXISTS idx_saldos_consolidados_cuenta ON saldos_consolidados(cuenta_contable)`,
+
+		// Migration: products.codigo_plataforma (extracted from nombre after dash)
+		`ALTER TABLE products ADD COLUMN codigo_plataforma TEXT DEFAULT ''`,
+
+		// Migration: cartera.codigo_producto + codigo_plataforma (Z09 product code at offset 67)
+		`ALTER TABLE cartera ADD COLUMN codigo_producto TEXT DEFAULT ''`,
+		`ALTER TABLE cartera ADD COLUMN codigo_plataforma TEXT DEFAULT ''`,
+		`CREATE INDEX IF NOT EXISTS idx_cartera_codigo_producto ON cartera(codigo_producto)`,
+		`CREATE INDEX IF NOT EXISTS idx_cartera_codigo_plataforma ON cartera(codigo_plataforma)`,
+
+		// Migration: cartera.valor (BCD at offset 175, 10 bytes, 2 decimals)
+		`ALTER TABLE cartera ADD COLUMN valor REAL DEFAULT 0`,
+
+		// Migration: cartera.num_documento + documento_ref (factura number from BCD@4)
+		`ALTER TABLE cartera ADD COLUMN num_documento INTEGER DEFAULT 0`,
+		`ALTER TABLE cartera ADD COLUMN documento_ref TEXT DEFAULT ''`,
+		`CREATE INDEX IF NOT EXISTS idx_cartera_num_documento ON cartera(num_documento)`,
+		`CREATE INDEX IF NOT EXISTS idx_cartera_documento_ref ON cartera(documento_ref)`,
+
+		// Cartera CxC table (from Z07 cuenta 1305 - real cartera per invoice)
+		`CREATE TABLE IF NOT EXISTS cartera_cxc (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			record_key TEXT NOT NULL UNIQUE,
+			nit TEXT DEFAULT '',
+			nombre_cliente TEXT DEFAULT '',
+			tipo_comprobante TEXT DEFAULT '',
+			num_documento INTEGER DEFAULT 0,
+			documento_ref TEXT DEFAULT '',
+			fecha TEXT DEFAULT '',
+			fecha_vencimiento TEXT DEFAULT '',
+			dias INTEGER DEFAULT 0,
+			saldo REAL DEFAULT 0,
+			hash TEXT NOT NULL,
+			sync_status TEXT DEFAULT 'pending',
+			sync_action TEXT DEFAULT 'add',
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_cartera_cxc_nit ON cartera_cxc(nit)`,
+		`CREATE INDEX IF NOT EXISTS idx_cartera_cxc_fecha ON cartera_cxc(fecha)`,
+		`CREATE INDEX IF NOT EXISTS idx_cartera_cxc_documento ON cartera_cxc(documento_ref)`,
+
+		// Ventas por producto table (from Z09 tipo F cuenta 412)
+		`CREATE TABLE IF NOT EXISTS ventas_productos (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			record_key TEXT NOT NULL UNIQUE,
+			nit TEXT DEFAULT '',
+			nombre_cliente TEXT DEFAULT '',
+			empresa TEXT DEFAULT '',
+			cuenta TEXT DEFAULT '',
+			linea TEXT DEFAULT '',
+			codigo_producto TEXT DEFAULT '',
+			descripcion TEXT DEFAULT '',
+			fecha TEXT DEFAULT '',
+			mes TEXT DEFAULT '',
+			num_documento INTEGER DEFAULT 0,
+			orden_compra TEXT DEFAULT '',
+			lote TEXT DEFAULT '',
+			total_venta REAL DEFAULT 0,
+			precio_unitario REAL DEFAULT 0,
+			cantidad REAL DEFAULT 0,
+			hash TEXT NOT NULL,
+			sync_status TEXT DEFAULT 'pending',
+			sync_action TEXT DEFAULT 'add',
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_ventas_productos_nit ON ventas_productos(nit)`,
+		`CREATE INDEX IF NOT EXISTS idx_ventas_productos_producto ON ventas_productos(codigo_producto)`,
+		`CREATE INDEX IF NOT EXISTS idx_ventas_productos_mes ON ventas_productos(mes)`,
+		`CREATE INDEX IF NOT EXISTS idx_ventas_productos_fecha ON ventas_productos(fecha)`,
+
+		// Recaudo table (from Z09 tipo R cuenta 1305 - pagos recibidos contra facturas)
+		`CREATE TABLE IF NOT EXISTS recaudo (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			record_key TEXT NOT NULL UNIQUE,
+			nit TEXT DEFAULT '',
+			nombre_cliente TEXT DEFAULT '',
+			num_recibo INTEGER DEFAULT 0,
+			fecha_recibo TEXT DEFAULT '',
+			mes TEXT DEFAULT '',
+			num_factura INTEGER DEFAULT 0,
+			fecha_vencimiento TEXT DEFAULT '',
+			dias INTEGER DEFAULT 0,
+			valor_cancelado REAL DEFAULT 0,
+			tipo_pago TEXT DEFAULT '',
+			vendedor_codigo TEXT DEFAULT '',
+			vendedor_nombre TEXT DEFAULT '',
+			descripcion TEXT DEFAULT '',
+			hash TEXT NOT NULL,
+			sync_status TEXT DEFAULT 'pending',
+			sync_action TEXT DEFAULT 'add',
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_recaudo_nit ON recaudo(nit)`,
+		`CREATE INDEX IF NOT EXISTS idx_recaudo_mes ON recaudo(mes)`,
+		`CREATE INDEX IF NOT EXISTS idx_recaudo_fecha ON recaudo(fecha_recibo)`,
+		`CREATE INDEX IF NOT EXISTS idx_recaudo_factura ON recaudo(num_factura)`,
+
+		// Notas Documentos table (from Z49YYYY - document notes with OC, lote, despacho)
+		`CREATE TABLE IF NOT EXISTS notas_documentos (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			record_key TEXT NOT NULL UNIQUE,
+			tipo TEXT DEFAULT '',
+			codigo_doc TEXT DEFAULT '',
+			num_documento TEXT DEFAULT '',
+			texto TEXT DEFAULT '',
+			lote TEXT DEFAULT '',
+			orden_compra TEXT DEFAULT '',
+			fecha_despacho TEXT DEFAULT '',
+			empaque TEXT DEFAULT '',
+			observaciones TEXT DEFAULT '',
+			hash TEXT NOT NULL,
+			sync_status TEXT DEFAULT 'pending',
+			sync_action TEXT DEFAULT 'add',
+			sync_error TEXT,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			synced_at DATETIME
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_notas_documentos_status ON notas_documentos(sync_status)`,
+		`CREATE INDEX IF NOT EXISTS idx_notas_documentos_tipo ON notas_documentos(tipo)`,
+		`CREATE INDEX IF NOT EXISTS idx_notas_documentos_oc ON notas_documentos(orden_compra)`,
+
+		// Facturas Electronicas table (from Z09ELEYYYY)
+		`CREATE TABLE IF NOT EXISTS facturas_electronicas (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			record_key TEXT NOT NULL UNIQUE,
+			tipo TEXT DEFAULT '',
+			empresa TEXT DEFAULT '',
+			secuencia TEXT DEFAULT '',
+			nit_tercero TEXT DEFAULT '',
+			fecha TEXT DEFAULT '',
+			descripcion TEXT DEFAULT '',
+			tipo_mov TEXT DEFAULT '',
+			valor REAL DEFAULT 0,
+			vendedor TEXT DEFAULT '',
+			hash TEXT NOT NULL,
+			sync_status TEXT DEFAULT 'pending',
+			sync_action TEXT DEFAULT 'add',
+			sync_error TEXT,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			synced_at DATETIME
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_facturas_electronicas_status ON facturas_electronicas(sync_status)`,
+		`CREATE INDEX IF NOT EXISTS idx_facturas_electronicas_nit ON facturas_electronicas(nit_tercero)`,
+		`CREATE INDEX IF NOT EXISTS idx_facturas_electronicas_fecha ON facturas_electronicas(fecha)`,
+
+		// Detalle Movimientos table (from Z17 - product movement detail)
+		`CREATE TABLE IF NOT EXISTS detalle_movimientos (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			record_key TEXT NOT NULL UNIQUE,
+			tipo TEXT DEFAULT '',
+			empresa TEXT DEFAULT '',
+			codigo_producto TEXT DEFAULT '',
+			linea TEXT DEFAULT '',
+			tipo_comprobante TEXT DEFAULT '',
+			num_comprobante TEXT DEFAULT '',
+			bodega TEXT DEFAULT '',
+			fecha TEXT DEFAULT '',
+			nombre TEXT DEFAULT '',
+			tipo_mov TEXT DEFAULT '',
+			valor TEXT DEFAULT '',
+			hash TEXT NOT NULL,
+			sync_status TEXT DEFAULT 'pending',
+			sync_action TEXT DEFAULT 'add',
+			sync_error TEXT,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			synced_at DATETIME
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_detalle_movimientos_status ON detalle_movimientos(sync_status)`,
+		`CREATE INDEX IF NOT EXISTS idx_detalle_movimientos_producto ON detalle_movimientos(codigo_producto)`,
+		`CREATE INDEX IF NOT EXISTS idx_detalle_movimientos_fecha ON detalle_movimientos(fecha)`,
 
 		// =====================================================================
 		// FOREIGN KEY VIEWS (for easy cross-table queries)
@@ -1217,29 +1271,16 @@ func (db *DB) migrate() error {
 		// NIT normalization: CAST(CAST(x AS INTEGER) AS TEXT) strips leading zeros
 		// so clients.nit='00019410548' matches cartera.nit_tercero='0000019410548'
 		`CREATE VIEW IF NOT EXISTS v_cartera_detalle AS
-			SELECT c.*, cl.nombre AS nombre_tercero, pc.nombre AS nombre_cuenta
+			SELECT c.*, cl.nombre AS nombre_tercero
 			FROM cartera c
-			LEFT JOIN clients cl ON CAST(CAST(cl.nit AS INTEGER) AS TEXT) = CAST(CAST(c.nit_tercero AS INTEGER) AS TEXT)
-			LEFT JOIN plan_cuentas pc ON pc.codigo_cuenta = c.cuenta_contable`,
+			LEFT JOIN clients cl ON CAST(CAST(cl.nit AS INTEGER) AS TEXT) = CAST(CAST(c.nit_tercero AS INTEGER) AS TEXT)`,
 
 		`CREATE VIEW IF NOT EXISTS v_documentos_detalle AS
-			SELECT d.*, cl.nombre AS nombre_tercero, pc.nombre AS nombre_cuenta, p.nombre AS nombre_producto
+			SELECT d.*, cl.nombre AS nombre_tercero, p.nombre AS nombre_producto
 			FROM documentos d
 			LEFT JOIN clients cl ON CAST(CAST(cl.nit AS INTEGER) AS TEXT) = CAST(CAST(d.nit_tercero AS INTEGER) AS TEXT)
-			LEFT JOIN plan_cuentas pc ON pc.codigo_cuenta = d.cuenta_contable
 			LEFT JOIN products p ON p.code = d.producto_ref`,
 
-		`CREATE VIEW IF NOT EXISTS v_saldos_terceros_detalle AS
-			SELECT st.*, cl.nombre AS nombre_tercero, pc.nombre AS nombre_cuenta
-			FROM saldos_terceros st
-			LEFT JOIN clients cl ON CAST(CAST(cl.nit AS INTEGER) AS TEXT) = CAST(CAST(st.nit_tercero AS INTEGER) AS TEXT)
-			LEFT JOIN plan_cuentas pc ON pc.codigo_cuenta = st.cuenta_contable`,
-
-		`CREATE VIEW IF NOT EXISTS v_libros_auxiliares_detalle AS
-			SELECT la.*, cl.nombre AS nombre_tercero, pc.nombre AS nombre_cuenta
-			FROM libros_auxiliares la
-			LEFT JOIN clients cl ON CAST(CAST(cl.nit AS INTEGER) AS TEXT) = CAST(CAST(la.nit_tercero AS INTEGER) AS TEXT)
-			LEFT JOIN plan_cuentas pc ON pc.codigo_cuenta = la.cuenta_contable`,
 
 		`CREATE VIEW IF NOT EXISTS v_formulas_detalle AS
 			SELECT f.*, pp.nombre AS nombre_producto, pi.nombre AS nombre_ingrediente
@@ -1248,15 +1289,51 @@ func (db *DB) migrate() error {
 			LEFT JOIN products pi ON pi.code = f.codigo_ingrediente`,
 
 		`CREATE VIEW IF NOT EXISTS v_movements_detalle AS
-			SELECT m.*, cl.nombre AS nombre_tercero, pc.nombre AS nombre_cuenta
+			SELECT m.*, cl.nombre AS nombre_tercero
 			FROM movements m
-			LEFT JOIN clients cl ON CAST(CAST(cl.nit AS INTEGER) AS TEXT) = CAST(CAST(m.nit_tercero AS INTEGER) AS TEXT)
-			LEFT JOIN plan_cuentas pc ON pc.codigo_cuenta = m.cuenta_contable`,
+			LEFT JOIN clients cl ON CAST(CAST(cl.nit AS INTEGER) AS TEXT) = CAST(CAST(m.nit_tercero AS INTEGER) AS TEXT)`,
 
-		`CREATE VIEW IF NOT EXISTS v_saldos_consolidados_detalle AS
-			SELECT sc.*, pc.nombre AS nombre_cuenta
-			FROM saldos_consolidados sc
-			LEFT JOIN plan_cuentas pc ON pc.codigo_cuenta = sc.cuenta_contable`,
+		// Client → Products (via documentos line items)
+		`CREATE VIEW IF NOT EXISTS v_cliente_productos AS
+			SELECT DISTINCT
+				cl.nit, cl.nombre AS nombre_cliente,
+				d.producto_ref AS codigo_producto, p.nombre AS nombre_producto,
+				p.grupo, p.referencia
+			FROM documentos d
+			INNER JOIN clients cl ON CAST(CAST(cl.nit AS INTEGER) AS TEXT) = CAST(CAST(d.nit_tercero AS INTEGER) AS TEXT)
+			INNER JOIN products p ON p.code = d.producto_ref
+			WHERE d.producto_ref IS NOT NULL AND d.producto_ref != ''`,
+
+		// Product → Formulas/Ingredients (recipe breakdown)
+		`CREATE VIEW IF NOT EXISTS v_producto_receta AS
+			SELECT
+				f.codigo_producto, pp.nombre AS nombre_producto,
+				f.codigo_ingrediente, f.grupo_ingrediente,
+				CASE f.grupo_ingrediente
+					WHEN '001' THEN 'Esencia'
+					WHEN '002' THEN 'Secundario'
+					WHEN '004' THEN 'Solvente/Diluyente'
+					ELSE 'Otro'
+				END AS tipo_ingrediente,
+				f.porcentaje, f.empresa
+			FROM formulas f
+			LEFT JOIN products pp ON pp.code = f.codigo_producto`,
+
+		// Full chain: Client → Product → Recipe ingredients
+		`CREATE VIEW IF NOT EXISTS v_cliente_producto_receta AS
+			SELECT
+				cp.nit, cp.nombre_cliente,
+				cp.codigo_producto, cp.nombre_producto,
+				f.codigo_ingrediente, f.grupo_ingrediente,
+				CASE f.grupo_ingrediente
+					WHEN '001' THEN 'Esencia'
+					WHEN '002' THEN 'Secundario'
+					WHEN '004' THEN 'Solvente/Diluyente'
+					ELSE 'Otro'
+				END AS tipo_ingrediente,
+				f.porcentaje
+			FROM v_cliente_productos cp
+			INNER JOIN formulas f ON f.codigo_producto = cp.codigo_producto`,
 
 		// Sync stats (for dashboard charts)
 		`CREATE TABLE IF NOT EXISTS sync_stats (
@@ -1583,81 +1660,6 @@ func (db *DB) GetPendingCartera() []PendingRecord {
 	return records
 }
 
-// ==================== CHART OF ACCOUNTS (Z03) ====================
-
-func (db *DB) UpsertPlanCuenta(accountCode, name, company, nature, hash string, active, auxiliary bool) string {
-	var existingHash string
-	err := db.conn.QueryRow(`SELECT hash FROM plan_cuentas WHERE codigo_cuenta=?`, accountCode).Scan(&existingHash)
-	now := time.Now().Format(time.RFC3339)
-
-	activeInt := 0
-	if active {
-		activeInt = 1
-	}
-	auxiliaryInt := 0
-	if auxiliary {
-		auxiliaryInt = 1
-	}
-
-	if err == sql.ErrNoRows {
-		db.conn.Exec(
-			`INSERT INTO plan_cuentas (codigo_cuenta, nombre, empresa, activa, auxiliar, naturaleza, hash, sync_status, sync_action, updated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 'add', ?)`,
-			accountCode, name, company, activeInt, auxiliaryInt, nature, hash, now,
-		)
-		return "add"
-	}
-
-	if existingHash != hash {
-		db.conn.Exec(
-			`UPDATE plan_cuentas SET nombre=?, empresa=?, activa=?, auxiliar=?, naturaleza=?, hash=?, sync_status='pending', sync_action='edit', updated_at=?
-			 WHERE codigo_cuenta=?`,
-			name, company, activeInt, auxiliaryInt, nature, hash, now, accountCode,
-		)
-		return "edit"
-	}
-	return ""
-}
-
-func (db *DB) MarkDeletedPlanCuentas(currentKeys map[string]bool) int {
-	return db.markDeleted("plan_cuentas", "codigo_cuenta", currentKeys)
-}
-
-func (db *DB) GetPlanCuentas(limit, offset int, search string) ([]PlanCuentasRecord, int) {
-	where := "1=1"
-	args := []interface{}{}
-	if search != "" {
-		like := "%" + strings.ToLower(search) + "%"
-		where = "(LOWER(codigo_cuenta) LIKE ? OR LOWER(nombre) LIKE ?)"
-		args = append(args, like, like)
-	}
-	var total int
-	db.conn.QueryRow("SELECT COUNT(*) FROM plan_cuentas WHERE "+where, args...).Scan(&total)
-
-	queryArgs := append(args, limit, offset)
-	rows, err := db.conn.Query(
-		"SELECT id, codigo_cuenta, nombre, COALESCE(empresa,''), activa, auxiliar, COALESCE(naturaleza,''), hash, sync_status, COALESCE(sync_action,''), COALESCE(sync_error,''), updated_at, COALESCE(synced_at,'') FROM plan_cuentas WHERE "+where+" ORDER BY codigo_cuenta LIMIT ? OFFSET ?",
-		queryArgs...,
-	)
-	if err != nil {
-		return nil, 0
-	}
-	defer rows.Close()
-
-	var records []PlanCuentasRecord
-	for rows.Next() {
-		var r PlanCuentasRecord
-		var active, auxiliary int
-		if err := rows.Scan(&r.ID, &r.CodigoCuenta, &r.Nombre, &r.Empresa, &active, &auxiliary, &r.Naturaleza, &r.Hash, &r.SyncStatus, &r.SyncAction, &r.SyncError, &r.UpdatedAt, &r.SyncedAt); err != nil {
-			continue
-		}
-		r.Activa = active == 1
-		r.Auxiliar = auxiliary == 1
-		records = append(records, r)
-	}
-	return records, total
-}
-
 // ==================== FIXED ASSETS (Z27) ====================
 
 func (db *DB) UpsertActivoFijo(code, name, company, responsibleNit, acquisitionDate, hash string) string {
@@ -1714,69 +1716,6 @@ func (db *DB) GetActivosFijos(limit, offset int, search string) ([]ActivoFijoRec
 	for rows.Next() {
 		var r ActivoFijoRecord
 		if err := rows.Scan(&r.ID, &r.Codigo, &r.Nombre, &r.Empresa, &r.NitResponsable, &r.FechaAdquisicion, &r.Hash, &r.SyncStatus, &r.SyncAction, &r.SyncError, &r.UpdatedAt, &r.SyncedAt); err != nil {
-			continue
-		}
-		records = append(records, r)
-	}
-	return records, total
-}
-
-// ==================== THIRD-PARTY BALANCES (Z25) ====================
-
-func (db *DB) UpsertSaldoTercero(key, ledgerAccount, thirdPartyNit, company, hash string, prevBalance, debit, credit, finalBalance float64) string {
-	var existingHash string
-	err := db.conn.QueryRow(`SELECT hash FROM saldos_terceros WHERE record_key=?`, key).Scan(&existingHash)
-	now := time.Now().Format(time.RFC3339)
-
-	if err == sql.ErrNoRows {
-		db.conn.Exec(
-			`INSERT INTO saldos_terceros (record_key, cuenta_contable, nit_tercero, empresa, saldo_anterior, debito, credito, saldo_final, hash, sync_status, sync_action, updated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'add', ?)`,
-			key, ledgerAccount, thirdPartyNit, company, prevBalance, debit, credit, finalBalance, hash, now,
-		)
-		return "add"
-	}
-
-	if existingHash != hash {
-		db.conn.Exec(
-			`UPDATE saldos_terceros SET cuenta_contable=?, nit_tercero=?, empresa=?, saldo_anterior=?, debito=?, credito=?, saldo_final=?, hash=?, sync_status='pending', sync_action='edit', updated_at=?
-			 WHERE record_key=?`,
-			ledgerAccount, thirdPartyNit, company, prevBalance, debit, credit, finalBalance, hash, now, key,
-		)
-		return "edit"
-	}
-	return ""
-}
-
-func (db *DB) MarkDeletedSaldosTerceros(currentKeys map[string]bool) int {
-	return db.markDeleted("saldos_terceros", "record_key", currentKeys)
-}
-
-func (db *DB) GetSaldosTerceros(limit, offset int, search string) ([]SaldoTerceroRecord, int) {
-	where := "1=1"
-	args := []interface{}{}
-	if search != "" {
-		like := "%" + strings.ToLower(search) + "%"
-		where = "(LOWER(cuenta_contable) LIKE ? OR LOWER(nit_tercero) LIKE ?)"
-		args = append(args, like, like)
-	}
-	var total int
-	db.conn.QueryRow("SELECT COUNT(*) FROM saldos_terceros WHERE "+where, args...).Scan(&total)
-
-	queryArgs := append(args, limit, offset)
-	rows, err := db.conn.Query(
-		"SELECT id, record_key, cuenta_contable, COALESCE(nit_tercero,''), COALESCE(empresa,''), saldo_anterior, debito, credito, saldo_final, hash, sync_status, COALESCE(sync_action,''), COALESCE(sync_error,''), updated_at, COALESCE(synced_at,'') FROM saldos_terceros WHERE "+where+" ORDER BY id LIMIT ? OFFSET ?",
-		queryArgs...,
-	)
-	if err != nil {
-		return nil, 0
-	}
-	defer rows.Close()
-
-	var records []SaldoTerceroRecord
-	for rows.Next() {
-		var r SaldoTerceroRecord
-		if err := rows.Scan(&r.ID, &r.RecordKey, &r.CuentaContable, &r.NitTercero, &r.Empresa, &r.SaldoAnterior, &r.Debito, &r.Credito, &r.SaldoFinal, &r.Hash, &r.SyncStatus, &r.SyncAction, &r.SyncError, &r.UpdatedAt, &r.SyncedAt); err != nil {
 			continue
 		}
 		records = append(records, r)
@@ -2064,37 +2003,6 @@ func (db *DB) UpsertCondicionPago(key, recType, company, sequence, docType, date
 
 func (db *DB) MarkDeletedCondicionesPago(currentKeys map[string]bool) int {
 	return db.markDeleted("condiciones_pago", "record_key", currentKeys)
-}
-
-// ==================== AUXILIARY LEDGERS (Z07) ====================
-
-func (db *DB) UpsertLibroAuxiliar(key, company, ledgerAccount, voucherType, voucherCode, docDate, thirdPartyNit, hash string, balance, debit, credit float64) string {
-	var existingHash string
-	err := db.conn.QueryRow(`SELECT hash FROM libros_auxiliares WHERE record_key=?`, key).Scan(&existingHash)
-	now := time.Now().Format(time.RFC3339)
-
-	if err == sql.ErrNoRows {
-		db.conn.Exec(
-			`INSERT INTO libros_auxiliares (record_key, empresa, cuenta_contable, tipo_comprobante, codigo_comprobante, fecha_documento, nit_tercero, saldo, debito, credito, hash, sync_status, sync_action, updated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'add', ?)`,
-			key, company, ledgerAccount, voucherType, voucherCode, docDate, thirdPartyNit, balance, debit, credit, hash, now,
-		)
-		return "add"
-	}
-
-	if existingHash != hash {
-		db.conn.Exec(
-			`UPDATE libros_auxiliares SET empresa=?, cuenta_contable=?, tipo_comprobante=?, codigo_comprobante=?, fecha_documento=?, nit_tercero=?, saldo=?, debito=?, credito=?, hash=?, sync_status='pending', sync_action='edit', updated_at=?
-			 WHERE record_key=?`,
-			company, ledgerAccount, voucherType, voucherCode, docDate, thirdPartyNit, balance, debit, credit, hash, now, key,
-		)
-		return "edit"
-	}
-	return ""
-}
-
-func (db *DB) MarkDeletedLibrosAuxiliares(currentKeys map[string]bool) int {
-	return db.markDeleted("libros_auxiliares", "record_key", currentKeys)
 }
 
 // ==================== DANE CODES (ZDANE) ====================
@@ -2624,68 +2532,6 @@ func (db *DB) GetPendingSaldosInventario() []PendingRecord {
 	return records
 }
 
-// ==================== HISTORIAL (Z18YYYY) ====================
-
-func (db *DB) UpsertHistorial(key, recordType, subType, company, date, originName, destName, originNit, hash string) string {
-	var existingHash string
-	err := db.conn.QueryRow(`SELECT hash FROM historial WHERE record_key=?`, key).Scan(&existingHash)
-	now := time.Now().Format(time.RFC3339)
-
-	if err == sql.ErrNoRows {
-		db.conn.Exec(
-			`INSERT INTO historial (record_key, tipo_registro, sub_tipo, empresa, fecha, nombre_origen, nombre_destin, nit_origen, hash, sync_status, sync_action, updated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'add', ?)`,
-			key, recordType, subType, company, date, originName, destName, originNit, hash, now,
-		)
-		return "add"
-	}
-
-	if existingHash != hash {
-		db.conn.Exec(
-			`UPDATE historial SET tipo_registro=?, sub_tipo=?, empresa=?, fecha=?, nombre_origen=?, nombre_destin=?, nit_origen=?, hash=?, sync_status='pending', sync_action='edit', updated_at=?
-			 WHERE record_key=?`,
-			recordType, subType, company, date, originName, destName, originNit, hash, now, key,
-		)
-		return "edit"
-	}
-	return ""
-}
-
-func (db *DB) MarkDeletedHistorial(currentKeys map[string]bool) int {
-	return db.markDeleted("historial", "record_key", currentKeys)
-}
-
-// ==================== MAESTROS (Z06) ====================
-
-func (db *DB) UpsertMaestro(key, recType, code, name, responsible, address, email, hash string) string {
-	var existingHash string
-	err := db.conn.QueryRow(`SELECT hash FROM maestros WHERE record_key=?`, key).Scan(&existingHash)
-	now := time.Now().Format(time.RFC3339)
-
-	if err == sql.ErrNoRows {
-		db.conn.Exec(
-			`INSERT INTO maestros (record_key, tipo, codigo, nombre, responsable, direccion, email, hash, sync_status, sync_action, updated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'add', ?)`,
-			key, recType, code, name, responsible, address, email, hash, now,
-		)
-		return "add"
-	}
-
-	if existingHash != hash {
-		db.conn.Exec(
-			`UPDATE maestros SET tipo=?, codigo=?, nombre=?, responsable=?, direccion=?, email=?, hash=?, sync_status='pending', sync_action='edit', updated_at=?
-			 WHERE record_key=?`,
-			recType, code, name, responsible, address, email, hash, now, key,
-		)
-		return "edit"
-	}
-	return ""
-}
-
-func (db *DB) MarkDeletedMaestros(currentKeys map[string]bool) int {
-	return db.markDeleted("maestros", "record_key", currentKeys)
-}
-
 // GetGenericTable queries any valid table with pagination and search.
 func (db *DB) GetGenericTable(tableName string, limit, offset int, search string) ([]map[string]interface{}, int) {
 	if !isValidTable(tableName) {
@@ -2695,10 +2541,30 @@ func (db *DB) GetGenericTable(tableName string, limit, offset int, search string
 	where := "1=1"
 	args := []interface{}{}
 	if search != "" {
-		// Search across all text columns using a subquery
+		// Search across ALL columns dynamically
 		like := "%" + strings.ToLower(search) + "%"
-		where = "CAST(record_key AS TEXT) LIKE ? OR CAST(nombre AS TEXT) LIKE ? OR CAST(codigo AS TEXT) LIKE ?"
-		args = append(args, like, like, like)
+		colRows, err := db.conn.Query(fmt.Sprintf("PRAGMA table_info(%s)", tableName))
+		if err == nil {
+			var conditions []string
+			for colRows.Next() {
+				var cid int
+				var name, colType string
+				var notNull, pk int
+				var dflt interface{}
+				if colRows.Scan(&cid, &name, &colType, &notNull, &dflt, &pk) == nil {
+					// Skip internal columns
+					if name == "id" || name == "hash" || name == "sync_status" || name == "sync_action" || name == "sync_error" || name == "retry_count" || name == "created_at" || name == "updated_at" || name == "synced_at" {
+						continue
+					}
+					conditions = append(conditions, fmt.Sprintf("LOWER(CAST(%s AS TEXT)) LIKE ?", name))
+					args = append(args, like)
+				}
+			}
+			colRows.Close()
+			if len(conditions) > 0 {
+				where = strings.Join(conditions, " OR ")
+			}
+		}
 	}
 
 	var total int
@@ -2811,9 +2677,87 @@ func (db *DB) UpsertGeneric(table, keyCol, key, hash string, columns map[string]
 	return ""
 }
 
+// EnrichClientsFromAuditTrail updates clients with data from audit_trail_terceros.
+// For each NIT in clients, finds the LATEST audit trail record and fills in
+// tipo_doc_id, nit_rep, nom_rep, direccion, email, nombre (only if empty in clients).
+func (db *DB) EnrichClientsFromAuditTrail() (int, error) {
+	// Get the latest audit trail record per NIT (most recent fecha_cambio)
+	query := `
+		UPDATE clients SET
+			tipo_doc_id = COALESCE(NULLIF(tipo_doc_id, ''),
+				(SELECT tipo_doc FROM audit_trail_terceros a
+				 WHERE CAST(CAST(a.nit_tercero AS INTEGER) AS TEXT) = CAST(CAST(clients.nit AS INTEGER) AS TEXT)
+				 ORDER BY a.fecha_cambio DESC LIMIT 1)),
+			nit_rep = COALESCE(NULLIF(nit_rep, ''),
+				(SELECT nit_rep FROM audit_trail_terceros a
+				 WHERE CAST(CAST(a.nit_tercero AS INTEGER) AS TEXT) = CAST(CAST(clients.nit AS INTEGER) AS TEXT)
+				 ORDER BY a.fecha_cambio DESC LIMIT 1)),
+			nom_rep = COALESCE(NULLIF(nom_rep, ''),
+				(SELECT nom_rep FROM audit_trail_terceros a
+				 WHERE CAST(CAST(a.nit_tercero AS INTEGER) AS TEXT) = CAST(CAST(clients.nit AS INTEGER) AS TEXT)
+				 ORDER BY a.fecha_cambio DESC LIMIT 1)),
+			direccion = COALESCE(NULLIF(direccion, ''),
+				(SELECT direccion FROM audit_trail_terceros a
+				 WHERE CAST(CAST(a.nit_tercero AS INTEGER) AS TEXT) = CAST(CAST(clients.nit AS INTEGER) AS TEXT)
+				 ORDER BY a.fecha_cambio DESC LIMIT 1)),
+			email = COALESCE(NULLIF(email, ''),
+				(SELECT email FROM audit_trail_terceros a
+				 WHERE CAST(CAST(a.nit_tercero AS INTEGER) AS TEXT) = CAST(CAST(clients.nit AS INTEGER) AS TEXT)
+				 ORDER BY a.fecha_cambio DESC LIMIT 1)),
+			fecha_ultimo_cambio =
+				(SELECT fecha_cambio FROM audit_trail_terceros a
+				 WHERE CAST(CAST(a.nit_tercero AS INTEGER) AS TEXT) = CAST(CAST(clients.nit AS INTEGER) AS TEXT)
+				 ORDER BY a.fecha_cambio DESC LIMIT 1),
+			usuario_cambio =
+				(SELECT usuario FROM audit_trail_terceros a
+				 WHERE CAST(CAST(a.nit_tercero AS INTEGER) AS TEXT) = CAST(CAST(clients.nit AS INTEGER) AS TEXT)
+				 ORDER BY a.fecha_cambio DESC LIMIT 1)
+		WHERE EXISTS (
+			SELECT 1 FROM audit_trail_terceros a
+			WHERE CAST(CAST(a.nit_tercero AS INTEGER) AS TEXT) = CAST(CAST(clients.nit AS INTEGER) AS TEXT)
+		)
+	`
+	result, err := db.conn.Exec(query)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := result.RowsAffected()
+	return int(n), nil
+}
+
 // MarkDeletedGeneric marks records not in currentKeys as deleted.
 func (db *DB) MarkDeletedGeneric(table, keyCol string, currentKeys map[string]bool) int {
-	return db.markDeleted(table, keyCol, currentKeys)
+	return len(db.MarkDeletedGenericKeys(table, keyCol, currentKeys))
+}
+
+// MarkDeletedGenericKeys marks records not in currentKeys as deleted and returns the deleted keys.
+func (db *DB) MarkDeletedGenericKeys(table, keyCol string, currentKeys map[string]bool) []string {
+	rows, err := db.conn.Query(
+		fmt.Sprintf(`SELECT %s FROM %s WHERE sync_action != 'delete'`, keyCol, table),
+	)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	var toDelete []string
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err == nil {
+			if !currentKeys[key] {
+				toDelete = append(toDelete, key)
+			}
+		}
+	}
+
+	now := time.Now().Format(time.RFC3339)
+	for _, key := range toDelete {
+		db.conn.Exec(
+			fmt.Sprintf(`UPDATE %s SET sync_status='pending', sync_action='delete', updated_at=? WHERE %s=?`, table, keyCol),
+			now, key,
+		)
+	}
+	return toDelete
 }
 
 func (db *DB) getAllHashes(table, keyCol string) map[string]string {
@@ -3112,7 +3056,7 @@ func (db *DB) SearchSyncHistory(tableName, search, dateFrom, dateTo, status stri
 func (db *DB) GetStats() map[string]interface{} {
 	stats := map[string]interface{}{}
 
-	tables := []string{"clients", "products", "movements", "cartera", "plan_cuentas", "activos_fijos", "saldos_terceros", "saldos_consolidados", "documentos", "terceros_ampliados", "transacciones_detalle", "periodos_contables", "condiciones_pago", "libros_auxiliares", "codigos_dane", "actividades_ica", "conceptos_pila", "activos_fijos_detalle", "audit_trail_terceros", "clasificacion_cuentas", "movimientos_inventario", "saldos_inventario", "historial", "maestros", "formulas", "docs_inventario", "vendedores_areas"}
+	tables := []string{"clients", "products", "cartera", "documentos", "condiciones_pago", "codigos_dane", "formulas", "vendedores_areas", "notas_documentos", "facturas_electronicas", "detalle_movimientos"}
 	for _, t := range tables {
 		var total, synced, pending, errors int
 		db.conn.QueryRow(fmt.Sprintf(`SELECT COUNT(*) FROM %s`, t)).Scan(&total)
@@ -3540,12 +3484,8 @@ func (db *DB) keyColForTable(table string) string {
 		return "record_key"
 	case "cartera":
 		return "record_key"
-	case "plan_cuentas":
-		return "codigo_cuenta"
 	case "activos_fijos":
 		return "codigo"
-	case "saldos_terceros":
-		return "record_key"
 	case "saldos_consolidados":
 		return "cuenta_contable"
 	case "documentos":
@@ -3557,8 +3497,6 @@ func (db *DB) keyColForTable(table string) string {
 	case "periodos_contables":
 		return "record_key"
 	case "condiciones_pago":
-		return "record_key"
-	case "libros_auxiliares":
 		return "record_key"
 	case "codigos_dane":
 		return "codigo"
@@ -3572,7 +3510,7 @@ func (db *DB) keyColForTable(table string) string {
 		return "record_key"
 	case "clasificacion_cuentas":
 		return "codigo_cuenta"
-	case "movimientos_inventario", "saldos_inventario", "historial", "maestros", "formulas", "docs_inventario", "vendedores_areas":
+	case "movimientos_inventario", "saldos_inventario", "formulas", "docs_inventario", "vendedores_areas":
 		return "record_key"
 	}
 	return ""
@@ -3748,6 +3686,20 @@ func (db *DB) GetCarteraRecords(limit, offset int, search string) ([]CarteraReco
 
 // ==================== LOGS ====================
 
+func (db *DB) SetKV(key, value string) {
+	db.conn.Exec(`INSERT OR REPLACE INTO kv_store(key, value) VALUES(?, ?)`, key, value)
+}
+
+func (db *DB) GetKV(key string) string {
+	var val string
+	db.conn.QueryRow(`SELECT value FROM kv_store WHERE key = ?`, key).Scan(&val)
+	return val
+}
+
+func (db *DB) DeleteKVPrefix(prefix string) {
+	db.conn.Exec(`DELETE FROM kv_store WHERE key LIKE ?`, prefix+"%")
+}
+
 func (db *DB) AddLog(level, source, message string) {
 	db.conn.Exec(
 		`INSERT INTO logs (level, source, message) VALUES (?, ?, ?)`,
@@ -3838,13 +3790,16 @@ func (db *DB) ClearLogs() error {
 func (db *DB) ClearAll() error {
 	tables := []string{
 		"clients", "products", "movements", "cartera",
-		"plan_cuentas", "activos_fijos", "saldos_terceros", "saldos_consolidados",
+		"activos_fijos", "saldos_consolidados",
 		"documentos", "terceros_ampliados", "transacciones_detalle",
-		"periodos_contables", "condiciones_pago", "libros_auxiliares",
+		"periodos_contables", "condiciones_pago",
 		"codigos_dane", "actividades_ica", "conceptos_pila",
 		"activos_fijos_detalle", "audit_trail_terceros", "clasificacion_cuentas",
-		"movimientos_inventario", "saldos_inventario", "historial", "maestros",
-		"formulas", "docs_inventario", "vendedores_areas", "sync_history",
+		"movimientos_inventario", "saldos_inventario",
+		"formulas", "docs_inventario", "vendedores_areas",
+		"notas_documentos", "facturas_electronicas", "detalle_movimientos",
+		"cartera_cxc", "ventas_productos", "recaudo",
+		"sync_history",
 	}
 	var errs []string
 	for _, t := range tables {

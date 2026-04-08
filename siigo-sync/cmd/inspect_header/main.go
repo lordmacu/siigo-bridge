@@ -9,7 +9,7 @@ import (
 )
 
 func main() {
-	dataPath := `C:\DEMOS01\`
+	dataPath := `C:\SIIWI02\`
 
 	files := []string{
 		"Z17", "Z49", "Z03", "Z06",

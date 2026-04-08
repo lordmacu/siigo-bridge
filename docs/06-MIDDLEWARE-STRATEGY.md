@@ -40,7 +40,7 @@ Siigo (escritorio) -------> Middleware (Go) -------> Finearom (Laravel)
 |  |   reader.go)   |  |  (detector)  |  |  (client)   |  |
 |  +---------------+  +--------------+  +-------------+  |
 |         |                    |                          |
-|    C:\DEMOS01\*        Estado local                     |
+|    C:\SIIWI02\*        Estado local                     |
 |    via EXTFH/binary    (JSON/SQLite)                    |
 +-------------------------------------------------------+
 ```
@@ -102,7 +102,7 @@ Cada N minutos:
 ```json
 {
   "Siigo": {
-    "DataPath": "C:\\DEMOS01\\",
+    "DataPath": "C:\\SIIWI02\\",
     "PollingIntervalSeconds": 60,
     "FilesToWatch": ["Z17", "Z06", "Z49"]
   },

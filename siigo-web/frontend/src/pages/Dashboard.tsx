@@ -21,28 +21,19 @@ interface DashPrefs {
 const ALL_TABLES = [
   { key: 'clients', label: 'Clientes', color: '#4ade80', colorName: 'green' },
   { key: 'products', label: 'Productos', color: '#60a5fa', colorName: 'blue' },
-  { key: 'movements', label: 'Movimientos', color: '#facc15', colorName: 'yellow' },
   { key: 'cartera', label: 'Cartera', color: '#c084fc', colorName: 'purple' },
-  { key: 'plan_cuentas', label: 'Plan Cuentas', color: '#34d399', colorName: 'green' },
-  { key: 'activos_fijos', label: 'Activos Fijos', color: '#38bdf8', colorName: 'blue' },
-  { key: 'saldos_terceros', label: 'Saldos x Tercero', color: '#fbbf24', colorName: 'yellow' },
-  { key: 'saldos_consolidados', label: 'Saldos Consol.', color: '#a78bfa', colorName: 'purple' },
   { key: 'documentos', label: 'Documentos', color: '#2dd4bf', colorName: 'green' },
-  { key: 'terceros_ampliados', label: 'Terceros Amp.', color: '#818cf8', colorName: 'blue' },
-  { key: 'transacciones_detalle', label: 'Trans. Detalle', color: '#fb923c', colorName: 'yellow' },
-  { key: 'periodos_contables', label: 'Periodos', color: '#e879f9', colorName: 'purple' },
   { key: 'condiciones_pago', label: 'Cond. Pago', color: '#a3e635', colorName: 'green' },
-  { key: 'libros_auxiliares', label: 'Libros Aux.', color: '#22d3ee', colorName: 'blue' },
   { key: 'codigos_dane', label: 'DANE', color: '#fcd34d', colorName: 'yellow' },
-  { key: 'actividades_ica', label: 'ICA', color: '#d946ef', colorName: 'purple' },
-  { key: 'conceptos_pila', label: 'PILA', color: '#86efac', colorName: 'green' },
-  { key: 'activos_fijos_detalle', label: 'Activos Det.', color: '#93c5fd', colorName: 'blue' },
-  { key: 'audit_trail_terceros', label: 'Audit Trail', color: '#fdba74', colorName: 'yellow' },
-  { key: 'clasificacion_cuentas', label: 'Clasif. Cuentas', color: '#f0abfc', colorName: 'purple' },
+  { key: 'formulas', label: 'Formulas', color: '#a78bfa', colorName: 'purple' },
+  { key: 'vendedores_areas', label: 'Vendedores/Areas', color: '#38bdf8', colorName: 'blue' },
+  { key: 'notas_documentos', label: 'Notas Docs', color: '#facc15', colorName: 'yellow' },
+  { key: 'facturas_electronicas', label: 'Fact. Electr.', color: '#f87171', colorName: 'red' },
+  { key: 'detalle_movimientos', label: 'Det. Movimientos', color: '#4ade80', colorName: 'green' },
 ];
 
-const DEFAULT_CARDS = ['clients', 'products', 'movements', 'cartera'];
-const DEFAULT_CHART = ['clients', 'products', 'movements', 'cartera'];
+const DEFAULT_CARDS = ['clients', 'products', 'cartera'];
+const DEFAULT_CHART = ['clients', 'products', 'cartera'];
 
 const DEFAULT_PREFS: DashPrefs = {
   visibleCards: DEFAULT_CARDS,

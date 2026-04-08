@@ -6,7 +6,7 @@ import (
 )
 
 func main() {
-	dataPath := `C:\DEMOS01\`
+	dataPath := `C:\SIIWI02\`
 
 	fmt.Println("============================================")
 	fmt.Println("VALIDACION DE NUEVOS PARSERS")

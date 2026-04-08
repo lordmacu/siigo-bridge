@@ -132,12 +132,22 @@ func buildFileToTablesMap(registry map[string]*SyncTableDef) map[string][]string
 		if def.Model == nil {
 			continue
 		}
-		// Model.Table.Path is the resolved full path (e.g. C:\Archivos Siigo\Z042016)
+		// Model.Table.Path is the resolved full path (e.g. C:\SIIWI02\Z042016)
 		if def.Model.Table == nil || def.Model.Table.Path == "" {
 			continue
 		}
 		base := strings.ToUpper(filepath.Base(def.Model.Table.Path))
 		m[base] = append(m[base], tableName)
 	}
+
+	// Custom tables that read ISAM directly (not via ORM registry):
+	// cartera_cxc → Z07YYYY, ventas_productos → Z09YYYY
+	currentYear := time.Now().Format("2006")
+	z07Key := strings.ToUpper("Z07" + currentYear)
+	z09Key := strings.ToUpper("Z09" + currentYear)
+	m[z07Key] = append(m[z07Key], "cartera_cxc")
+	m[z09Key] = append(m[z09Key], "ventas_productos")
+	m[z09Key] = append(m[z09Key], "recaudo")
+
 	return m
 }

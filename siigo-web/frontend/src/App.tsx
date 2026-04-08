@@ -97,31 +97,15 @@ export default function App() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/clients" element={guard('clients', <DataPage table="clients" title="Clientes (Z17 - Terceros)" file="Z17" />)} />
           <Route path="/products" element={guard('products', <DataPage table="products" title="Productos (Z04 - Inventario)" file="Z04" />)} />
-          <Route path="/movements" element={guard('movements', <DataPage table="movements" title="Movimientos (Z49 - Transacciones)" file="Z49" />)} />
           <Route path="/cartera" element={guard('cartera', <DataPage table="cartera" title="Cartera (Z09 - Cuentas por Cobrar)" file="Z09" />)} />
-          <Route path="/plan-cuentas" element={guard('plan_cuentas', <DataPage table="plan_cuentas" title="Plan de Cuentas (Z03 - PUC)" file="Z03" />)} />
-          <Route path="/activos-fijos" element={guard('activos_fijos', <DataPage table="activos_fijos" title="Activos Fijos (Z27 - Equipos)" file="Z27" />)} />
-          <Route path="/saldos-terceros" element={guard('saldos_terceros', <DataPage table="saldos_terceros" title="Saldos por Tercero (Z25)" file="Z25" />)} />
-          <Route path="/saldos-consolidados" element={guard('saldos_consolidados', <DataPage table="saldos_consolidados" title="Saldos Consolidados (Z28)" file="Z28" />)} />
           <Route path="/documentos" element={guard('documentos', <DataPage table="documentos" title="Documentos (Z11 - Facturas)" file="Z11" />)} />
-          <Route path="/terceros-ampliados" element={guard('terceros_ampliados', <DataPage table="terceros_ampliados" title="Terceros Ampliados (Z08A)" file="Z08A" />)} />
-          <Route path="/movimientos-inventario" element={guard('movimientos_inventario', <DataPage table="movimientos_inventario" title="Movimientos Inventario (Z16)" file="Z16" />)} />
-          <Route path="/saldos-inventario" element={guard('saldos_inventario', <DataPage table="saldos_inventario" title="Saldos Inventario (Z15)" file="Z15" />)} />
-          <Route path="/activos-fijos-detalle" element={guard('activos_fijos_detalle', <DataPage table="activos_fijos_detalle" title="Activos Fijos Detalle (Z27A)" file="Z27A" />)} />
-          <Route path="/audit-trail-terceros" element={guard('audit_trail_terceros', <DataPage table="audit_trail_terceros" title="Audit Trail Terceros (Z11N)" file="Z11N" />)} />
-          <Route path="/transacciones-detalle" element={guard('transacciones_detalle', <DataPage table="transacciones_detalle" title="Transacciones Detalle (Z07T)" file="Z07T" />)} />
-          <Route path="/periodos-contables" element={guard('periodos_contables', <DataPage table="periodos_contables" title="Periodos Contables (Z26)" file="Z26" />)} />
           <Route path="/condiciones-pago" element={guard('condiciones_pago', <DataPage table="condiciones_pago" title="Condiciones de Pago (Z05)" file="Z05" />)} />
-          <Route path="/libros-auxiliares" element={guard('libros_auxiliares', <DataPage table="libros_auxiliares" title="Libros Auxiliares (Z07)" file="Z07" />)} />
           <Route path="/codigos-dane" element={guard('codigos_dane', <DataPage table="codigos_dane" title="Codigos DANE (Municipios)" file="ZDANE" />)} />
-          <Route path="/actividades-ica" element={guard('actividades_ica', <DataPage table="actividades_ica" title="Actividades ICA" file="ZICA" />)} />
-          <Route path="/conceptos-pila" element={guard('conceptos_pila', <DataPage table="conceptos_pila" title="Conceptos PILA" file="ZPILA" />)} />
-          <Route path="/clasificacion-cuentas" element={guard('clasificacion_cuentas', <DataPage table="clasificacion_cuentas" title="Clasificacion Cuentas (Z279)" file="Z279" />)} />
-          <Route path="/historial" element={guard('historial', <DataPage table="historial" title="Historial (Z18)" file="Z18" />)} />
-          <Route path="/maestros" element={guard('maestros', <DataPage table="maestros" title="Maestros (Z06)" file="Z06" />)} />
           <Route path="/formulas" element={guard('formulas', <DataPage table="formulas" title="Formulas / Recetas (Z06)" file="Z06" />)} />
-          <Route path="/docs-inventario" element={guard('docs_inventario', <DataPage table="docs_inventario" title="Docs Inventario (Z11I)" file="Z11I" />)} />
           <Route path="/vendedores-areas" element={guard('vendedores_areas', <DataPage table="vendedores_areas" title="Vendedores / Areas (Z06A)" file="Z06A" />)} />
+          <Route path="/notas-documentos" element={guard('notas_documentos', <DataPage table="notas_documentos" title="Notas Documentos (Z49 - Lotes/OC)" file="Z49" />)} />
+          <Route path="/facturas-electronicas" element={guard('facturas_electronicas', <DataPage table="facturas_electronicas" title="Facturas Electronicas (Z09ELE)" file="Z09ELE" />)} />
+          <Route path="/detalle-movimientos" element={guard('detalle_movimientos', <DataPage table="detalle_movimientos" title="Detalle Movimientos (Z17 - Productos)" file="Z17" />)} />
           <Route path="/logs" element={guard('logs', <Logs />)} />
           <Route path="/errors" element={guard('errors', <ErrorSummary />)} />
           <Route path="/field-mappings" element={guard('field-mappings', <FieldMappings />)} />

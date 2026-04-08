@@ -6,7 +6,7 @@ import (
 )
 
 func main() {
-	dataPath := `C:\DEMOS01`
+	dataPath := `C:\SIIWI02`
 
 	// Test Z16 - Movimientos Inventario
 	fmt.Println("=== Z16 - Movimientos Inventario ===")

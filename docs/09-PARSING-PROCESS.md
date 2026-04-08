@@ -50,7 +50,7 @@ El proceso para mapear un archivo ISAM desconocido sigue estos pasos:
 ### Paso 1: Identificar el archivo y su tamano de registro
 
 ```
-$ ls -la C:\DEMOS01\Z17*
+$ ls -la C:\SIIWI02\Z17*
 Z17      (datos, ~104KB)
 Z17.idx  (indices)
 ```
@@ -65,7 +65,7 @@ recSize := binary.BigEndian.Uint16(data[0x38:0x3A])
 
 Ejecutamos el hexdump tool apuntando al archivo:
 ```
-$ go run ./cmd/hexdump/ C:\DEMOS01\Z17
+$ go run ./cmd/hexdump/ C:\SIIWI02\Z17
 ```
 
 Esto muestra cada registro con sus regiones de datos. Ejemplo del primer registro Z17:
@@ -147,7 +147,7 @@ if extfh {
 
 ### 5.1 Z17 — Terceros (Clientes/Proveedores)
 
-**Archivo**: `C:\DEMOS01\Z17`
+**Archivo**: `C:\SIIWI02\Z17`
 **Record size**: 1,438 bytes
 **Total registros**: 73 (empresa demo)
 **Parser**: `siigo-common/parsers/terceros.go`
@@ -216,7 +216,7 @@ Offset  Largo  Campo           Ejemplo                           Notas
 
 ### 5.2 Z06CP — Productos
 
-**Archivo**: `C:\DEMOS01\Z06CP`
+**Archivo**: `C:\SIIWI02\Z06CP`
 **Record size**: 2,036 bytes
 **Total registros**: 17 (empresa demo)
 **Parser**: `siigo-common/parsers/productos.go`
@@ -253,7 +253,7 @@ Offset  Largo  Campo             Ejemplo                          Notas
 
 ### 5.3 Z49 — Movimientos / Transacciones
 
-**Archivo**: `C:\DEMOS01\Z49`
+**Archivo**: `C:\SIIWI02\Z49`
 **Record size**: 2,295 bytes
 **Total registros**: 3,233 (parseados)
 **Parser**: `siigo-common/parsers/movimientos.go`
@@ -295,7 +295,7 @@ Los registros con espacio al inicio son indexados por NIT, no por tipo de compro
 
 ### 5.4 Z09YYYY — Cartera (Cuentas por Cobrar/Pagar)
 
-**Archivo**: `C:\DEMOS01\Z092013`, `Z092014`, `Z092015`, `Z092016`
+**Archivo**: `C:\SIIWI02\Z092013`, `Z092014`, `Z092015`, `Z092016`
 **Record size**: 1,152 bytes
 **Total registros**: 567 (2013), 115 (2014), 77 (2016)
 **Parser**: `siigo-common/parsers/cartera.go`
@@ -345,7 +345,7 @@ Offset  Largo  Campo             Ejemplo                         Notas
 
 ### 5.5 Z06 — Maestros de Configuracion
 
-**Archivo**: `C:\DEMOS01\Z06`
+**Archivo**: `C:\SIIWI02\Z06`
 **Record size**: 4,096 bytes
 **Parser**: `siigo-common/parsers/maestros.go`
 
@@ -430,7 +430,7 @@ Confirmado: el nombre empieza en byte 36.
 
 ```bash
 cd siigo-sync
-go run ./cmd/hexdump/ C:\DEMOS01\Z17
+go run ./cmd/hexdump/ C:\SIIWI02\Z17
 ```
 
 Muestra regiones no-vacias de registros seleccionados + escaneo de fechas.
@@ -728,17 +728,17 @@ Esta guia es para agregar soporte de un nuevo archivo ISAM (ej: Z70, Z003, C03, 
 
 ```bash
 # Ver archivos disponibles
-ls C:/DEMOS01/Z70*
+ls C:/SIIWI02/Z70*
 
 # Ver tamano
-ls -la C:/DEMOS01/Z70
+ls -la C:/SIIWI02/Z70
 ```
 
 ### Paso 2: Obtener hex dump del archivo
 
 ```bash
 cd siigo-sync
-go run ./cmd/hexdump/ 'C:\DEMOS01\Z70'
+go run ./cmd/hexdump/ 'C:\SIIWI02\Z70'
 ```
 
 Esto produce:
@@ -763,7 +763,7 @@ import (
 )
 
 func main() {
-    records, recSize, err := isam.ReadIsamFile(`C:\DEMOS01\Z70`)
+    records, recSize, err := isam.ReadIsamFile(`C:\SIIWI02\Z70`)
     if err != nil {
         fmt.Printf("ERROR: %v\n", err)
         return
@@ -1005,7 +1005,7 @@ func (t *Tercero) ToFinearomClient() map[string]interface{} {
 
 El directorio de datos se configura en `C:\Siigo\FILEPATH.TXT` y tipicamente es:
 ```
-C:\DEMOS01\
+C:\SIIWI02\
 ```
 
 ### 15.2 Configuracion EXTFH
@@ -1058,13 +1058,13 @@ IDXFORMAT=8
 Si eres una IA y necesitas agregar soporte para un nuevo archivo ISAM de Siigo, sigue esta checklist:
 
 ### Pre-requisitos
-- [ ] El directorio de datos es `C:\DEMOS01\` (verificar en config o FILEPATH.TXT)
+- [ ] El directorio de datos es `C:\SIIWI02\` (verificar en config o FILEPATH.TXT)
 - [ ] El modulo compartido esta en `siigo-common/` con paquetes `isam/` y `parsers/`
 - [ ] Ambos proyectos usan `replace siigo-common => ../siigo-common` en go.mod
 
 ### Descubrimiento
-- [ ] Verificar que el archivo existe: `ls C:/DEMOS01/ZXXX*`
-- [ ] Ejecutar hex dump: `cd siigo-sync && go run ./cmd/hexdump/ 'C:\DEMOS01\ZXXX'`
+- [ ] Verificar que el archivo existe: `ls C:/SIIWI02/ZXXX*`
+- [ ] Ejecutar hex dump: `cd siigo-sync && go run ./cmd/hexdump/ 'C:\SIIWI02\ZXXX'`
 - [ ] Anotar: EXTFH available (true/false), total records, record size
 - [ ] Identificar el primer byte de cada registro (tipo/clave)
 - [ ] Buscar fechas en la salida (patron YYYYMMDD con offsets)
@@ -1112,7 +1112,7 @@ Si eres una IA y necesitas agregar soporte para un nuevo archivo ISAM de Siigo, 
 ┌──────────────┐    ReadIsamFile()    ┌──────────────┐   ParseXxx()    ┌──────────────┐
 │  Archivo     │ ──────────────────→  │  [][]byte    │ ──────────────→ │  []Struct    │
 │  ISAM        │    (extfh.go o       │  registros   │   (parsers/)    │  tipados     │
-│  C:\DEMOS01\ │     reader.go)       │  crudos      │                 │              │
+│  C:\SIIWI02\ │     reader.go)       │  crudos      │                 │              │
 └──────────────┘                      └──────────────┘                 └──────┬───────┘
                                                                               │
                                                                               │ DetectChanges()
@@ -1334,7 +1334,7 @@ client.SyncCartera(data)   // POST /siigo/cartera
 ```json
 {
   "siigo": {
-    "data_path": "C:\\DEMOS01\\"
+    "data_path": "C:\\SIIWI02\\"
   },
   "finearom": {
     "base_url": "https://finearom.com/api",

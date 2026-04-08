@@ -255,7 +255,7 @@ func classify(name string) (string, string) {
 }
 
 func main() {
-	dir := `C:\Archivos Siigo`
+	dir := `C:\SIIWI02`
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		fmt.Println("Error:", err)

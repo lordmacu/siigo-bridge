@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	defaultDataPath         = `C:\DEMOS01`
+	defaultDataPath         = `C:\SIIWI02`
 	defaultDBPath           = "isam_v2.db"
 	defaultReportPath       = "isam_v2_report.json"
 	defaultSamplePerFile    = 250

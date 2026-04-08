@@ -76,7 +76,7 @@ static string LoadURL(string codigo)
 #### Métodos de Instancia
 ```csharp
 // Carga la ruta del directorio de datos desde FILEPATH.TXT
-// Retorna: "C:\DEMOS01\" (con trailing backslash)
+// Retorna: "C:\SIIWI02\" (con trailing backslash)
 // IMPORTANTE: busca FILEPATH.TXT en el working directory actual
 string LoadFilePath()
 ```
@@ -314,7 +314,7 @@ using SIIGOCV.SESSION;
 
 // 1. Cargar ruta de datos
 var launcher = new SIIGOLauncher();
-string filePath = launcher.LoadFilePath();  // "C:\DEMOS01\"
+string filePath = launcher.LoadFilePath();  // "C:\SIIWI02\"
 
 // 2. Cargar configuración
 SIIGOLauncher.LoadConfigEmp();

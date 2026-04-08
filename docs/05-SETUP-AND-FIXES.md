@@ -12,7 +12,7 @@
 ```
 C:\Siigo\                    → Programas y configuración
 C:\Siigo\MFServer90\         → Instaladores Micro Focus COBOL
-C:\DEMOS01\                  → Datos de la empresa demo
+C:\SIIWI02\                  → Datos de la empresa demo
 C:\ProgramData\Micro Focus\  → Licencias y configuración del runtime
 ```
 
@@ -194,7 +194,7 @@ System.IO.FileNotFoundException: No se puede cargar el archivo o ensamblado 'Nat
 
 ### Síntoma
 ```
-El proceso no puede obtener acceso al archivo 'C:\DEMOS01\Z003' porque está siendo utilizado por otro proceso.
+El proceso no puede obtener acceso al archivo 'C:\SIIWI02\Z003' porque está siendo utilizado por otro proceso.
 ```
 
 ### Causa

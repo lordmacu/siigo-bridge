@@ -12,12 +12,12 @@ func main() {
 		label string
 		max   int
 	}{
-		{`C:\DEMOS01\Z052014`, "Z05 (NOMINA/CREDITOS?)", 2},
-		{`C:\DEMOS01\Z072016`, "Z07 (LIBROS AUXILIARES)", 2},
-		{`C:\DEMOS01\Z262016`, "Z26 (???)", 2},
-		{`C:\DEMOS01\Z182013`, "Z18 (???)", 2},
-		{`C:\DEMOS01\ZDANE`, "ZDANE (CODIGOS DANE)", 3},
-		{`C:\DEMOS01\ZPILA`, "ZPILA (PILA/SEGURIDAD SOCIAL)", 2},
+		{`C:\SIIWI02\Z052014`, "Z05 (NOMINA/CREDITOS?)", 2},
+		{`C:\SIIWI02\Z072016`, "Z07 (LIBROS AUXILIARES)", 2},
+		{`C:\SIIWI02\Z262016`, "Z26 (???)", 2},
+		{`C:\SIIWI02\Z182013`, "Z18 (???)", 2},
+		{`C:\SIIWI02\ZDANE`, "ZDANE (CODIGOS DANE)", 3},
+		{`C:\SIIWI02\ZPILA`, "ZPILA (PILA/SEGURIDAD SOCIAL)", 2},
 	}
 
 	for _, f := range files {

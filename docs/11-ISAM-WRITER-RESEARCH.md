@@ -518,7 +518,7 @@ Cuando un leaf node excede capacidad:
 
 Siigo usa `DATACOMPRESS` en sus archivos? Verifiquemos:
 
-Los archivos de DEMOS01 NO usan compresion — todos los records son type=4 (NORMAL) o type=8 (REDREF para archivos grandes como Z06). La compresion (types 5/REDUCED y 7/REFDATA) no se observa en los datos de produccion.
+Los archivos de SIIWI02 NO usan compresion — todos los records son type=4 (NORMAL) o type=8 (REDREF para archivos grandes como Z06). La compresion (types 5/REDUCED y 7/REFDATA) no se observa en los datos de produccion.
 
 **Conclusion**: Para los archivos de Siigo, NO necesitamos implementar CBLDC001/003.
 

@@ -1,6 +1,6 @@
 # Siigo - Diccionario de Datos
 
-Directorio de datos: `C:\DEMOS01\` (configurado en `C:\Siigo\FILEPATH.TXT`)
+Directorio de datos: `C:\SIIWI02\` (configurado en `C:\Siigo\FILEPATH.TXT`)
 
 ## Convenciones de Nomenclatura
 
