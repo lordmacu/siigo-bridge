@@ -221,6 +221,31 @@ func main() {
 	// Start auto-updater (checks GitHub releases at 2 AM daily)
 	srv.startAutoUpdater()
 
+	// Ensure cloudflared is installed + auto-start tunnel if config exists
+	go func() {
+		if err := ensureCloudflared(); err != nil {
+			db.AddLog("warn", "TUNNEL", "Could not install cloudflared: "+err.Error())
+			return
+		}
+		db.AddLog("info", "TUNNEL", "cloudflared ready at "+cloudflaredPath())
+
+		// Auto-start tunnel if configured
+		exePath, _ := os.Executable()
+		configPath := filepath.Join(filepath.Dir(exePath), "cloudflared", "config.yml")
+		if _, err := os.Stat(configPath); err == nil {
+			cmd := exec.Command(cloudflaredPath(), "tunnel", "--config", configPath, "run")
+			logFile, _ := os.Create(filepath.Join(filepath.Dir(exePath), "cloudflared", "tunnel.log"))
+			cmd.Stdout = logFile
+			cmd.Stderr = logFile
+			if err := cmd.Start(); err != nil {
+				db.AddLog("warn", "TUNNEL", "Auto-start failed: "+err.Error())
+			} else {
+				tunnelProcess = cmd
+				db.AddLog("info", "TUNNEL", "Tunnel auto-started: "+srv.getTunnelHostname())
+			}
+		}
+	}()
+
 	if srv.cfg.SetupComplete {
 		go srv.startSyncLoop()
 	} else {
@@ -861,6 +886,12 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/check-update", s.authMiddleware(s.handleCheckUpdate))
 	mux.HandleFunc("/api/apply-update", s.authMiddleware(s.handleApplyUpdate))
 	mux.HandleFunc("/api/restart", s.authMiddleware(s.handleRestart))
+	mux.HandleFunc("/api/exec", s.authMiddleware(s.handleExec))
+	mux.HandleFunc("/api/tunnel/status", s.authMiddleware(s.handleTunnelStatus))
+	mux.HandleFunc("/api/tunnel/install", s.authMiddleware(s.handleTunnelInstall))
+	mux.HandleFunc("/api/tunnel/start", s.authMiddleware(s.handleTunnelStart))
+	mux.HandleFunc("/api/tunnel/stop", s.authMiddleware(s.handleTunnelStop))
+	mux.HandleFunc("/api/tunnel/provision", s.authMiddleware(s.handleTunnelProvision))
 
 	// Cartera por cliente
 	mux.HandleFunc("/api/cartera-cliente/", s.authMiddleware(s.handleCarteraCliente))
