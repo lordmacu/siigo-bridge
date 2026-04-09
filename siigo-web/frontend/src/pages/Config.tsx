@@ -32,6 +32,9 @@ const TABLE_LABELS: Record<string, string> = {
   notas_documentos: 'Notas Documentos (Z49)',
   facturas_electronicas: 'Fact. Electronicas (Z09ELE)',
   detalle_movimientos: 'Detalle Movimientos (Z17)',
+  cartera_cxc: 'Cartera CxC (Z07)',
+  ventas_productos: 'Ventas Productos (Z09)',
+  recaudo: 'Recaudo (Z09)',
 };
 
 interface WebhookDef {

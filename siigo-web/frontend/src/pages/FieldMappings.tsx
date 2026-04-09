@@ -13,6 +13,12 @@ const MODULE_LABELS: Record<string, string> = {
   codigos_dane: 'Codigos DANE',
   formulas: 'Formulas/Recetas',
   vendedores_areas: 'Vendedores/Areas',
+  notas_documentos: 'Notas Documentos',
+  facturas_electronicas: 'Fact. Electronicas',
+  detalle_movimientos: 'Detalle Movimientos',
+  cartera_cxc: 'Cartera CxC',
+  ventas_productos: 'Ventas Productos',
+  recaudo: 'Recaudo',
 };
 
 export default function FieldMappings() {
