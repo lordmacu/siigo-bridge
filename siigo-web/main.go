@@ -1955,6 +1955,9 @@ func (s *Server) diffCarteraCxC() {
 		}
 		s.webhookDispatch("table_changed", webhookData)
 
+		nits := uniqueNITsFromRecords(append(addedRecords, editedRecords...))
+		s.dispatchReportWebhooks("cartera_cxc", nits)
+
 		if s.cfg.IsSendEnabled("cartera_cxc") && !s.sendPaused {
 			go s.sendTableNow("cartera_cxc")
 		}
@@ -2185,6 +2188,10 @@ func (s *Server) diffVentasProductos() {
 		}
 		s.webhookDispatch("table_changed", webhookData)
 
+		// Also dispatch processed report webhooks per affected NIT
+		nits := uniqueNITsFromRecords(append(addedRecords, editedRecords...))
+		s.dispatchReportWebhooks("ventas_productos", nits)
+
 		if s.cfg.IsSendEnabled("ventas_productos") && !s.sendPaused {
 			go s.sendTableNow("ventas_productos")
 		}
@@ -2414,6 +2421,9 @@ func (s *Server) diffRecaudo() {
 			webhookData["deleted"] = deletedKeys
 		}
 		s.webhookDispatch("table_changed", webhookData)
+
+		nits := uniqueNITsFromRecords(append(addedRecords, editedRecords...))
+		s.dispatchReportWebhooks("recaudo", nits)
 
 		if s.cfg.IsSendEnabled("recaudo") && !s.sendPaused {
 			go s.sendTableNow("recaudo")
