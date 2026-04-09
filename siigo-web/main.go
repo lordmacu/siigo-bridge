@@ -5232,17 +5232,29 @@ func (s *Server) handleCarteraCliente(w http.ResponseWriter, r *http.Request) {
 	if v, err := strconv.Atoi(r.URL.Query().Get("dias_cobro")); err == nil {
 		diasCobro = v
 	}
+	fechaDesde := r.URL.Query().Get("desde")       // YYYY-MM-DD
+	fechaHasta := r.URL.Query().Get("hasta")       // YYYY-MM-DD
 
 	conn := s.db.GetConn()
 	today := time.Now().Format("2006-01-02")
 
-	var whereNIT string
+	conditions := []string{}
 	var args []interface{}
-	if nit == "all" {
-		whereNIT = "1=1"
-	} else {
-		whereNIT = "nit = ?"
+	if nit != "all" {
+		conditions = append(conditions, "nit = ?")
 		args = append(args, nit)
+	}
+	if fechaDesde != "" {
+		conditions = append(conditions, "fecha >= ?")
+		args = append(args, fechaDesde)
+	}
+	if fechaHasta != "" {
+		conditions = append(conditions, "fecha <= ?")
+		args = append(args, fechaHasta)
+	}
+	whereClause := "1=1"
+	if len(conditions) > 0 {
+		whereClause = strings.Join(conditions, " AND ")
 	}
 
 	rows, err := conn.Query(fmt.Sprintf(`
@@ -5251,7 +5263,7 @@ func (s *Server) handleCarteraCliente(w http.ResponseWriter, r *http.Request) {
 		FROM cartera_cxc
 		WHERE %s
 		ORDER BY fecha DESC, num_documento DESC
-	`, whereNIT), args...)
+	`, whereClause), args...)
 	if err != nil {
 		jsonError(w, "Query error: "+err.Error(), 500)
 		return

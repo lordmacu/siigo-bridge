@@ -81,7 +81,20 @@ func (s *Server) startQuickTunnel() {
 		port = "3210"
 	}
 
-	cmd := exec.Command(cloudflaredPath(), "tunnel", "--url", "http://localhost:"+port, "--no-autoupdate")
+	exePath, _ := os.Executable()
+	logDir := filepath.Join(filepath.Dir(exePath), "cloudflared")
+	os.MkdirAll(logDir, 0755)
+
+	// Create empty config to override the default ~/.cloudflared/config.yml
+	emptyConfig := filepath.Join(logDir, "empty-config.yml")
+	os.WriteFile(emptyConfig, []byte("# Empty config to force quick tunnel mode\n"), 0644)
+
+	cmd := exec.Command(cloudflaredPath(),
+		"--config", emptyConfig,
+		"tunnel",
+		"--url", "http://localhost:"+port,
+		"--no-autoupdate",
+	)
 
 	stderrPipe, err := cmd.StderrPipe()
 	if err != nil {
@@ -89,9 +102,6 @@ func (s *Server) startQuickTunnel() {
 		return
 	}
 
-	exePath, _ := os.Executable()
-	logDir := filepath.Join(filepath.Dir(exePath), "cloudflared")
-	os.MkdirAll(logDir, 0755)
 	logFile, _ := os.Create(filepath.Join(logDir, "quick-tunnel.log"))
 	cmd.Stdout = logFile
 

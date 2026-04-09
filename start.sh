@@ -130,7 +130,8 @@ is_running() {
 }
 
 tunnel_url() {
-    echo "https://${TUNNEL_HOSTNAME:-localhost}"
+    # Consulta la URL del quick tunnel al binario (si corre)
+    curl -s http://localhost:${PORT}/api/tunnel/status 2>/dev/null | python -c "import json,sys; print(json.load(sys.stdin).get('public_url',''))" 2>/dev/null || echo ""
 }
 
 ensure_config() {
@@ -232,20 +233,10 @@ start_server() {
 }
 
 # -------------------------------------------------------
-# start_tunnel: inicia Cloudflare tunnel
+# start_tunnel: DEPRECATED - ahora el tunnel lo maneja siigo-web.exe
 # -------------------------------------------------------
 start_tunnel() {
-    # Matar tunnel previo
-    kill_by_pid "$TUNNEL_PID_FILE" "Tunnel" || kill_by_name "cloudflared.exe" || true
-    sleep 1
-
-    log "Iniciando Cloudflare Tunnel (${TUNNEL_HOSTNAME:-localhost})..."
-    cloudflared tunnel run siigo > /tmp/cloudflared.log 2>&1 &
-    echo $! > "$TUNNEL_PID_FILE"
-    sleep 5
-
-    # Named tunnel always uses the same URL
-    log "Tunnel activo: https://${TUNNEL_HOSTNAME:-localhost}"
+    log "Tunnel se maneja desde siigo-web.exe (quick tunnel automatico)"
 }
 
 # -------------------------------------------------------
