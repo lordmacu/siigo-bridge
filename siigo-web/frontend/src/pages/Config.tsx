@@ -560,7 +560,7 @@ export default function Config() {
                       <div className="form-group">
                         <label>Eventos</label>
                         <div className="webhook-events">
-                          {['sync_complete', 'send_complete', 'send_paused', 'record_change'].map(ev => (
+                          {['sync_complete', 'send_complete', 'send_paused', 'record_change', 'table_changed', 'ventas_report', 'recaudo_report', 'cartera_report', '*'].map(ev => (
                             <label key={ev} className="webhook-event-check">
                               <input type="checkbox" checked={hook.events.includes(ev)} onChange={() => {
                                 const h = [...whHooks];
