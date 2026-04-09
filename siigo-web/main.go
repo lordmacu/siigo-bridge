@@ -2234,6 +2234,7 @@ func (s *Server) diffRecaudo() {
 	adds, edits := 0, 0
 	currentKeys := make(map[string]bool)
 	lineCount := make(map[string]int)
+	var addedRecords, editedRecords []map[string]interface{}
 
 	reFactura := regexp.MustCompile(`(?:PG|ABONO|IMPTO[^F]*)\s*F\d+\s*-\s*(\d+)`)
 	reDescuento := regexp.MustCompile(`F\d+\s*-\s*(\d+)`)
@@ -2361,14 +2362,38 @@ func (s *Server) diffRecaudo() {
 		action := s.db.UpsertGeneric("recaudo", "record_key", key, hash, rec)
 		if action == "add" {
 			adds++
+			addedRecords = append(addedRecords, rec)
 		} else if action == "edit" {
 			edits++
+			editedRecords = append(editedRecords, rec)
 		}
 	}
 
 	deletedKeys := s.db.MarkDeletedGenericKeys("recaudo", "record_key", currentKeys)
 	deletes := len(deletedKeys)
 	s.db.AddLog("info", "DETECT", fmt.Sprintf("[Recaudo] Z09%s: %d new, %d updated, %d deleted (total: %d)", currentYear, adds, edits, deletes, len(currentKeys)))
+
+	// Webhook dispatch
+	if (adds > 0 || edits > 0 || deletes > 0) && s.cfg.SetupComplete && s.setupPopulating == "" {
+		webhookData := map[string]interface{}{
+			"table": "recaudo",
+			"label": "Recaudo",
+		}
+		if len(addedRecords) > 0 {
+			webhookData["added"] = addedRecords
+		}
+		if len(editedRecords) > 0 {
+			webhookData["edited"] = editedRecords
+		}
+		if deletes > 0 {
+			webhookData["deleted"] = deletedKeys
+		}
+		s.webhookDispatch("table_changed", webhookData)
+
+		if s.cfg.IsSendEnabled("recaudo") && !s.sendPaused {
+			go s.sendTableNow("recaudo")
+		}
+	}
 }
 
 // handleRecaudo serves GET /api/recaudo/{nit} or /api/recaudo/all

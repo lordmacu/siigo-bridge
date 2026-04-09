@@ -34,6 +34,9 @@ export default function Sidebar({ onLogout, open, userInfo }: { onLogout?: () =>
   const [paused, setPaused] = useState(false);
   const [watcherActive, setWatcherActive] = useState(false);
   const [tableCounts, setTableCounts] = useState<Record<string, number>>({});
+  const [version, setVersion] = useState<string>('');
+  const [updateAvailable, setUpdateAvailable] = useState(false);
+  const [latestVersion, setLatestVersion] = useState<string>('');
 
   const pollStatus = useCallback(async () => {
     try {
@@ -69,6 +72,25 @@ export default function Sidebar({ onLogout, open, userInfo }: { onLogout?: () =>
     const interval = setInterval(pollStatus, 3000);
     return () => clearInterval(interval);
   }, [pollStatus]);
+
+  // Load version and check for updates
+  useEffect(() => {
+    const loadVersion = async () => {
+      try {
+        const health = await fetch('/health').then(r => r.json());
+        setVersion(health.version || '');
+      } catch { /* ignore */ }
+
+      try {
+        const upd = await api.checkUpdate();
+        if (upd.update_available) {
+          setUpdateAvailable(true);
+          setLatestVersion(upd.latest_version || '');
+        }
+      } catch { /* ignore */ }
+    };
+    loadVersion();
+  }, []);
 
   const handleSync = async () => {
     await api.syncNow();
@@ -141,6 +163,26 @@ export default function Sidebar({ onLogout, open, userInfo }: { onLogout?: () =>
           <button className="logout-btn" onClick={onLogout}>
             Cerrar Sesion
           </button>
+        )}
+        {version && (
+          <div className="sidebar-version" style={{
+            marginTop: '10px',
+            padding: '6px 8px',
+            fontSize: '11px',
+            color: updateAvailable ? '#fbbf24' : '#94a3b8',
+            textAlign: 'center',
+            borderTop: '1px solid #334155',
+            cursor: updateAvailable ? 'pointer' : 'default'
+          }}
+          onClick={() => {
+            if (updateAvailable && confirm(`Actualizar a v${latestVersion}?\n\nEl programa se reiniciara automaticamente.`)) {
+              api.applyUpdate();
+            }
+          }}
+          title={updateAvailable ? `Click para actualizar a v${latestVersion}` : ''}
+          >
+            {updateAvailable ? `v${version} → v${latestVersion} (actualizar)` : `v${version}`}
+          </div>
         )}
       </div>
     </div>
