@@ -860,6 +860,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/user-prefs", s.authMiddleware(s.handleUserPrefs))
 	mux.HandleFunc("/api/check-update", s.authMiddleware(s.handleCheckUpdate))
 	mux.HandleFunc("/api/apply-update", s.authMiddleware(s.handleApplyUpdate))
+	mux.HandleFunc("/api/restart", s.authMiddleware(s.handleRestart))
 
 	// Cartera por cliente
 	mux.HandleFunc("/api/cartera-cliente/", s.authMiddleware(s.handleCarteraCliente))

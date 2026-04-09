@@ -98,6 +98,7 @@ export const api = {
   retryErrors: (table: string) => post('/retry-errors', { table }),
   checkUpdate: () => get('/check-update'),
   applyUpdate: () => post('/apply-update'),
+  restart: () => post('/restart'),
   testConnection: () => post('/test-connection'),
   validatePath: (path: string) => post('/validate-path', { path }),
   clearDatabase: () => post('/clear-database'),

@@ -183,6 +183,29 @@ func (s *Server) handleApplyUpdate(w http.ResponseWriter, r *http.Request) {
 	go s.checkAndUpdate()
 }
 
+// handleRestart restarts the application
+func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		jsonError(w, "POST only", 405)
+		return
+	}
+	jsonResponse(w, map[string]string{"status": "restarting"})
+	s.db.AddLog("info", "APP", "Restart requested via API")
+
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		exePath, err := os.Executable()
+		if err != nil {
+			return
+		}
+		cmd := exec.Command(exePath)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		cmd.Start()
+		os.Exit(0)
+	}()
+}
+
 func getLatestRelease() (*githubRelease, error) {
 	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Get(updateCheckURL)

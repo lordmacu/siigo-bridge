@@ -184,6 +184,32 @@ export default function Sidebar({ onLogout, open, userInfo }: { onLogout?: () =>
             {updateAvailable ? `v${version} → v${latestVersion} (actualizar)` : `v${version}`}
           </div>
         )}
+        <button
+          className="restart-btn"
+          style={{
+            marginTop: '6px',
+            padding: '6px 12px',
+            fontSize: '11px',
+            background: '#1e293b',
+            color: '#94a3b8',
+            border: '1px solid #334155',
+            borderRadius: '4px',
+            cursor: 'pointer',
+            width: '100%'
+          }}
+          onClick={async () => {
+            if (confirm('Reiniciar el programa?\n\nEl servidor estara fuera de linea unos segundos.')) {
+              try {
+                await api.restart();
+                alert('Reiniciando... espera unos segundos y recarga la pagina.');
+              } catch {
+                alert('Error al reiniciar');
+              }
+            }
+          }}
+        >
+          Reiniciar Programa
+        </button>
       </div>
     </div>
   );
