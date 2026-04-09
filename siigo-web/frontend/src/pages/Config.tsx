@@ -125,7 +125,7 @@ export default function Config() {
       });
     }).catch(() => {});
     api.getAllowEditDelete().then(r => setAllowEditDelete(r.enabled === true)).catch(() => {});
-    fetch('/api/global-send', { headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } }).then(r => r.json()).then(r => setGlobalSend(r.enabled === true)).catch(() => {});
+    fetch('/api/global-send', { headers: { 'Authorization': `Bearer ${localStorage.getItem('siigo_token')}` } }).then(r => r.json()).then(r => setGlobalSend(r.enabled === true)).catch(() => {});
     api.getDetectEnabled().then(setDetectEnabled).catch(() => {});
     api.getSendEnabled().then(setSendEnabled).catch(() => {});
     api.getWebhookConfig().then(cfg => {
@@ -329,7 +329,7 @@ export default function Config() {
               <SectionTitle>Conexion a Finearom</SectionTitle>
               <ToggleRow checked={globalSend} onChange={async () => {
                     const val = !globalSend;
-                    await fetch('/api/global-send', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` }, body: JSON.stringify({ enabled: val }) });
+                    await fetch('/api/global-send', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('siigo_token')}` }, body: JSON.stringify({ enabled: val }) });
                     setGlobalSend(val);
                   }} activeLabel="Envio a Finearom ACTIVO" inactiveLabel="Envio a Finearom DESACTIVADO" />
               <FormGroup label="Base URL">

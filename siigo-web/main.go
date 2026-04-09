@@ -3663,7 +3663,10 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		s.cfg.Finearom.BaseURL = body.BaseURL
 		s.cfg.Finearom.Email = body.Email
-		s.cfg.Finearom.Password = body.Password
+		// Only update password if it's not the masked value (don't overwrite real password with asterisks)
+		if body.Password != "" && !strings.Contains(body.Password, "***") {
+			s.cfg.Finearom.Password = body.Password
+		}
 		s.cfg.Sync.IntervalSeconds = body.Interval
 		if body.SendInterval > 0 {
 			s.cfg.Sync.SendIntervalSeconds = body.SendInterval
