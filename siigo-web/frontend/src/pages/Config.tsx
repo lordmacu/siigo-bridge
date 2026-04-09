@@ -522,6 +522,31 @@ export default function Config() {
                         </div>
                       </div>
                     )}
+                    <div className="url-row" style={{ marginTop: 12 }}>
+                      <button
+                        className="btn-save"
+                        onClick={async () => {
+                          if (!confirm('Regenerar la URL del tunnel?\n\nLa URL actual dejara de funcionar.')) return;
+                          try {
+                            const res = await fetch('/api/tunnel/start', {
+                              method: 'POST',
+                              headers: { 'Authorization': `Bearer ${localStorage.getItem('siigo_token')}` }
+                            });
+                            const data = await res.json();
+                            if (data.status === 'starting') {
+                              showToast('success', 'Tunnel reiniciando. La nueva URL aparecera en unos segundos.');
+                              setTimeout(() => window.location.reload(), 8000);
+                            } else {
+                              showToast('error', 'Error: ' + (data.error || 'Fallo'));
+                            }
+                          } catch (e) {
+                            showToast('error', 'Error: ' + e);
+                          }
+                        }}
+                      >
+                        Generar nueva URL de Tunnel
+                      </button>
+                    </div>
                   </div>
                 );
               })()}

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -8,27 +10,24 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
-// TunnelConfig holds the cloudflare tunnel settings
-type TunnelConfig struct {
-	Enabled     bool   `json:"enabled"`
-	TunnelID    string `json:"tunnel_id"`
-	Hostname    string `json:"hostname"`
-	Credentials string `json:"credentials_path"`
-}
-
-var tunnelProcess *exec.Cmd
+var (
+	tunnelProcess    *exec.Cmd
+	currentTunnelURL string
+	tunnelMu         sync.Mutex
+)
 
 const cloudflaredDownloadURL = "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe"
 
 // cloudflaredPath returns the path to cloudflared.exe in the SiigoWeb directory
 func cloudflaredPath() string {
 	exePath, _ := os.Executable()
-	exeDir := filepath.Dir(exePath)
-	return filepath.Join(exeDir, "cloudflared.exe")
+	return filepath.Join(filepath.Dir(exePath), "cloudflared.exe")
 }
 
 // ensureCloudflared downloads cloudflared.exe if not already present
@@ -38,7 +37,6 @@ func ensureCloudflared() error {
 		return nil // already exists
 	}
 
-	// Download from official GitHub release
 	client := &http.Client{Timeout: 5 * time.Minute}
 	resp, err := client.Get(cloudflaredDownloadURL)
 	if err != nil {
@@ -63,19 +61,210 @@ func ensureCloudflared() error {
 	return nil
 }
 
+// startQuickTunnel starts a cloudflare quick tunnel (random trycloudflare.com URL)
+// and sends the URL via Telegram once detected.
+func (s *Server) startQuickTunnel() {
+	if err := ensureCloudflared(); err != nil {
+		s.db.AddLog("warn", "TUNNEL", "Cannot install cloudflared: "+err.Error())
+		return
+	}
+
+	tunnelMu.Lock()
+	if tunnelProcess != nil && tunnelProcess.Process != nil {
+		tunnelMu.Unlock()
+		return // already running
+	}
+	tunnelMu.Unlock()
+
+	port := s.cfg.Server.Port
+	if port == "" {
+		port = "3210"
+	}
+
+	cmd := exec.Command(cloudflaredPath(), "tunnel", "--url", "http://localhost:"+port, "--no-autoupdate")
+
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		s.db.AddLog("error", "TUNNEL", "Cannot create stderr pipe: "+err.Error())
+		return
+	}
+
+	exePath, _ := os.Executable()
+	logDir := filepath.Join(filepath.Dir(exePath), "cloudflared")
+	os.MkdirAll(logDir, 0755)
+	logFile, _ := os.Create(filepath.Join(logDir, "quick-tunnel.log"))
+	cmd.Stdout = logFile
+
+	if err := cmd.Start(); err != nil {
+		s.db.AddLog("error", "TUNNEL", "Cannot start cloudflared: "+err.Error())
+		return
+	}
+
+	tunnelMu.Lock()
+	tunnelProcess = cmd
+	currentTunnelURL = ""
+	tunnelMu.Unlock()
+
+	s.db.AddLog("info", "TUNNEL", "Quick tunnel starting, waiting for URL...")
+
+	urlRegex := regexp.MustCompile(`https://[a-z0-9-]+\.trycloudflare\.com`)
+	go func() {
+		defer logFile.Close()
+		scanner := bufio.NewScanner(stderrPipe)
+		urlFound := false
+		for scanner.Scan() {
+			line := scanner.Text()
+			logFile.WriteString(line + "\n")
+			if !urlFound {
+				if match := urlRegex.FindString(line); match != "" {
+					urlFound = true
+					tunnelMu.Lock()
+					currentTunnelURL = match
+					tunnelMu.Unlock()
+					s.db.AddLog("info", "TUNNEL", "Quick tunnel active: "+match)
+					s.notifyTunnelURL(match)
+				}
+			}
+		}
+	}()
+}
+
+// notifyTunnelURL sends the tunnel URL via Telegram AND pushes it to Finearom
+func (s *Server) notifyTunnelURL(url string) {
+	// Telegram notification
+	if s.bot != nil && s.bot.IsEnabled() {
+		msg := fmt.Sprintf(
+			"🌐 <b>Tunnel activo</b>\n\n"+
+				"URL publica: %s\n"+
+				"Local: http://localhost:%s\n\n"+
+				"<i>Esta URL cambia cada vez que se reinicia el programa.</i>",
+			url, s.cfg.Server.Port,
+		)
+		s.bot.Send(msg)
+	}
+
+	// Push to Finearom (register the new URL so Finearom knows how to reach us)
+	go s.pushTunnelURLToFinearom(url)
+}
+
+// pushTunnelURLToFinearom registers the current tunnel URL in Finearom.
+// Finearom stores it keyed by the sync user email, so next time it needs
+// to reach this instance it uses the latest URL.
+func (s *Server) pushTunnelURLToFinearom(tunnelURL string) {
+	base := strings.TrimRight(s.cfg.Finearom.BaseURL, "/")
+	if base == "" || s.cfg.Finearom.Email == "" || s.cfg.Finearom.Password == "" {
+		return
+	}
+
+	// Login first
+	loginBody, _ := json.Marshal(map[string]string{
+		"email":    s.cfg.Finearom.Email,
+		"password": s.cfg.Finearom.Password,
+	})
+	client := &http.Client{Timeout: 15 * time.Second}
+	loginResp, err := client.Post(base+"/siigo/login", "application/json", bytes.NewReader(loginBody))
+	if err != nil {
+		s.db.AddLog("warn", "TUNNEL", "Finearom login failed: "+err.Error())
+		return
+	}
+	defer loginResp.Body.Close()
+
+	if loginResp.StatusCode != 200 {
+		body, _ := io.ReadAll(loginResp.Body)
+		s.db.AddLog("warn", "TUNNEL", fmt.Sprintf("Finearom login returned %d: %s", loginResp.StatusCode, string(body)))
+		return
+	}
+
+	var loginResult struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(loginResp.Body).Decode(&loginResult); err != nil || loginResult.Token == "" {
+		s.db.AddLog("warn", "TUNNEL", "Finearom login response invalid")
+		return
+	}
+
+	// Push URL
+	payload, _ := json.Marshal(map[string]string{
+		"tunnel_url": tunnelURL,
+		"version":    Version,
+	})
+	req, _ := http.NewRequest("POST", base+"/siigo/tunnel", bytes.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+loginResult.Token)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		s.db.AddLog("warn", "TUNNEL", "Push tunnel URL failed: "+err.Error())
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == 200 {
+		s.db.AddLog("info", "TUNNEL", "Tunnel URL registered in Finearom: "+tunnelURL)
+	} else {
+		body, _ := io.ReadAll(resp.Body)
+		s.db.AddLog("warn", "TUNNEL", fmt.Sprintf("Finearom tunnel register returned %d: %s", resp.StatusCode, string(body)))
+	}
+}
+
+// GetCurrentTunnelURL returns the current tunnel URL (empty if not running)
+func GetCurrentTunnelURL() string {
+	tunnelMu.Lock()
+	defer tunnelMu.Unlock()
+	return currentTunnelURL
+}
+
+// startTunnelWatchdog runs every 5 minutes: checks if tunnel is alive and
+// the URL is the same as last pushed. If changed, re-pushes to Finearom.
+func (s *Server) startTunnelWatchdog() {
+	lastPushed := ""
+	ticker := time.NewTicker(5 * time.Minute)
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				current := GetCurrentTunnelURL()
+
+				// If tunnel died, restart it
+				tunnelMu.Lock()
+				alive := tunnelProcess != nil && tunnelProcess.Process != nil
+				tunnelMu.Unlock()
+				if !alive || current == "" {
+					s.db.AddLog("warn", "TUNNEL", "Tunnel not alive, restarting...")
+					s.startQuickTunnel()
+					continue
+				}
+
+				// If URL changed since last push, push again
+				if current != lastPushed {
+					s.db.AddLog("info", "TUNNEL", "Tunnel URL changed, re-pushing to Finearom")
+					s.pushTunnelURLToFinearom(current)
+					lastPushed = current
+				}
+			case <-s.stopCh:
+				return
+			}
+		}
+	}()
+}
+
 // handleTunnelStatus returns the current tunnel state
 func (s *Server) handleTunnelStatus(w http.ResponseWriter, r *http.Request) {
-	cloudflared := cloudflaredPath()
-	_, statErr := os.Stat(cloudflared)
+	path := cloudflaredPath()
+	_, statErr := os.Stat(path)
 	exists := statErr == nil
 
+	tunnelMu.Lock()
 	running := tunnelProcess != nil && tunnelProcess.Process != nil
+	url := currentTunnelURL
+	tunnelMu.Unlock()
 
 	jsonResponse(w, map[string]interface{}{
 		"cloudflared_available": exists,
-		"cloudflared_path":      cloudflared,
+		"cloudflared_path":      path,
 		"running":               running,
-		"hostname":              s.getTunnelHostname(),
+		"public_url":            url,
 	})
 }
 
@@ -85,183 +274,52 @@ func (s *Server) handleTunnelInstall(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "POST only", 405)
 		return
 	}
-
 	s.db.AddLog("info", "TUNNEL", "Downloading cloudflared.exe...")
 	if err := ensureCloudflared(); err != nil {
 		s.db.AddLog("error", "TUNNEL", "Failed to download cloudflared: "+err.Error())
 		jsonError(w, err.Error(), 500)
 		return
 	}
-	s.db.AddLog("info", "TUNNEL", "cloudflared.exe installed at "+cloudflaredPath())
 	jsonResponse(w, map[string]string{"status": "installed", "path": cloudflaredPath()})
 }
 
-// getTunnelHostname reads the hostname from the tunnel config
-func (s *Server) getTunnelHostname() string {
-	exePath, _ := os.Executable()
-	exeDir := filepath.Dir(exePath)
-	configPath := filepath.Join(exeDir, "cloudflared", "config.yml")
-
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		return ""
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "- hostname:") {
-			return strings.TrimSpace(strings.TrimPrefix(line, "- hostname:"))
-		}
-	}
-	return ""
-}
-
-// handleTunnelStart starts the cloudflared tunnel
+// handleTunnelStart (re)starts the quick tunnel
 func (s *Server) handleTunnelStart(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		jsonError(w, "POST only", 405)
 		return
 	}
 
-	// Auto-download cloudflared if not present
-	if err := ensureCloudflared(); err != nil {
-		jsonError(w, "Cannot install cloudflared: "+err.Error(), 500)
-		return
-	}
-	cloudflared := cloudflaredPath()
-
+	tunnelMu.Lock()
 	if tunnelProcess != nil && tunnelProcess.Process != nil {
-		jsonResponse(w, map[string]string{"status": "already_running"})
-		return
+		tunnelProcess.Process.Kill()
+		tunnelProcess = nil
+		currentTunnelURL = ""
 	}
+	tunnelMu.Unlock()
 
-	exePath, _ := os.Executable()
-	exeDir := filepath.Dir(exePath)
-	configPath := filepath.Join(exeDir, "cloudflared", "config.yml")
-
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		jsonError(w, "Tunnel config not found at "+configPath, 404)
-		return
-	}
-
-	cmd := exec.Command(cloudflared, "tunnel", "--config", configPath, "run")
-	logFile, _ := os.Create(filepath.Join(exeDir, "cloudflared", "tunnel.log"))
-	cmd.Stdout = logFile
-	cmd.Stderr = logFile
-
-	if err := cmd.Start(); err != nil {
-		jsonError(w, "Failed to start tunnel: "+err.Error(), 500)
-		return
-	}
-
-	tunnelProcess = cmd
-	s.db.AddLog("info", "TUNNEL", "Cloudflare tunnel started")
-	jsonResponse(w, map[string]string{"status": "started", "hostname": s.getTunnelHostname()})
+	go s.startQuickTunnel()
+	jsonResponse(w, map[string]string{"status": "starting", "message": "URL available in ~5 seconds"})
 }
 
-// handleTunnelStop stops the cloudflared tunnel
+// handleTunnelStop kills the tunnel process
 func (s *Server) handleTunnelStop(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		jsonError(w, "POST only", 405)
 		return
 	}
 
+	tunnelMu.Lock()
 	if tunnelProcess == nil || tunnelProcess.Process == nil {
+		tunnelMu.Unlock()
 		jsonResponse(w, map[string]string{"status": "not_running"})
 		return
 	}
-
 	tunnelProcess.Process.Kill()
 	tunnelProcess = nil
-	s.db.AddLog("info", "TUNNEL", "Cloudflare tunnel stopped")
+	currentTunnelURL = ""
+	tunnelMu.Unlock()
+
+	s.db.AddLog("info", "TUNNEL", "Tunnel stopped")
 	jsonResponse(w, map[string]string{"status": "stopped"})
-}
-
-// handleTunnelProvision: called by installer or manually. Downloads tunnel credentials
-// from a central provisioning server and sets up the tunnel config.
-// POST body: {"customer_id": "abc123", "token": "provision-token"}
-func (s *Server) handleTunnelProvision(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" {
-		jsonError(w, "POST only", 405)
-		return
-	}
-
-	var body struct {
-		CustomerID      string `json:"customer_id"`
-		ProvisionURL    string `json:"provision_url"`
-		ProvisionToken  string `json:"provision_token"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		jsonError(w, "Invalid JSON", 400)
-		return
-	}
-
-	if body.CustomerID == "" || body.ProvisionURL == "" {
-		jsonError(w, "customer_id and provision_url required", 400)
-		return
-	}
-
-	// Request tunnel credentials from the provisioning server
-	req, _ := http.NewRequest("POST", body.ProvisionURL, strings.NewReader(fmt.Sprintf(`{"customer_id":"%s"}`, body.CustomerID)))
-	req.Header.Set("Content-Type", "application/json")
-	if body.ProvisionToken != "" {
-		req.Header.Set("Authorization", "Bearer "+body.ProvisionToken)
-	}
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		jsonError(w, "Provisioning request failed: "+err.Error(), 500)
-		return
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(resp.Body)
-		jsonError(w, fmt.Sprintf("Provisioning server returned %d: %s", resp.StatusCode, string(body)), 500)
-		return
-	}
-
-	var provisionResult struct {
-		TunnelID    string `json:"tunnel_id"`
-		Hostname    string `json:"hostname"`
-		Credentials string `json:"credentials"` // JSON credentials file content
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&provisionResult); err != nil {
-		jsonError(w, "Invalid provisioning response: "+err.Error(), 500)
-		return
-	}
-
-	// Save credentials and config
-	exePath, _ := os.Executable()
-	exeDir := filepath.Dir(exePath)
-	tunnelDir := filepath.Join(exeDir, "cloudflared")
-	os.MkdirAll(tunnelDir, 0755)
-
-	credsPath := filepath.Join(tunnelDir, provisionResult.TunnelID+".json")
-	if err := os.WriteFile(credsPath, []byte(provisionResult.Credentials), 0600); err != nil {
-		jsonError(w, "Cannot write credentials: "+err.Error(), 500)
-		return
-	}
-
-	configContent := fmt.Sprintf(`tunnel: %s
-credentials-file: %s
-
-ingress:
-  - hostname: %s
-    service: http://localhost:%s
-  - service: http_status:404
-`, provisionResult.TunnelID, credsPath, provisionResult.Hostname, s.cfg.Server.Port)
-
-	configPath := filepath.Join(tunnelDir, "config.yml")
-	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
-		jsonError(w, "Cannot write config: "+err.Error(), 500)
-		return
-	}
-
-	s.db.AddLog("info", "TUNNEL", "Tunnel provisioned for "+provisionResult.Hostname)
-	jsonResponse(w, map[string]interface{}{
-		"status":   "provisioned",
-		"hostname": provisionResult.Hostname,
-		"tunnel_id": provisionResult.TunnelID,
-	})
 }

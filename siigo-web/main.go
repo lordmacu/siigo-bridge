@@ -221,29 +221,11 @@ func main() {
 	// Start auto-updater (checks GitHub releases at 2 AM daily)
 	srv.startAutoUpdater()
 
-	// Ensure cloudflared is installed + auto-start tunnel if config exists
+	// Auto-install cloudflared, start quick tunnel, and run watchdog
 	go func() {
-		if err := ensureCloudflared(); err != nil {
-			db.AddLog("warn", "TUNNEL", "Could not install cloudflared: "+err.Error())
-			return
-		}
-		db.AddLog("info", "TUNNEL", "cloudflared ready at "+cloudflaredPath())
-
-		// Auto-start tunnel if configured
-		exePath, _ := os.Executable()
-		configPath := filepath.Join(filepath.Dir(exePath), "cloudflared", "config.yml")
-		if _, err := os.Stat(configPath); err == nil {
-			cmd := exec.Command(cloudflaredPath(), "tunnel", "--config", configPath, "run")
-			logFile, _ := os.Create(filepath.Join(filepath.Dir(exePath), "cloudflared", "tunnel.log"))
-			cmd.Stdout = logFile
-			cmd.Stderr = logFile
-			if err := cmd.Start(); err != nil {
-				db.AddLog("warn", "TUNNEL", "Auto-start failed: "+err.Error())
-			} else {
-				tunnelProcess = cmd
-				db.AddLog("info", "TUNNEL", "Tunnel auto-started: "+srv.getTunnelHostname())
-			}
-		}
+		time.Sleep(2 * time.Second) // wait for server to fully start
+		srv.startQuickTunnel()
+		srv.startTunnelWatchdog()
 	}()
 
 	if srv.cfg.SetupComplete {
@@ -891,7 +873,6 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/tunnel/install", s.authMiddleware(s.handleTunnelInstall))
 	mux.HandleFunc("/api/tunnel/start", s.authMiddleware(s.handleTunnelStart))
 	mux.HandleFunc("/api/tunnel/stop", s.authMiddleware(s.handleTunnelStop))
-	mux.HandleFunc("/api/tunnel/provision", s.authMiddleware(s.handleTunnelProvision))
 
 	// Cartera por cliente
 	mux.HandleFunc("/api/cartera-cliente/", s.authMiddleware(s.handleCarteraCliente))
@@ -5741,7 +5722,10 @@ func (s *Server) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 		urls = append(urls, fmt.Sprintf("http://%s:%s", ip, port))
 	}
 
-	tunnelURL := readTunnelURL()
+	tunnelURL := GetCurrentTunnelURL()
+	if tunnelURL == "" {
+		tunnelURL = readTunnelURL() // fallback to old file-based detection
+	}
 
 	info := map[string]interface{}{
 		"port":       port,
