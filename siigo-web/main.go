@@ -1937,10 +1937,18 @@ func (s *Server) diffCarteraCxC() {
 			"label": "Cartera CxC",
 		}
 		if len(addedRecords) > 0 {
-			webhookData["added"] = addedRecords
+			mapped := make([]map[string]interface{}, len(addedRecords))
+			for i, r := range addedRecords {
+				mapped[i] = s.cfg.ApplyFieldMapping("cartera_cxc", r)
+			}
+			webhookData["added"] = mapped
 		}
 		if len(editedRecords) > 0 {
-			webhookData["edited"] = editedRecords
+			mapped := make([]map[string]interface{}, len(editedRecords))
+			for i, r := range editedRecords {
+				mapped[i] = s.cfg.ApplyFieldMapping("cartera_cxc", r)
+			}
+			webhookData["edited"] = mapped
 		}
 		if deletes > 0 {
 			webhookData["deleted"] = deletedKeys
@@ -2159,10 +2167,18 @@ func (s *Server) diffVentasProductos() {
 			"label": "Ventas Productos",
 		}
 		if len(addedRecords) > 0 {
-			webhookData["added"] = addedRecords
+			mapped := make([]map[string]interface{}, len(addedRecords))
+			for i, r := range addedRecords {
+				mapped[i] = s.cfg.ApplyFieldMapping("ventas_productos", r)
+			}
+			webhookData["added"] = mapped
 		}
 		if len(editedRecords) > 0 {
-			webhookData["edited"] = editedRecords
+			mapped := make([]map[string]interface{}, len(editedRecords))
+			for i, r := range editedRecords {
+				mapped[i] = s.cfg.ApplyFieldMapping("ventas_productos", r)
+			}
+			webhookData["edited"] = mapped
 		}
 		if deletes > 0 {
 			webhookData["deleted"] = deletedKeys
@@ -2381,10 +2397,18 @@ func (s *Server) diffRecaudo() {
 			"label": "Recaudo",
 		}
 		if len(addedRecords) > 0 {
-			webhookData["added"] = addedRecords
+			mapped := make([]map[string]interface{}, len(addedRecords))
+			for i, r := range addedRecords {
+				mapped[i] = s.cfg.ApplyFieldMapping("recaudo", r)
+			}
+			webhookData["added"] = mapped
 		}
 		if len(editedRecords) > 0 {
-			webhookData["edited"] = editedRecords
+			mapped := make([]map[string]interface{}, len(editedRecords))
+			for i, r := range editedRecords {
+				mapped[i] = s.cfg.ApplyFieldMapping("recaudo", r)
+			}
+			webhookData["edited"] = mapped
 		}
 		if deletes > 0 {
 			webhookData["deleted"] = deletedKeys
