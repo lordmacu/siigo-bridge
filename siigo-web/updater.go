@@ -4,10 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -18,9 +16,8 @@ import (
 var Version = "dev"
 
 const (
-	githubRepo    = "lordmacu/siigo-bridge"
+	githubRepo     = "lordmacu/siigo-bridge"
 	updateCheckURL = "https://api.github.com/repos/" + githubRepo + "/releases/latest"
-	updateHour    = 2 // Check at 2 AM
 )
 
 type githubRelease struct {
@@ -33,37 +30,20 @@ type githubRelease struct {
 	} `json:"assets"`
 }
 
-// startAutoUpdater runs a background loop that checks for updates at updateHour AM daily
-func (s *Server) startAutoUpdater() {
-	if Version == "dev" {
-		log.Println("[Updater] Dev mode — auto-update disabled")
+// checkAndUpdate checks GitHub for a newer release and applies it.
+// Guarded by updateMu so concurrent triggers can't race on the .old/.update files.
+func (s *Server) checkAndUpdate() {
+	if !s.updateMu.TryLock() {
+		s.db.AddLog("warn", "UPDATER", "Update already in progress, ignoring")
 		return
 	}
-	log.Printf("[Updater] Current version: %s — checking daily at %d:00 AM", Version, updateHour)
+	defer s.updateMu.Unlock()
 
-	go func() {
-		for {
-			now := time.Now()
-			// Calculate next check time (today or tomorrow at updateHour:00)
-			next := time.Date(now.Year(), now.Month(), now.Day(), updateHour, 0, 0, 0, now.Location())
-			if now.After(next) {
-				next = next.Add(24 * time.Hour)
-			}
-			waitDuration := time.Until(next)
-			log.Printf("[Updater] Next check in %s (at %s)", waitDuration.Round(time.Minute), next.Format("2006-01-02 15:04"))
+	if Version == "dev" {
+		s.db.AddLog("warn", "UPDATER", "Dev build — refusing to self-replace")
+		return
+	}
 
-			select {
-			case <-time.After(waitDuration):
-				s.checkAndUpdate()
-			case <-s.stopCh:
-				return
-			}
-		}
-	}()
-}
-
-// checkAndUpdate checks GitHub for a newer release and applies it
-func (s *Server) checkAndUpdate() {
 	s.db.AddLog("info", "UPDATER", "Checking for updates...")
 
 	release, err := getLatestRelease()
@@ -80,22 +60,31 @@ func (s *Server) checkAndUpdate() {
 
 	s.db.AddLog("info", "UPDATER", fmt.Sprintf("New version available: %s → %s", Version, latestVersion))
 
-	// Find the right asset (siigo-web.exe for Windows)
+	// Find the right asset for the current OS.
 	var downloadURL string
+	var expectedSize int64
+	wantSuffix := ".exe"
+	if runtime.GOOS != "windows" {
+		wantSuffix = ""
+	}
 	for _, asset := range release.Assets {
-		if strings.Contains(strings.ToLower(asset.Name), "siigo-web") &&
-			strings.HasSuffix(strings.ToLower(asset.Name), ".exe") {
-			downloadURL = asset.BrowserDownloadURL
-			break
+		name := strings.ToLower(asset.Name)
+		if !strings.Contains(name, "siigo-web") {
+			continue
 		}
+		if wantSuffix != "" && !strings.HasSuffix(name, wantSuffix) {
+			continue
+		}
+		downloadURL = asset.BrowserDownloadURL
+		expectedSize = asset.Size
+		break
 	}
 
 	if downloadURL == "" {
-		s.db.AddLog("warn", "UPDATER", "No compatible exe found in release assets")
+		s.db.AddLog("warn", "UPDATER", "No compatible asset found in release")
 		return
 	}
 
-	// Download to temp file
 	s.db.AddLog("info", "UPDATER", "Downloading update...")
 	exePath, err := os.Executable()
 	if err != nil {
@@ -104,18 +93,16 @@ func (s *Server) checkAndUpdate() {
 	}
 
 	tmpPath := exePath + ".update"
-	if err := downloadFile(downloadURL, tmpPath); err != nil {
+	if err := downloadFile(downloadURL, tmpPath, expectedSize); err != nil {
 		s.db.AddLog("error", "UPDATER", "Download failed: "+err.Error())
 		os.Remove(tmpPath)
 		return
 	}
 
-	// Replace exe and restart
 	s.db.AddLog("info", "UPDATER", fmt.Sprintf("Update downloaded. Replacing %s...", filepath.Base(exePath)))
 
 	if runtime.GOOS == "windows" {
-		// Windows can't replace a running exe directly
-		// Rename current exe to .old, move new to current, then restart
+		// Windows can't delete a running exe but CAN rename it.
 		oldPath := exePath + ".old"
 		os.Remove(oldPath)
 		if err := os.Rename(exePath, oldPath); err != nil {
@@ -124,13 +111,15 @@ func (s *Server) checkAndUpdate() {
 			return
 		}
 		if err := os.Rename(tmpPath, exePath); err != nil {
-			// Rollback
-			os.Rename(oldPath, exePath)
+			os.Rename(oldPath, exePath) // rollback
 			s.db.AddLog("error", "UPDATER", "Cannot place new exe: "+err.Error())
 			return
 		}
-		// Clean up old exe on next start (can't delete while running)
+		// .old gets removed by cleanupOldExe() on next startup.
 	} else {
+		if err := os.Chmod(tmpPath, 0755); err != nil {
+			s.db.AddLog("warn", "UPDATER", "chmod failed: "+err.Error())
+		}
 		if err := os.Rename(tmpPath, exePath); err != nil {
 			s.db.AddLog("error", "UPDATER", "Cannot replace exe: "+err.Error())
 			return
@@ -139,15 +128,27 @@ func (s *Server) checkAndUpdate() {
 
 	s.db.AddLog("info", "UPDATER", fmt.Sprintf("Updated to %s. Restarting...", latestVersion))
 
-	// Notify via Telegram
-	s.bot.Send(fmt.Sprintf("🔄 <b>Auto-update</b>\n\n%s → %s\nReiniciando...", Version, latestVersion))
+	// Best-effort Telegram notification with a short timeout so shutdown is not blocked.
+	notifyDone := make(chan struct{})
+	go func() {
+		if s.bot != nil {
+			s.bot.Send(fmt.Sprintf("🔄 <b>Update manual</b>\n\n%s → %s\nReiniciando...", Version, latestVersion))
+		}
+		close(notifyDone)
+	}()
+	select {
+	case <-notifyDone:
+	case <-time.After(3 * time.Second):
+	}
 
-	// Restart: launch new process and exit current
-	cmd := exec.Command(exePath)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Start()
+	// Stop HTTP + sync loops before spawning the replacement so no requests or DB writes
+	// are mid-flight when the new process starts.
+	s.gracefulShutdown()
+	if s.db != nil {
+		s.db.Close()
+	}
 
+	restartProcess(exePath)
 	os.Exit(0)
 }
 
@@ -179,6 +180,10 @@ func (s *Server) handleApplyUpdate(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "POST only", 405)
 		return
 	}
+	if Version == "dev" {
+		jsonError(w, "dev build cannot self-update", 400)
+		return
+	}
 	jsonResponse(w, map[string]string{"status": "updating"})
 	go s.checkAndUpdate()
 }
@@ -193,15 +198,17 @@ func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request) {
 	s.db.AddLog("info", "APP", "Restart requested via API")
 
 	go func() {
+		// Small delay so the JSON response finishes flushing to the client.
 		time.Sleep(500 * time.Millisecond)
 		exePath, err := os.Executable()
 		if err != nil {
 			return
 		}
-		cmd := exec.Command(exePath)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		cmd.Start()
+		s.gracefulShutdown()
+		if s.db != nil {
+			s.db.Close()
+		}
+		restartProcess(exePath)
 		os.Exit(0)
 	}()
 }
@@ -225,7 +232,7 @@ func getLatestRelease() (*githubRelease, error) {
 	return &release, nil
 }
 
-func downloadFile(url, dest string) error {
+func downloadFile(url, dest string, expectedSize int64) error {
 	client := &http.Client{Timeout: 5 * time.Minute}
 	resp, err := client.Get(url)
 	if err != nil {
@@ -241,8 +248,20 @@ func downloadFile(url, dest string) error {
 	if err != nil {
 		return err
 	}
-	defer out.Close()
 
-	_, err = io.Copy(out, resp.Body)
-	return err
+	written, err := io.Copy(out, resp.Body)
+	closeErr := out.Close()
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	if expectedSize > 0 && written != expectedSize {
+		return fmt.Errorf("size mismatch: got %d bytes, expected %d", written, expectedSize)
+	}
+	if written < 1024 {
+		return fmt.Errorf("downloaded file suspiciously small (%d bytes)", written)
+	}
+	return nil
 }

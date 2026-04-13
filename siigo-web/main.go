@@ -134,6 +134,8 @@ type Server struct {
 	syncRegistry   map[string]*SyncTableDef // ORM-based sync table definitions
 	fileWatcher    *fileWatcher              // fsnotify watcher for ISAM file changes
 	watcherCh      chan []string              // channel receiving changed table names from watcher
+	httpServer     *http.Server               // set before ListenAndServe so restart/update can Shutdown()
+	updateMu       gosync.Mutex               // guards checkAndUpdate against concurrent runs
 }
 
 func main() {
@@ -149,6 +151,9 @@ func main() {
 			}
 		}
 	}
+
+	// Clean up leftover `.old` / `.update` from a previous manual update.
+	cleanupOldExe()
 
 	db, err := storage.NewDB("siigo_web.db")
 	if err != nil {
@@ -217,9 +222,6 @@ func main() {
 	} else {
 		log.Println("[Telegram] Bot disabled — skipping polling")
 	}
-
-	// Start auto-updater (checks GitHub releases at 2 AM daily)
-	srv.startAutoUpdater()
 
 	// Auto-install cloudflared, start quick tunnel, and run watchdog
 	go func() {
@@ -329,26 +331,10 @@ func main() {
 		Addr:    ":" + port,
 		Handler: corsMiddleware(mux),
 	}
+	srv.httpServer = httpServer
 
 	// Graceful shutdown helper
-	shutdownServer := func() {
-		log.Println("Shutdown signal received, stopping...")
-		db.AddLog("info", "APP", "Server stopped (graceful shutdown)")
-
-		// Stop sync loops
-		select {
-		case srv.stopCh <- true:
-		default:
-		}
-		select {
-		case srv.stopCh <- true:
-		default:
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		httpServer.Shutdown(ctx)
-	}
+	shutdownServer := srv.gracefulShutdown
 
 	// Handle OS signals (Ctrl+C, taskkill, etc.)
 	go func() {
