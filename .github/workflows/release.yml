@@ -1,0 +1,65 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: siigo-web
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache-dependency-path: |
+            siigo-web/go.sum
+            siigo-common/go.sum
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: siigo-web/frontend/package-lock.json
+
+      - name: Build frontend
+        working-directory: siigo-web/frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Build Go binary
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          go build -ldflags "-s -w -H windowsgui -X main.Version=$VERSION" -o siigo-web.exe .
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+
+      - name: Build installer
+        shell: pwsh
+        working-directory: siigo-web
+        run: |
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          gh release create "$TAG" \
+            --title "Siigo Bridge $TAG" \
+            --generate-notes \
+            siigo-web.exe \
+            installer_output/SiigoWeb-Setup.exe
