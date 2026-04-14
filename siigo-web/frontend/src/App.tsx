@@ -10,6 +10,7 @@ import ErrorSummary from './pages/ErrorSummary';
 import Explorer from './pages/Explorer';
 import Users from './pages/Users';
 import AuditTrail from './pages/AuditTrail';
+import Terminal from './pages/Terminal';
 import Login from './pages/Login';
 import SetupWizard from './pages/SetupWizard';
 import ToastContainer from './components/Toast';
@@ -113,6 +114,7 @@ export default function App() {
           <Route path="/config" element={guard('config', <Config />)} />
           <Route path="/users" element={guard('users', <Users />)} />
           <Route path="/audit" element={guard('config', <AuditTrail />)} />
+          <Route path="/terminal" element={guard('terminal', <Terminal />)} />
         </Routes>
       </div>
       <ToastContainer />

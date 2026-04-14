@@ -1,0 +1,179 @@
+package main
+
+import (
+	"net/http"
+	"os"
+	"path/filepath"
+	"runtime"
+	"sync"
+	"time"
+
+	"github.com/aymanbagabas/go-pty"
+	"github.com/gorilla/websocket"
+)
+
+var terminalUpgrader = websocket.Upgrader{
+	ReadBufferSize:  4096,
+	WriteBufferSize: 4096,
+	CheckOrigin:     func(r *http.Request) bool { return true },
+}
+
+// terminalMsg is the JSON envelope exchanged over the WebSocket.
+//   input: stdin from client (text or raw bytes)
+//   resize: {cols, rows}
+//   output: PTY stdout to client
+//   exit: process exited
+type terminalMsg struct {
+	Type string `json:"type"`
+	Data string `json:"data,omitempty"`
+	Cols uint16 `json:"cols,omitempty"`
+	Rows uint16 `json:"rows,omitempty"`
+	Code int    `json:"code,omitempty"`
+}
+
+// handleTerminalWS upgrades to WebSocket, spawns a PTY (PowerShell on Windows,
+// bash elsewhere), and wires PTY <-> WebSocket both directions.
+// Auth: JWT token in ?token= query param (browsers can't set WS headers).
+func (s *Server) handleTerminalWS(w http.ResponseWriter, r *http.Request) {
+	token := r.URL.Query().Get("token")
+	info := s.getTokenInfo(token)
+	if info == nil {
+		http.Error(w, "unauthorized", 401)
+		return
+	}
+	// Admin/root only — executing arbitrary shell commands is high privilege.
+	if info.Role != "admin" && info.Role != "root" {
+		http.Error(w, "admin only", 403)
+		return
+	}
+
+	conn, err := terminalUpgrader.Upgrade(w, r, nil)
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+
+	// Spawn PTY
+	ptmx, err := pty.New()
+	if err != nil {
+		conn.WriteJSON(terminalMsg{Type: "exit", Data: "pty create failed: " + err.Error(), Code: -1})
+		return
+	}
+	defer ptmx.Close()
+
+	var shell string
+	var args []string
+	if runtime.GOOS == "windows" {
+		shell = "powershell.exe"
+		args = []string{"-NoLogo"}
+	} else {
+		shell = "bash"
+		args = []string{"-i"}
+	}
+
+	cmd := ptmx.Command(shell, args...)
+	cmd.Dir = installDirCompat()
+
+	if err := cmd.Start(); err != nil {
+		conn.WriteJSON(terminalMsg{Type: "exit", Data: "shell start failed: " + err.Error(), Code: -1})
+		return
+	}
+
+	s.db.AddLog("info", "TERMINAL", "Session opened by "+info.Username)
+	defer s.db.AddLog("info", "TERMINAL", "Session closed by "+info.Username)
+
+	// Initial size
+	_ = ptmx.Resize(120, 30)
+
+	var wg sync.WaitGroup
+	writeMu := sync.Mutex{}
+	done := make(chan struct{})
+	closeOnce := sync.Once{}
+	closeDone := func() { closeOnce.Do(func() { close(done) }) }
+
+	// PTY -> WebSocket
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		buf := make([]byte, 4096)
+		for {
+			n, err := ptmx.Read(buf)
+			if n > 0 {
+				writeMu.Lock()
+				werr := conn.WriteJSON(terminalMsg{Type: "output", Data: string(buf[:n])})
+				writeMu.Unlock()
+				if werr != nil {
+					closeDone()
+					return
+				}
+			}
+			if err != nil {
+				closeDone()
+				return
+			}
+		}
+	}()
+
+	// WebSocket -> PTY (+ resize handling)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-done:
+				return
+			default:
+			}
+			conn.SetReadDeadline(time.Now().Add(60 * time.Minute))
+			var msg terminalMsg
+			if err := conn.ReadJSON(&msg); err != nil {
+				closeDone()
+				return
+			}
+			switch msg.Type {
+			case "input":
+				if _, err := ptmx.Write([]byte(msg.Data)); err != nil {
+					closeDone()
+					return
+				}
+			case "resize":
+				if msg.Cols > 0 && msg.Rows > 0 {
+					_ = ptmx.Resize(int(msg.Cols), int(msg.Rows))
+				}
+			case "ping":
+				writeMu.Lock()
+				_ = conn.WriteJSON(terminalMsg{Type: "pong"})
+				writeMu.Unlock()
+			}
+		}
+	}()
+
+	// When one side closes, kill the shell so the other goroutine unblocks.
+	go func() {
+		<-done
+		if cmd != nil && cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		ptmx.Close()
+	}()
+
+	err = cmd.Wait()
+	exitCode := 0
+	if err != nil {
+		exitCode = -1
+	}
+	writeMu.Lock()
+	_ = conn.WriteJSON(terminalMsg{Type: "exit", Code: exitCode})
+	writeMu.Unlock()
+	closeDone()
+	wg.Wait()
+}
+
+// installDirCompat returns the dir containing siigo-web.exe, portable across OS.
+func installDirCompat() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return "."
+	}
+	return filepath.Dir(exe)
+}

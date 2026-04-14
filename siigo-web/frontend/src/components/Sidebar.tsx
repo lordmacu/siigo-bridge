@@ -19,13 +19,14 @@ const navItems = [
   { path: '/errors', label: 'Errores', badge: '', module: 'errors' },
   { path: '/logs', label: 'Logs', badge: '', module: 'logs' },
   { path: '/explorer', label: 'SQL Explorer', badge: '', module: 'explorer' },
+  { path: '/terminal', label: 'Terminal', badge: '', module: 'terminal' },
   { path: '/config', label: 'Configuracion', badge: '', module: 'config' },
   { path: '/users', label: 'Usuarios', badge: '', module: 'users' },
   { path: '/audit', label: 'Auditoria', badge: '', module: 'config' },
 ];
 
 // Modules that are not data tables — always shown regardless of record count
-const alwaysShow = new Set(['dashboard', 'field-mappings', 'errors', 'logs', 'explorer', 'config', 'users']);
+const alwaysShow = new Set(['dashboard', 'field-mappings', 'errors', 'logs', 'explorer', 'config', 'users', 'terminal']);
 
 export default function Sidebar({ onLogout, open, userInfo }: { onLogout?: () => void; open?: boolean; userInfo?: UserInfo | null }) {
   const location = useLocation();

@@ -607,6 +607,7 @@ var AllModules = []string{
 	"dashboard", "clients", "products", "cartera",
 	"documentos",
 	"field-mappings", "errors", "logs", "explorer", "config", "users",
+	"terminal",
 }
 
 // apiPathToModule maps API endpoint paths to their required module permission.
@@ -841,6 +842,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/service/install", s.authMiddleware(s.handleServiceInstall))
 	mux.HandleFunc("/api/service/uninstall", s.authMiddleware(s.handleServiceUninstall))
 	mux.HandleFunc("/api/service/restart", s.authMiddleware(s.handleServiceRestart))
+	mux.HandleFunc("/api/terminal/ws", s.handleTerminalWS)
 	mux.HandleFunc("/api/record", s.authMiddleware(s.handleRecord))
 	mux.HandleFunc("/api/users", s.permMiddleware(s.handleUsers))
 	mux.HandleFunc("/api/users/", s.permMiddleware(s.handleUserByID))
