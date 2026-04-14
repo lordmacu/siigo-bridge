@@ -14,3 +14,6 @@ func applyDetachedSysProcAttr(cmd *exec.Cmd) {
 		Setsid: true,
 	}
 }
+
+// applyHiddenSysProcAttr is a no-op on Unix (no console windows to hide).
+func applyHiddenSysProcAttr(cmd *exec.Cmd) {}

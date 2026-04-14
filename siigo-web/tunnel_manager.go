@@ -95,6 +95,7 @@ func (s *Server) startQuickTunnel() {
 		"--url", "http://localhost:"+port,
 		"--no-autoupdate",
 	)
+	applyHiddenSysProcAttr(cmd)
 
 	stderrPipe, err := cmd.StderrPipe()
 	if err != nil {
