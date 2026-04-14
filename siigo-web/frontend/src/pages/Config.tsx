@@ -96,6 +96,46 @@ export default function Config() {
   const [retryDelay, setRetryDelay] = useState(30);
   const [allowEditDelete, setAllowEditDelete] = useState(false);
 
+  // --- Servicio Windows ---
+  const [svcStatus, setSvcStatus] = useState<{ supported: boolean; state: string; error?: string } | null>(null);
+  const [svcBusy, setSvcBusy] = useState(false);
+
+  const refreshSvcStatus = async () => {
+    try {
+      const r = await api.serviceStatus();
+      setSvcStatus(r);
+    } catch { /* ignore */ }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'advanced') {
+      refreshSvcStatus();
+      const t = window.setInterval(refreshSvcStatus, 5000);
+      return () => window.clearInterval(t);
+    }
+  }, [activeTab]);
+
+  const handleServiceAction = async (action: 'install' | 'uninstall' | 'restart', confirmMsg?: string) => {
+    if (confirmMsg && !confirm(confirmMsg)) return;
+    setSvcBusy(true);
+    try {
+      const fn = action === 'install' ? api.serviceInstall
+        : action === 'uninstall' ? api.serviceUninstall
+        : api.serviceRestart;
+      const r = await fn();
+      if (r.status === 'ok') {
+        showToast('success', 'Solicitud enviada. Acepta el dialogo de UAC si aparece.');
+        setTimeout(refreshSvcStatus, 3000);
+      } else {
+        showToast('error', r.error || 'Error');
+      }
+    } catch {
+      showToast('error', 'Error de red');
+    } finally {
+      setSvcBusy(false);
+    }
+  };
+
   useEffect(() => {
     api.getConfig().then(cfg => {
       setDataPath(cfg.siigo?.data_path || '');
@@ -705,6 +745,37 @@ export default function Config() {
                     e.target.value = '';
                   }} />
                 </label>
+              </div>
+
+              <SectionTitle>Servicio Windows (NSSM)</SectionTitle>
+              <p className="form-hint" style={{ marginBottom: 12 }}>
+                Instala/reinicia Siigo Bridge como servicio Windows. Windows pedira UAC una vez por accion.
+              </p>
+              {svcStatus && (
+                <div style={{ marginBottom: 12, padding: 8, background: '#1e293b', borderRadius: 4, fontSize: 13 }}>
+                  Estado: <strong style={{
+                    color: svcStatus.state === 'running' ? '#10b981'
+                      : svcStatus.state === 'stopped' ? '#f59e0b'
+                      : svcStatus.state === 'not_installed' ? '#64748b'
+                      : svcStatus.state === 'not_supported' ? '#64748b'
+                      : '#ef4444'
+                  }}>{svcStatus.state}</strong>
+                  {!svcStatus.supported && ' (solo Windows)'}
+                </div>
+              )}
+              <div className="config-actions">
+                <button className="btn-save" disabled={svcBusy || !svcStatus?.supported}
+                  onClick={() => handleServiceAction('install', 'Instalar/reinstalar el servicio SiigoBridge? Windows pedira permisos de admin.')}>
+                  Instalar / Reinstalar Servicio
+                </button>
+                <button className="btn-test" disabled={svcBusy || !svcStatus?.supported || svcStatus?.state === 'not_installed'}
+                  onClick={() => handleServiceAction('restart', 'Reiniciar el servicio SiigoBridge?')}>
+                  Reiniciar Servicio
+                </button>
+                <button className="btn-danger" disabled={svcBusy || !svcStatus?.supported || svcStatus?.state === 'not_installed'}
+                  onClick={() => handleServiceAction('uninstall', 'Desinstalar el servicio SiigoBridge?')}>
+                  Desinstalar Servicio
+                </button>
               </div>
 
               <SectionTitle danger>Zona de Peligro</SectionTitle>

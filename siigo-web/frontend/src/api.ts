@@ -130,6 +130,10 @@ export const api = {
   query: (sql: string, limit: number, offset: number) => post('/query', { query: sql, limit, offset }),
   getAllowEditDelete: () => get('/allow-edit-delete'),
   saveAllowEditDelete: (enabled: boolean) => post('/allow-edit-delete', { enabled }),
+  serviceStatus: () => get('/service/status'),
+  serviceInstall: () => post('/service/install'),
+  serviceUninstall: () => post('/service/uninstall'),
+  serviceRestart: () => post('/service/restart'),
   getRecord: (table: string, id: number) => get(`/record?table=${table}&id=${id}`),
   updateRecord: (table: string, id: number, fields: Record<string, unknown>) => {
     return fetch(BASE + `/record?table=${table}&id=${id}`, {
