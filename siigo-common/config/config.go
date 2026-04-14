@@ -19,7 +19,14 @@ type Config struct {
 	DetectEnabled     map[string]bool       `json:"detect_enabled,omitempty"`
 	GlobalSendEnabled bool                  `json:"global_send_enabled"`
 	AllowEditDelete   bool                  `json:"allow_edit_delete"`
+	Terminal          TerminalConfig        `json:"terminal,omitempty"`
 	SetupComplete   bool                  `json:"setup_complete"`
+}
+
+type TerminalConfig struct {
+	// PinHash is the bcrypt hash of the extra access PIN required to open the web terminal.
+	// Empty = no PIN, admin/root JWT is enough. Set via POST /api/terminal/set-pin.
+	PinHash string `json:"pin_hash,omitempty"`
 }
 
 type ServerConfig struct {

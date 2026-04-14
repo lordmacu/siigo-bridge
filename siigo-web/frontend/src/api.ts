@@ -134,6 +134,8 @@ export const api = {
   serviceInstall: () => post('/service/install'),
   serviceUninstall: () => post('/service/uninstall'),
   serviceRestart: () => post('/service/restart'),
+  terminalPinStatus: () => get('/terminal/pin'),
+  terminalSetPin: (pin: string) => post('/terminal/pin', { pin }),
   getRecord: (table: string, id: number) => get(`/record?table=${table}&id=${id}`),
   updateRecord: (table: string, id: number, fields: Record<string, unknown>) => {
     return fetch(BASE + `/record?table=${table}&id=${id}`, {

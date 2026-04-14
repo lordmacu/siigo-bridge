@@ -843,6 +843,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/service/uninstall", s.authMiddleware(s.handleServiceUninstall))
 	mux.HandleFunc("/api/service/restart", s.authMiddleware(s.handleServiceRestart))
 	mux.HandleFunc("/api/terminal/ws", s.handleTerminalWS)
+	mux.HandleFunc("/api/terminal/pin", s.authMiddleware(s.handleTerminalPin))
 	mux.HandleFunc("/api/record", s.authMiddleware(s.handleRecord))
 	mux.HandleFunc("/api/users", s.permMiddleware(s.handleUsers))
 	mux.HandleFunc("/api/users/", s.permMiddleware(s.handleUserByID))

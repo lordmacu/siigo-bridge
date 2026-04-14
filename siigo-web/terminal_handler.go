@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/aymanbagabas/go-pty"
 	"github.com/gorilla/websocket"
+	"golang.org/x/crypto/bcrypt"
 )
 
 var terminalUpgrader = websocket.Upgrader{
@@ -46,6 +48,16 @@ func (s *Server) handleTerminalWS(w http.ResponseWriter, r *http.Request) {
 	if info.Role != "admin" && info.Role != "root" {
 		http.Error(w, "admin only", 403)
 		return
+	}
+
+	// Extra PIN gate: if terminal.pin_hash is set in config, require a matching ?pin= param.
+	if hash := strings.TrimSpace(s.cfg.Terminal.PinHash); hash != "" {
+		pin := r.URL.Query().Get("pin")
+		if pin == "" || bcrypt.CompareHashAndPassword([]byte(hash), []byte(pin)) != nil {
+			s.db.AddLog("warn", "TERMINAL", "Rejected connection (bad pin) from "+info.Username)
+			http.Error(w, "pin required", 403)
+			return
+		}
 	}
 
 	conn, err := terminalUpgrader.Upgrade(w, r, nil)
@@ -169,6 +181,53 @@ func installDirCompat() string {
 		return "."
 	}
 	return filepath.Dir(exe)
+}
+
+// handleTerminalPin manages the extra PIN required to open the web terminal.
+//   GET  -> { "set": true|false }       (reveals nothing else)
+//   POST -> { "pin": "..." } sets it; "" clears it. Admin/root only.
+func (s *Server) handleTerminalPin(w http.ResponseWriter, r *http.Request) {
+	info := s.getTokenInfo(extractToken(r))
+	if info == nil || (info.Role != "admin" && info.Role != "root") {
+		jsonError(w, "admin only", 403)
+		return
+	}
+	if r.Method == "GET" {
+		jsonResponse(w, map[string]interface{}{"set": strings.TrimSpace(s.cfg.Terminal.PinHash) != ""})
+		return
+	}
+	if r.Method != "POST" {
+		jsonError(w, "POST or GET", 405)
+		return
+	}
+	var body struct {
+		Pin string `json:"pin"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonError(w, err.Error(), 400)
+		return
+	}
+	if body.Pin == "" {
+		s.cfg.Terminal.PinHash = ""
+		s.db.AddLog("info", "TERMINAL", "PIN cleared by "+info.Username)
+	} else {
+		if len(body.Pin) < 8 {
+			jsonError(w, "pin must be at least 8 chars", 400)
+			return
+		}
+		h, err := bcrypt.GenerateFromPassword([]byte(body.Pin), bcrypt.DefaultCost)
+		if err != nil {
+			jsonError(w, err.Error(), 500)
+			return
+		}
+		s.cfg.Terminal.PinHash = string(h)
+		s.db.AddLog("info", "TERMINAL", "PIN set by "+info.Username)
+	}
+	if err := s.cfg.Save("config.json"); err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	jsonResponse(w, map[string]interface{}{"status": "ok", "set": s.cfg.Terminal.PinHash != ""})
 }
 
 // pickShell returns an absolute-path shell and its args, robust across Windows
