@@ -26,6 +26,9 @@ UninstallDisplayName=Siigo Web
 Source: "siigo-web.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "siigobridge.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "README.txt"; DestDir: "{app}"; Flags: ignoreversion isreadme
+; NSSM service install/uninstall scripts (used by admin UI buttons + manual setup)
+Source: "..\install-service.bat"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\uninstall-service.bat"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 ; Desktop shortcut
