@@ -5225,30 +5225,16 @@ func (s *Server) handleCarteraCliente(w http.ResponseWriter, r *http.Request) {
 	if v, err := strconv.Atoi(r.URL.Query().Get("dias_cobro")); err == nil {
 		diasCobro = v
 	}
-	fechaDesde := r.URL.Query().Get("desde")       // YYYY-MM-DD
-	fechaHasta := r.URL.Query().Get("hasta")       // YYYY-MM-DD
-
 	conn := s.db.GetConn()
 	today := time.Now().Format("2006-01-02")
 
-	conditions := []string{}
+	conditions := []string{"saldo > 0"}
 	var args []interface{}
 	if nit != "all" {
 		conditions = append(conditions, "nit = ?")
 		args = append(args, nit)
 	}
-	if fechaDesde != "" {
-		conditions = append(conditions, "fecha >= ?")
-		args = append(args, fechaDesde)
-	}
-	if fechaHasta != "" {
-		conditions = append(conditions, "fecha <= ?")
-		args = append(args, fechaHasta)
-	}
-	whereClause := "1=1"
-	if len(conditions) > 0 {
-		whereClause = strings.Join(conditions, " AND ")
-	}
+	whereClause := strings.Join(conditions, " AND ")
 
 	rows, err := conn.Query(fmt.Sprintf(`
 		SELECT nit, nombre_cliente, tipo_comprobante, num_documento, documento_ref,
