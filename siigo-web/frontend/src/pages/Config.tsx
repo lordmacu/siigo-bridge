@@ -88,6 +88,8 @@ export default function Config() {
   // --- Sincronizacion ---
   const [detectEnabled, setDetectEnabled] = useState<Record<string, boolean>>({});
   const [sendEnabled, setSendEnabled] = useState<Record<string, boolean>>({});
+  const [repopulating, setRepopulating] = useState<Record<string, boolean>>({});
+  const [repopulateDone, setRepopulateDone] = useState<Record<string, string>>({});
 
   // --- Avanzado ---
   const [batchSize, setBatchSize] = useState(50);
@@ -309,10 +311,16 @@ export default function Config() {
                   <span className="sync-col-table">Tabla</span>
                   <span className="sync-col-toggle sync-col-detect">Deteccion</span>
                   <span className="sync-col-toggle sync-col-send">Envio</span>
+                  <span className="sync-col-toggle" style={{minWidth:110}}>Repoblar</span>
                 </div>
                 {Object.keys(TABLE_LABELS).map(table => (
                   <div key={table} className="sync-toggles-row">
-                    <span className="sync-col-table">{TABLE_LABELS[table]}</span>
+                    <span className="sync-col-table">
+                      {TABLE_LABELS[table]}
+                      {repopulateDone[table] && !repopulating[table] && (
+                        <span style={{fontSize:'0.7rem',color:'#6ee7b7',marginLeft:6}}>{repopulateDone[table]}</span>
+                      )}
+                    </span>
                     <span className="sync-col-toggle sync-col-detect">
                       <Toggle checked={detectEnabled[table] !== false} onChange={async () => {
                         const v = detectEnabled[table] === false;
@@ -334,6 +342,45 @@ export default function Config() {
                           showToast('success', `${TABLE_LABELS[table]}: envio ${v ? 'activado' : 'desactivado'}`);
                         } catch { showToast('error', 'Error al guardar'); }
                       }} />
+                    </span>
+                    <span className="sync-col-toggle" style={{minWidth:110}}>
+                      <button
+                        className="btn-test"
+                        style={{fontSize:'0.72rem',padding:'2px 8px',opacity: repopulating[table] ? 0.6 : 1}}
+                        disabled={repopulating[table]}
+                        onClick={async () => {
+                          setRepopulating(p => ({...p, [table]: true}));
+                          setRepopulateDone(p => ({...p, [table]: ''}));
+                          try {
+                            await fetch(`/api/repopulate?table=${table}`, {
+                              method: 'POST',
+                              headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
+                            });
+                            // Poll until done
+                            const checkStatus = async () => {
+                              try {
+                                const res = await fetch(`/api/repopulate?table=${table}`, {
+                                  headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
+                                });
+                                const data = await res.json();
+                                if (!data.running) {
+                                  setRepopulating(p => ({...p, [table]: false}));
+                                  setRepopulateDone(p => ({...p, [table]: data.last || `${data.count} registros`}));
+                                  showToast('success', `${TABLE_LABELS[table]}: ${data.last || data.count + ' registros'}`);
+                                } else {
+                                  setTimeout(checkStatus, 1500);
+                                }
+                              } catch (_e) { setRepopulating(p => ({...p, [table]: false})); }
+                            };
+                            setTimeout(checkStatus, 1500);
+                          } catch {
+                            setRepopulating(p => ({...p, [table]: false}));
+                            showToast('error', 'Error al repoblar');
+                          }
+                        }}
+                      >
+                        {repopulating[table] ? '⟳ ...' : 'Repoblar'}
+                      </button>
                     </span>
                   </div>
                 ))}

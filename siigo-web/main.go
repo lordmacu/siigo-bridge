@@ -125,6 +125,8 @@ type Server struct {
 	sendFailCount   int    // consecutive send cycle failures
 	setupPopulating string            // table currently being populated during setup ("" = idle)
 	setupPopulated  map[string]bool   // tables that have been populated during this setup session (even if 0 records)
+	repopulating   map[string]bool   // tables currently being repopulated
+	repopulateDone map[string]string // last repopulate result per table
 	stopCh          chan bool
 	tokens         map[string]TokenInfo
 	tokenMu        gosync.RWMutex
@@ -817,6 +819,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/sync-history", s.authMiddleware(s.handleSyncHistory))
 	mux.HandleFunc("/api/logs", s.permMiddleware(s.handleLogs))
 	mux.HandleFunc("/api/sync-now", s.authMiddleware(s.handleSyncNow))
+	mux.HandleFunc("/api/repopulate", s.authMiddleware(s.handleRepopulate))
 	mux.HandleFunc("/api/pause", s.authMiddleware(s.handlePause))
 	mux.HandleFunc("/api/resume", s.authMiddleware(s.handleResume))
 	mux.HandleFunc("/api/sync-status", s.authMiddleware(s.handleSyncStatus))
@@ -4200,6 +4203,74 @@ func (s *Server) handleSyncNow(w http.ResponseWriter, r *http.Request) {
 		s.doSendCycle()
 	}()
 	jsonResponse(w, map[string]string{"message": "Manual sync started (detect + send)"})
+}
+
+// handleRepopulate clears a table and re-runs its diff function from scratch.
+// POST /api/repopulate?table=X  → start
+// GET  /api/repopulate?table=X  → status
+func (s *Server) handleRepopulate(w http.ResponseWriter, r *http.Request) {
+	table := r.URL.Query().Get("table")
+	if table == "" {
+		jsonError(w, "table required", 400)
+		return
+	}
+	if s.repopulating == nil {
+		s.repopulating = map[string]bool{}
+	}
+	if s.repopulateDone == nil {
+		s.repopulateDone = map[string]string{}
+	}
+
+	if r.Method == "GET" {
+		running := s.repopulating[table]
+		last := s.repopulateDone[table]
+		// Count current rows
+		var count int
+		s.db.GetConn().QueryRow("SELECT COUNT(*) FROM " + table).Scan(&count)
+		jsonResponse(w, map[string]interface{}{
+			"table":   table,
+			"running": running,
+			"last":    last,
+			"count":   count,
+		})
+		return
+	}
+	if r.Method != "POST" {
+		jsonError(w, "GET or POST only", 405)
+		return
+	}
+
+	diffFn := s.getDiffFunc(table)
+	if diffFn == nil {
+		jsonError(w, "unknown table: "+table, 400)
+		return
+	}
+	if s.repopulating[table] {
+		jsonResponse(w, map[string]string{"message": "already running"})
+		return
+	}
+
+	conn := s.db.GetConn()
+	if _, err := conn.Exec("DELETE FROM " + table); err != nil {
+		jsonError(w, "clear failed: "+err.Error(), 500)
+		return
+	}
+	s.repopulating[table] = true
+	s.repopulateDone[table] = ""
+	s.db.AddLog("info", "REPOPULATE", fmt.Sprintf("Table %s cleared, re-running detect...", table))
+
+	go func() {
+		start := time.Now()
+		diffFn()
+		var count int
+		s.db.GetConn().QueryRow("SELECT COUNT(*) FROM " + table).Scan(&count)
+		elapsed := time.Since(start).Round(time.Second)
+		s.repopulateDone[table] = fmt.Sprintf("%d registros en %s", count, elapsed)
+		s.repopulating[table] = false
+		s.db.AddLog("info", "REPOPULATE", fmt.Sprintf("Table %s repopulated: %d records in %s", table, count, elapsed))
+	}()
+
+	jsonResponse(w, map[string]string{"message": "Repopulating " + table + " from ISAM..."})
 }
 
 func (s *Server) handlePause(w http.ResponseWriter, r *http.Request) {
