@@ -166,7 +166,8 @@ build_backend() {
     cd "$WEB_DIR"
     # Build to temp name to avoid "file in use" on Windows
     rm -f siigo-web-new.exe 2>/dev/null
-    go build -o siigo-web-new.exe . 2>&1
+    VERSION=$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//' || echo "dev")
+    go build -ldflags="-s -w -X main.Version=$VERSION" -o siigo-web-new.exe . 2>&1
     if [ -f siigo-web-new.exe ]; then
         mv -f siigo-web-new.exe siigo-web.exe 2>/dev/null || {
             # If mv fails (exe locked), use the new name directly
