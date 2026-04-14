@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -61,20 +62,12 @@ func (s *Server) handleTerminalWS(w http.ResponseWriter, r *http.Request) {
 	}
 	defer ptmx.Close()
 
-	var shell string
-	var args []string
-	if runtime.GOOS == "windows" {
-		shell = "powershell.exe"
-		args = []string{"-NoLogo"}
-	} else {
-		shell = "bash"
-		args = []string{"-i"}
-	}
-
+	shell, args := pickShell()
 	cmd := ptmx.Command(shell, args...)
-	cmd.Dir = installDirCompat()
+	cmd.Env = os.Environ()
 
 	if err := cmd.Start(); err != nil {
+		s.db.AddLog("error", "TERMINAL", "Start failed: "+err.Error())
 		conn.WriteJSON(terminalMsg{Type: "exit", Data: "shell start failed: " + err.Error(), Code: -1})
 		return
 	}
@@ -176,4 +169,29 @@ func installDirCompat() string {
 		return "."
 	}
 	return filepath.Dir(exe)
+}
+
+// pickShell returns an absolute-path shell and its args, robust across Windows
+// versions. Avoids PATH lookup issues when running as LocalSystem service.
+func pickShell() (string, []string) {
+	if runtime.GOOS == "windows" {
+		windir := os.Getenv("WINDIR")
+		if windir == "" {
+			windir = `C:\Windows`
+		}
+		candidates := []string{
+			filepath.Join(windir, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
+			filepath.Join(windir, "System32", "cmd.exe"),
+		}
+		for _, p := range candidates {
+			if _, err := os.Stat(p); err == nil {
+				if strings.HasSuffix(strings.ToLower(p), "powershell.exe") {
+					return p, []string{"-NoLogo"}
+				}
+				return p, nil
+			}
+		}
+		return candidates[1], nil
+	}
+	return "/bin/bash", []string{"-i"}
 }

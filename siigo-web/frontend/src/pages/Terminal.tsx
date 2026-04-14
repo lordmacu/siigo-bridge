@@ -41,7 +41,8 @@ export default function Terminal() {
         if (msg.type === 'output') {
           termRef.current?.write(msg.data);
         } else if (msg.type === 'exit') {
-          termRef.current?.write(`\r\n\x1b[33m[Sesion terminada, codigo=${msg.code}]\x1b[0m\r\n`);
+          const detail = msg.data ? ` - ${msg.data}` : '';
+          termRef.current?.write(`\r\n\x1b[33m[Sesion terminada, codigo=${msg.code}${detail}]\x1b[0m\r\n`);
           setConnected(false);
         }
       } catch { /* ignore */ }
