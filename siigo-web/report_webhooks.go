@@ -1,6 +1,7 @@
 package main
 
 import (
+	"math"
 	"time"
 )
 
@@ -192,13 +193,14 @@ func (s *Server) buildRecaudoReport(nit string) map[string]interface{} {
 // (reads from cartera_cxc SQLite table, NOT from Z07 directly)
 func (s *Server) buildCarteraReport(nit string) map[string]interface{} {
 	conn := s.db.GetConn()
+	today := time.Now().Format("2006-01-02")
 
 	rows, err := conn.Query(`
 		SELECT nit, nombre_cliente, tipo_comprobante, num_documento, documento_ref,
-			fecha, fecha_vencimiento, dias, saldo
+			fecha, fecha_vencimiento, saldo
 		FROM cartera_cxc
 		WHERE nit = ? AND saldo > 0
-		ORDER BY fecha
+		ORDER BY fecha ASC, num_documento ASC
 	`, nit)
 	if err != nil {
 		return nil
@@ -214,27 +216,51 @@ func (s *Server) buildCarteraReport(nit string) map[string]interface{} {
 		Fecha            string  `json:"fecha"`
 		FechaVencimiento string  `json:"fecha_vencimiento"`
 		Dias             int     `json:"dias"`
-		Saldo            float64 `json:"saldo"`
+		SaldoContable    float64 `json:"saldo_contable"`
+		Vencido          float64 `json:"vencido"`
+		SaldoVencido     float64 `json:"saldo_vencido"`
 	}
 
 	var items []item
-	totalSaldo := 0.0
+	totalVencido := 0.0
 	var nombre string
+	var accumVencido float64
+
 	for rows.Next() {
 		var it item
+		var saldo float64
 		if err := rows.Scan(&it.NIT, &it.NombreCliente, &it.TipoComprobante, &it.NumDocumento,
-			&it.DocumentoRef, &it.Fecha, &it.FechaVencimiento, &it.Dias, &it.Saldo); err != nil {
+			&it.DocumentoRef, &it.Fecha, &it.FechaVencimiento, &saldo); err != nil {
 			continue
 		}
-		items = append(items, it)
-		totalSaldo += it.Saldo
+
+		// Recompute dias live from fecha_vencimiento
+		dias := 0
+		if tv, err := time.Parse("2006-01-02", it.FechaVencimiento); err == nil {
+			if tt, err := time.Parse("2006-01-02", today); err == nil {
+				dias = int(tv.Sub(tt).Hours() / 24)
+			}
+		}
+
+		vencido := 0.0
+		if dias < 0 && saldo > 0 {
+			vencido = saldo
+		}
+		accumVencido += vencido
+
+		it.Dias = dias
+		it.SaldoContable = math.Round(saldo*100) / 100
+		it.Vencido = math.Round(vencido*100) / 100
+		it.SaldoVencido = math.Round(accumVencido*100) / 100
+		totalVencido += vencido
 		nombre = it.NombreCliente
+		items = append(items, it)
 	}
 
 	return map[string]interface{}{
 		"nombre_cliente":  nombre,
 		"total_registros": len(items),
-		"total_saldo":     totalSaldo,
+		"total_vencidos":  math.Round(totalVencido*100) / 100,
 		"cartera":         items,
 	}
 }

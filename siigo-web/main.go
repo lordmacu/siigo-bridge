@@ -1905,9 +1905,16 @@ func (s *Server) diffCarteraCxC() {
 			}
 		}
 
+		// vencido: same as saldo when overdue (dias < 0), else 0 — matches Siigo Excel column
+		vencido := 0.0
+		if dias < 0 && saldo > 0 {
+			vencido = saldo
+		}
+
 		docRef := fmt.Sprintf("%s-%s-%011d-001", tipoComp[:1], tipoComp[1:], numDoc)
 
-		hashStr := fmt.Sprintf("%s|%s|%s|%s|%.2f", recNit, tipoComp, fecha, vence, saldo)
+		// Include vencido in hash so change is detected when invoice crosses due date
+		hashStr := fmt.Sprintf("%s|%s|%s|%s|%.2f|%.2f", recNit, tipoComp, fecha, vence, saldo, vencido)
 		h := sha256.Sum256([]byte(hashStr))
 		hash := hex.EncodeToString(h[:8])
 
@@ -1921,7 +1928,9 @@ func (s *Server) diffCarteraCxC() {
 			"nit": recNit, "nombre_cliente": nombre,
 			"tipo_comprobante": tipoComp, "num_documento": numDoc,
 			"documento_ref": docRef, "fecha": fecha,
-			"fecha_vencimiento": vence, "dias": dias, "saldo": saldo,
+			"fecha_vencimiento": vence, "dias": dias,
+			"saldo":   saldo,   // outstanding balance (returned as saldo_contable in API)
+			"vencido": vencido, // overdue amount: saldo if dias<0 else 0
 		}
 
 		action := s.db.UpsertGeneric("cartera_cxc", "record_key", key, hash, rec)
@@ -5307,12 +5316,13 @@ func (s *Server) handleCarteraCliente(w http.ResponseWriter, r *http.Request) {
 	}
 	whereClause := strings.Join(conditions, " AND ")
 
+	// ORDER BY nit, fecha ASC so cumulative saldo_vencido can be computed per client
 	rows, err := conn.Query(fmt.Sprintf(`
 		SELECT nit, nombre_cliente, tipo_comprobante, num_documento, documento_ref,
 			fecha, fecha_vencimiento, saldo
 		FROM cartera_cxc
 		WHERE %s
-		ORDER BY fecha DESC, num_documento DESC
+		ORDER BY nit, fecha ASC, num_documento ASC
 	`, whereClause), args...)
 	if err != nil {
 		jsonError(w, "Query error: "+err.Error(), 500)
@@ -5331,7 +5341,7 @@ func (s *Server) handleCarteraCliente(w http.ResponseWriter, r *http.Request) {
 		Dias          int     `json:"dias"`
 		SaldoContable float64 `json:"saldo_contable"`
 		Vencido       float64 `json:"vencido"`
-		SaldoVencido  float64 `json:"saldo_vencido"`
+		SaldoVencido  float64 `json:"saldo_vencido"` // cumulative per client, matches Siigo Excel
 		CateraType    string  `json:"catera_type"`
 	}
 
@@ -5366,16 +5376,25 @@ func (s *Server) handleCarteraCliente(w http.ResponseWriter, r *http.Request) {
 			Cuenta: "13050500", DescCuenta: "DEUDORES NACIONALES",
 			Documento: docRef, Fecha: fecha, Vence: vence, Dias: dias,
 			SaldoContable: math.Round(saldo*100) / 100,
-			Vencido: math.Round(vencido*100) / 100,
-			SaldoVencido: math.Round(vencido*100) / 100,
-			CateraType: "nacional",
+			Vencido:       math.Round(vencido*100) / 100,
+			SaldoVencido:  0, // will be set to cumulative below
+			CateraType:    "nacional",
 		})
+	}
+
+	// Compute cumulative saldo_vencido per client (running total of vencido, oldest→newest).
+	// Matches the Siigo Excel export format: each row shows total overdue accumulated up to that doc.
+	// SyncSiigoCartera reads saldo_vencido per row; Finearom takes the last value per NIT as total.
+	nitAccum := make(map[string]float64)
+	for i := range result {
+		nitAccum[result[i].NIT] += result[i].Vencido
+		result[i].SaldoVencido = math.Round(nitAccum[result[i].NIT]*100) / 100
 	}
 
 	var totalVencidos, totalPorVencer float64
 	for _, cr := range result {
 		if cr.Dias < 0 {
-			totalVencidos += cr.SaldoContable
+			totalVencidos += cr.Vencido
 		} else {
 			totalPorVencer += cr.SaldoContable
 		}
