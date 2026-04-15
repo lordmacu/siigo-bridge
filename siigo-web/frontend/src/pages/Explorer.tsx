@@ -214,6 +214,10 @@ export default function Explorer() {
   const [isamFileName, setIsamFileName] = useState('');
   const [isamDownloading, setIsamDownloading] = useState(false);
   const [isamError, setIsamError] = useState('');
+  const [fileDownloadKey, setFileDownloadKey] = useState('');
+  const [isamCopied, setIsamCopied] = useState(false);
+  const [newKeyInput, setNewKeyInput] = useState('');
+  const [keySaving, setKeySaving] = useState(false);
   const [tables, setTables] = useState<TableInfo[]>([]);
   const [query, setQuery] = useState('SELECT * FROM clients');
   const [limit, setLimit] = useState(20);
@@ -253,6 +257,14 @@ export default function Explorer() {
 
   // Keep tablesRef in sync
   useEffect(() => { tablesRef.current = tables; }, [tables]);
+
+  // Fetch file download key when files tab is opened
+  useEffect(() => {
+    if (activeTab !== 'files') return;
+    api.getConfig().then((cfg: Record<string, unknown>) => {
+      setFileDownloadKey((cfg.file_download_key as string) || '');
+    }).catch(() => {});
+  }, [activeTab]);
 
   // Query Builder: load columns when table changes
   useEffect(() => {
@@ -1061,35 +1073,37 @@ export default function Explorer() {
 
         {/* Tab: Archivos ISAM */}
         {activeTab === 'files' && (
-          <div style={{ maxWidth: 480, margin: '2rem auto' }}>
+          <div style={{ maxWidth: 600, margin: '2rem auto', display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+
+            {/* Download card */}
             <div className="card" style={{ padding: '1.5rem' }}>
-              <h3 style={{ margin: '0 0 0.5rem' }}>Descargar archivo ISAM</h3>
-              <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', margin: '0 0 1.2rem' }}>
-                Escribe el nombre del archivo dentro de la carpeta de datos de Siigo (ej: <code>Z49</code>, <code>Z072026</code>, <code>Z09YYYY</code>).
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.4rem' }}>
+                <span style={{ fontSize: '1.2rem' }}>📁</span>
+                <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 600 }}>Descargar archivo ISAM</h3>
+              </div>
+              <p style={{ color: 'var(--text-secondary)', fontSize: '0.83rem', margin: '0 0 1rem' }}>
+                Nombre del archivo en la carpeta de datos Siigo — solo el nombre, sin ruta ni extensión.
               </p>
               <div style={{ display: 'flex', gap: '0.5rem' }}>
                 <input
                   type="text"
-                  placeholder="Nombre del archivo (ej: Z49)"
+                  placeholder="Ej: Z49, Z072026, Z092026"
                   value={isamFileName}
                   onChange={e => { setIsamFileName(e.target.value.toUpperCase()); setIsamError(''); }}
                   onKeyDown={e => { if (e.key === 'Enter') document.getElementById('btn-isam-download')?.click(); }}
-                  style={{ flex: 1, padding: '0.5rem 0.75rem', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-secondary)', color: 'var(--text)', fontSize: '0.95rem' }}
+                  style={{ flex: 1, padding: '0.5rem 0.75rem', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-secondary)', color: 'var(--text)', fontSize: '0.9rem', fontFamily: 'monospace' }}
                 />
                 <button
                   id="btn-isam-download"
                   className="btn btn-primary"
-                  disabled={!isamFileName.trim() || isamDownloading}
+                  disabled={!isamFileName.trim() || isamDownloading || !fileDownloadKey}
                   onClick={async () => {
                     const name = isamFileName.trim();
-                    if (!name) return;
+                    if (!name || !fileDownloadKey) return;
                     setIsamDownloading(true);
                     setIsamError('');
                     try {
-                      const token = localStorage.getItem('siigo_token') || '';
-                      const res = await fetch(`/api/siigo-file?name=${encodeURIComponent(name)}`, {
-                        headers: { Authorization: `Bearer ${token}` },
-                      });
+                      const res = await fetch(`/api/siigo-file?name=${encodeURIComponent(name)}&key=${encodeURIComponent(fileDownloadKey)}`);
                       if (!res.ok) {
                         const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
                         setIsamError(err.error || `Error ${res.status}`);
@@ -1104,19 +1118,134 @@ export default function Explorer() {
                       a.click();
                       document.body.removeChild(a);
                       URL.revokeObjectURL(url);
-                    } catch (e) {
+                    } catch {
                       setIsamError('Error de conexión');
                     } finally {
                       setIsamDownloading(false);
                     }
                   }}
                 >
-                  {isamDownloading ? 'Descargando...' : 'Descargar'}
+                  {isamDownloading ? '⏳ Descargando…' : '⬇ Descargar'}
                 </button>
               </div>
               {isamError && (
-                <p style={{ color: 'var(--error)', marginTop: '0.75rem', fontSize: '0.85rem' }}>{isamError}</p>
+                <p style={{ color: 'var(--error)', marginTop: '0.6rem', fontSize: '0.83rem', margin: '0.6rem 0 0' }}>{isamError}</p>
               )}
+              {!fileDownloadKey && (
+                <p style={{ color: 'var(--warning, #f59e0b)', marginTop: '0.6rem', fontSize: '0.83rem' }}>
+                  ⚠ Configura <code>file_download_key</code> en Ajustes → Avanzado para habilitar las descargas.
+                </p>
+              )}
+            </div>
+
+            {/* Key setup card */}
+            <div className="card" style={{ padding: '1.5rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.4rem' }}>
+                <span style={{ fontSize: '1.1rem' }}>🔑</span>
+                <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 600 }}>Clave de descarga</h3>
+                {fileDownloadKey && <span style={{ fontSize: '0.75rem', background: 'var(--success-bg, #d1fae5)', color: 'var(--success, #059669)', padding: '0.15rem 0.5rem', borderRadius: 99, fontWeight: 600 }}>CONFIGURADA</span>}
+              </div>
+              <p style={{ color: 'var(--text-secondary)', fontSize: '0.83rem', margin: '0 0 0.75rem' }}>
+                Clave estática que va en la URL para descargar archivos sin login. Solo con HTTPS o red local de confianza.
+              </p>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <input
+                  type="text"
+                  placeholder={fileDownloadKey ? '(cambia la clave actual)' : 'Nueva clave secreta…'}
+                  value={newKeyInput}
+                  onChange={e => setNewKeyInput(e.target.value)}
+                  style={{ flex: 1, padding: '0.5rem 0.75rem', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-secondary)', color: 'var(--text)', fontSize: '0.9rem', fontFamily: 'monospace' }}
+                />
+                <button
+                  className="btn btn-primary"
+                  disabled={!newKeyInput.trim() || keySaving}
+                  onClick={async () => {
+                    setKeySaving(true);
+                    try {
+                      const token = localStorage.getItem('siigo_token') || '';
+                      const res = await fetch('/api/file-download-key', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                        body: JSON.stringify({ key: newKeyInput.trim() }),
+                      });
+                      if (res.ok) {
+                        setFileDownloadKey(newKeyInput.trim());
+                        setNewKeyInput('');
+                      }
+                    } finally {
+                      setKeySaving(false);
+                    }
+                  }}
+                >
+                  {keySaving ? 'Guardando…' : 'Guardar'}
+                </button>
+              </div>
+            </div>
+
+            {/* cURL card */}
+            {fileDownloadKey && (
+              <div className="card" style={{ padding: '1.5rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                    <span style={{ fontSize: '1.1rem' }}>🔗</span>
+                    <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 600 }}>Descarga por URL / curl</h3>
+                  </div>
+                  <button
+                    className="btn btn-secondary"
+                    style={{ fontSize: '0.78rem', padding: '0.25rem 0.65rem' }}
+                    onClick={() => {
+                      const cmd = `curl -O "http://TU-SERVIDOR:3210/api/siigo-file?name=${isamFileName || 'Z49'}&key=${fileDownloadKey}"`;
+                      navigator.clipboard.writeText(cmd).then(() => { setIsamCopied(true); setTimeout(() => setIsamCopied(false), 2000); });
+                    }}
+                  >
+                    {isamCopied ? '✓ Copiado' : 'Copiar'}
+                  </button>
+                </div>
+                <pre style={{
+                  background: 'var(--bg-secondary)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 6,
+                  padding: '0.75rem 1rem',
+                  fontSize: '0.78rem',
+                  fontFamily: 'monospace',
+                  overflowX: 'auto',
+                  margin: 0,
+                  color: 'var(--text)',
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-all',
+                }}>
+{`curl -O "http://TU-SERVIDOR:3210/api/siigo-file?name=${isamFileName || 'Z49'}&key=${fileDownloadKey}"`}
+                </pre>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: '0.6rem', margin: '0.5rem 0 0' }}>
+                  Reemplaza <code>TU-SERVIDOR:3210</code> con la IP o dominio del servidor. La clave viaja en la URL — úsalo solo en redes de confianza o con HTTPS.
+                </p>
+              </div>
+            )}
+
+            {/* Common files reference */}
+            <div className="card" style={{ padding: '1.25rem 1.5rem' }}>
+              <h3 style={{ margin: '0 0 0.75rem', fontSize: '0.9rem', fontWeight: 600, color: 'var(--text-secondary)' }}>ARCHIVOS FRECUENTES</h3>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.35rem 1.5rem', fontSize: '0.82rem' }}>
+                {[
+                  ['Z49', 'Notas / OC / encabezados doc.'],
+                  ['Z072026', 'Cartera CxC año actual'],
+                  ['Z092026', 'Movimientos contables año actual'],
+                  ['Z17', 'Tipos de documento'],
+                  ['Z08A', 'Terceros / clientes'],
+                  ['Z04', 'Productos'],
+                  ['Z03', 'Plan de cuentas'],
+                  ['Z25', 'Saldos terceros'],
+                ].map(([name, desc]) => (
+                  <div
+                    key={name}
+                    style={{ display: 'flex', gap: '0.5rem', alignItems: 'baseline', cursor: 'pointer' }}
+                    onClick={() => setIsamFileName(name)}
+                  >
+                    <code style={{ color: 'var(--accent, #6366f1)', minWidth: 80 }}>{name}</code>
+                    <span style={{ color: 'var(--text-secondary)' }}>{desc}</span>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         )}

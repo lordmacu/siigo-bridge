@@ -19,6 +19,7 @@ type Config struct {
 	DetectEnabled     map[string]bool       `json:"detect_enabled,omitempty"`
 	GlobalSendEnabled bool                  `json:"global_send_enabled"`
 	AllowEditDelete   bool                  `json:"allow_edit_delete"`
+	FileDownloadKey   string                `json:"file_download_key,omitempty"`
 	Terminal          TerminalConfig        `json:"terminal,omitempty"`
 	SetupComplete   bool                  `json:"setup_complete"`
 }

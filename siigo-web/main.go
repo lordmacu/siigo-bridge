@@ -821,7 +821,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/logs", s.permMiddleware(s.handleLogs))
 	mux.HandleFunc("/api/sync-now", s.authMiddleware(s.handleSyncNow))
 	mux.HandleFunc("/api/repopulate", s.authMiddleware(s.handleRepopulate))
-	mux.HandleFunc("/api/siigo-file", s.authMiddleware(s.handleSiigoFileDownload))
+	mux.HandleFunc("/api/siigo-file", s.handleSiigoFileDownload)
 	mux.HandleFunc("/api/pause", s.authMiddleware(s.handlePause))
 	mux.HandleFunc("/api/resume", s.authMiddleware(s.handleResume))
 	mux.HandleFunc("/api/sync-status", s.authMiddleware(s.handleSyncStatus))
@@ -849,6 +849,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/service/restart", s.authMiddleware(s.handleServiceRestart))
 	mux.HandleFunc("/api/terminal/ws", s.handleTerminalWS)
 	mux.HandleFunc("/api/terminal/pin", s.authMiddleware(s.handleTerminalPin))
+	mux.HandleFunc("/api/file-download-key", s.authMiddleware(s.handleFileDownloadKey))
 	mux.HandleFunc("/api/record", s.authMiddleware(s.handleRecord))
 	mux.HandleFunc("/api/users", s.permMiddleware(s.handleUsers))
 	mux.HandleFunc("/api/users/", s.permMiddleware(s.handleUserByID))
@@ -3745,7 +3746,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		jsonResponse(w, map[string]string{"status": "ok"})
 		return
 	}
-	// Return config WITHOUT secrets
+	// Return config WITHOUT secrets (file_download_key IS returned — user needs it for curl)
 	jsonResponse(w, map[string]interface{}{
 		"siigo":  s.cfg.Siigo,
 		"server": map[string]interface{}{"port": s.cfg.Server.Port},
@@ -3754,7 +3755,8 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			"email":    s.cfg.Finearom.Email,
 			"password": maskSecret(s.cfg.Finearom.Password),
 		},
-		"sync": s.cfg.Sync,
+		"sync":              s.cfg.Sync,
+		"file_download_key": s.cfg.FileDownloadKey,
 	})
 }
 
@@ -4220,13 +4222,26 @@ func (s *Server) handleSyncNow(w http.ResponseWriter, r *http.Request) {
 // POST /api/repopulate?table=X  → start
 // GET  /api/repopulate?table=X  → status
 // handleSiigoFileDownload serves a raw file from the configured Siigo data path.
-// GET /api/siigo-file?name=Z49  → streams the file as a download.
+// Auth: ?key=STATIC_KEY  OR  Authorization: Bearer <JWT>
+// GET /api/siigo-file?name=Z49&key=MYKEY  → streams the file as a download.
 // Only allows simple filenames (no path separators, no dots) to prevent traversal.
 func (s *Server) handleSiigoFileDownload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "GET" {
 		jsonError(w, "GET only", 405)
 		return
 	}
+
+	// Auth: only static key (?key=VALUE)
+	staticKey := s.cfg.FileDownloadKey
+	if staticKey == "" {
+		jsonError(w, "file_download_key no configurada — configúrala en Ajustes", 401)
+		return
+	}
+	if r.URL.Query().Get("key") != staticKey {
+		jsonError(w, "clave inválida", 401)
+		return
+	}
+
 	name := r.URL.Query().Get("name")
 	if name == "" {
 		jsonError(w, "name required", 400)
@@ -4260,6 +4275,29 @@ func (s *Server) handleSiigoFileDownload(w http.ResponseWriter, r *http.Request)
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", stat.Size()))
 	io.Copy(w, f)
+}
+
+// handleFileDownloadKey gets or sets the static file download key.
+// GET  → { "key": "current-key" }
+// POST { "key": "new-key" } → saves to config
+func (s *Server) handleFileDownloadKey(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "POST" {
+		var body struct {
+			Key string `json:"key"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			jsonError(w, err.Error(), 400)
+			return
+		}
+		s.cfg.FileDownloadKey = strings.TrimSpace(body.Key)
+		if err := s.cfg.Save("config.json"); err != nil {
+			jsonError(w, err.Error(), 500)
+			return
+		}
+		jsonResponse(w, map[string]string{"status": "ok", "key": s.cfg.FileDownloadKey})
+		return
+	}
+	jsonResponse(w, map[string]string{"key": s.cfg.FileDownloadKey})
 }
 
 func (s *Server) handleRepopulate(w http.ResponseWriter, r *http.Request) {
