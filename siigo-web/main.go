@@ -2138,13 +2138,17 @@ func (s *Server) diffVentasProductos() {
 		var nombre string
 		conn.QueryRow("SELECT nombre FROM clients WHERE nit = ?", recNit).Scan(&nombre)
 
-		// Look up OC and lote from notas_documentos (Z49)
+		// Look up OC and Z49 fields from notas_documentos
 		numDocPadded := fmt.Sprintf("%011d", numDoc)
-		var ordenCompra, lote string
-		conn.QueryRow(`SELECT COALESCE(orden_compra, ''), COALESCE(lote, '') FROM notas_documentos
-			WHERE num_documento = ? AND orden_compra != '' LIMIT 1`, numDocPadded).Scan(&ordenCompra, &lote)
+		var ordenCompra, lote, fechaDespacho, empaque, observaciones string
+		conn.QueryRow(`
+			SELECT COALESCE(orden_compra,''), COALESCE(lote,''),
+			       COALESCE(fecha_despacho,''), COALESCE(empaque,''), COALESCE(observaciones,'')
+			FROM notas_documentos
+			WHERE num_documento = ? LIMIT 1`, numDocPadded).Scan(
+			&ordenCompra, &lote, &fechaDespacho, &empaque, &observaciones)
 		if ordenCompra == "" {
-			// Try from texto field: "ORDEN DE COMPRA XXXXX"
+			// Fallback: parse from texto field directly
 			var texto string
 			conn.QueryRow(`SELECT texto FROM notas_documentos
 				WHERE num_documento = ? AND texto LIKE '%ORDEN DE COMPRA%' LIMIT 1`, numDocPadded).Scan(&texto)
@@ -2166,6 +2170,7 @@ func (s *Server) diffVentasProductos() {
 			"codigo_producto": codProdFull, "descripcion": desc,
 			"fecha": fecha, "mes": mes, "num_documento": numDoc,
 			"orden_compra": ordenCompra, "lote": lote,
+			"fecha_despacho": fechaDespacho, "empaque": empaque, "observaciones": observaciones,
 			"total_venta": total, "precio_unitario": precio, "cantidad": cantidad,
 		}
 
@@ -5276,7 +5281,10 @@ func (s *Server) handleVentas(w http.ResponseWriter, r *http.Request) {
 		SELECT nit, nombre_cliente, empresa, cuenta, codigo_producto, descripcion, mes,
 			SUM(total_venta) as total, MAX(precio_unitario) as precio, SUM(cantidad) as qty,
 			GROUP_CONCAT(DISTINCT CASE WHEN orden_compra != '' THEN orden_compra END) as ocs,
-			GROUP_CONCAT(DISTINCT CASE WHEN lote != '' THEN lote END) as lotes
+			GROUP_CONCAT(DISTINCT CASE WHEN lote != '' THEN lote END) as lotes,
+			GROUP_CONCAT(DISTINCT CASE WHEN fecha_despacho != '' THEN fecha_despacho END) as fechas_despacho,
+			GROUP_CONCAT(DISTINCT CASE WHEN empaque != '' THEN empaque END) as empaques,
+			GROUP_CONCAT(DISTINCT CASE WHEN observaciones != '' THEN observaciones END) as obs
 		FROM ventas_productos
 		WHERE %s
 		GROUP BY nit, cuenta, codigo_producto, mes
@@ -5290,19 +5298,22 @@ func (s *Server) handleVentas(w http.ResponseWriter, r *http.Request) {
 
 	type prodKey struct{ nit, cuenta, codProd string }
 	type prodData struct {
-		NIT          string             `json:"nit"`
-		Nombre       string             `json:"nombre_cliente"`
-		Empresa      string             `json:"empresa"`
-		Cuenta       string             `json:"cuenta"`
-		Producto     string             `json:"producto"`
-		Desc         string             `json:"descripcion"`
-		Precio       float64            `json:"precio_unitario"`
-		OrdenCompra  string             `json:"orden_compra,omitempty"`
-		Lote         string             `json:"lote,omitempty"`
-		Meses        map[string]float64 `json:"valores_mes"`
-		Cantidades   map[string]float64 `json:"cantidades_mes"`
-		TotalValor   float64            `json:"total_valor"`
-		TotalQty     float64            `json:"total_cantidad"`
+		NIT             string             `json:"nit"`
+		Nombre          string             `json:"nombre_cliente"`
+		Empresa         string             `json:"empresa"`
+		Cuenta          string             `json:"cuenta"`
+		Producto        string             `json:"producto"`
+		Desc            string             `json:"descripcion"`
+		Precio          float64            `json:"precio_unitario"`
+		OrdenCompra     string             `json:"orden_compra,omitempty"`
+		Lote            string             `json:"lote,omitempty"`
+		FechaDespacho   string             `json:"fecha_despacho,omitempty"`
+		Empaque         string             `json:"empaque,omitempty"`
+		Observaciones   string             `json:"observaciones,omitempty"`
+		Meses           map[string]float64 `json:"valores_mes"`
+		Cantidades      map[string]float64 `json:"cantidades_mes"`
+		TotalValor      float64            `json:"total_valor"`
+		TotalQty        float64            `json:"total_cantidad"`
 	}
 
 	grouped := make(map[prodKey]*prodData)
@@ -5311,8 +5322,9 @@ func (s *Server) handleVentas(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var rNit, nombre, emp, cta, codProd, desc, mes string
 		var total, precio, qty float64
-		var ocs, lotes sql.NullString
-		rows.Scan(&rNit, &nombre, &emp, &cta, &codProd, &desc, &mes, &total, &precio, &qty, &ocs, &lotes)
+		var ocs, lotes, fechasDespacho, empaques, obs sql.NullString
+		rows.Scan(&rNit, &nombre, &emp, &cta, &codProd, &desc, &mes,
+			&total, &precio, &qty, &ocs, &lotes, &fechasDespacho, &empaques, &obs)
 
 		clientSet[rNit] = true
 		key := prodKey{rNit, cta, codProd}
@@ -5321,6 +5333,9 @@ func (s *Server) handleVentas(w http.ResponseWriter, r *http.Request) {
 			pd = &prodData{
 				NIT: rNit, Nombre: nombre, Empresa: emp, Cuenta: cta,
 				OrdenCompra: ocs.String, Lote: lotes.String,
+				FechaDespacho: fechasDespacho.String,
+				Empaque:       empaques.String,
+				Observaciones: obs.String,
 				Producto: codProd, Desc: desc, Precio: precio,
 				Meses: make(map[string]float64), Cantidades: make(map[string]float64),
 			}

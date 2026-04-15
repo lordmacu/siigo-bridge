@@ -51,7 +51,10 @@ func (s *Server) buildVentasReport(nit string) map[string]interface{} {
 		SELECT nit, nombre_cliente, empresa, cuenta, codigo_producto, descripcion, mes,
 			SUM(total_venta) as total, MAX(precio_unitario) as precio, SUM(cantidad) as qty,
 			GROUP_CONCAT(DISTINCT CASE WHEN orden_compra != '' THEN orden_compra END) as ocs,
-			GROUP_CONCAT(DISTINCT CASE WHEN lote != '' THEN lote END) as lotes
+			GROUP_CONCAT(DISTINCT CASE WHEN lote != '' THEN lote END) as lotes,
+			GROUP_CONCAT(DISTINCT CASE WHEN fecha_despacho != '' THEN fecha_despacho END) as fechas_despacho,
+			GROUP_CONCAT(DISTINCT CASE WHEN empaque != '' THEN empaque END) as empaques,
+			GROUP_CONCAT(DISTINCT CASE WHEN observaciones != '' THEN observaciones END) as obs
 		FROM ventas_productos
 		WHERE nit = ? AND mes >= ? AND mes <= ?
 		GROUP BY nit, cuenta, codigo_producto, mes
@@ -64,17 +67,20 @@ func (s *Server) buildVentasReport(nit string) map[string]interface{} {
 
 	type prodKey struct{ cuenta, codProd string }
 	type prodData struct {
-		Producto    string             `json:"producto"`
-		Desc        string             `json:"descripcion"`
-		Empresa     string             `json:"empresa"`
-		Cuenta      string             `json:"cuenta"`
-		Precio      float64            `json:"precio_unitario"`
-		OrdenCompra string             `json:"orden_compra,omitempty"`
-		Lote        string             `json:"lote,omitempty"`
-		Meses       map[string]float64 `json:"valores_mes"`
-		Cantidades  map[string]float64 `json:"cantidades_mes"`
-		TotalValor  float64            `json:"total_valor"`
-		TotalQty    float64            `json:"total_cantidad"`
+		Producto      string             `json:"producto"`
+		Desc          string             `json:"descripcion"`
+		Empresa       string             `json:"empresa"`
+		Cuenta        string             `json:"cuenta"`
+		Precio        float64            `json:"precio_unitario"`
+		OrdenCompra   string             `json:"orden_compra,omitempty"`
+		Lote          string             `json:"lote,omitempty"`
+		FechaDespacho string             `json:"fecha_despacho,omitempty"`
+		Empaque       string             `json:"empaque,omitempty"`
+		Observaciones string             `json:"observaciones,omitempty"`
+		Meses         map[string]float64 `json:"valores_mes"`
+		Cantidades    map[string]float64 `json:"cantidades_mes"`
+		TotalValor    float64            `json:"total_valor"`
+		TotalQty      float64            `json:"total_cantidad"`
 	}
 
 	grouped := make(map[prodKey]*prodData)
@@ -84,14 +90,15 @@ func (s *Server) buildVentasReport(nit string) map[string]interface{} {
 	for rows.Next() {
 		var n, nc, emp, cuenta, codProd, desc, mes string
 		var total, precio, qty float64
-		var ocs, lotes *string
-		if err := rows.Scan(&n, &nc, &emp, &cuenta, &codProd, &desc, &mes, &total, &precio, &qty, &ocs, &lotes); err != nil {
+		var ocs, lotes, fechasDespacho, empaques, obs *string
+		if err := rows.Scan(&n, &nc, &emp, &cuenta, &codProd, &desc, &mes,
+			&total, &precio, &qty, &ocs, &lotes, &fechasDespacho, &empaques, &obs); err != nil {
 			continue
 		}
 		nombre = nc
 		k := prodKey{cuenta, codProd}
 		if _, ok := grouped[k]; !ok {
-			grouped[k] = &prodData{
+			pd := &prodData{
 				Producto:   codProd,
 				Desc:       desc,
 				Empresa:    emp,
@@ -100,12 +107,12 @@ func (s *Server) buildVentasReport(nit string) map[string]interface{} {
 				Meses:      make(map[string]float64),
 				Cantidades: make(map[string]float64),
 			}
-			if ocs != nil {
-				grouped[k].OrdenCompra = *ocs
-			}
-			if lotes != nil {
-				grouped[k].Lote = *lotes
-			}
+			if ocs != nil { pd.OrdenCompra = *ocs }
+			if lotes != nil { pd.Lote = *lotes }
+			if fechasDespacho != nil { pd.FechaDespacho = *fechasDespacho }
+			if empaques != nil { pd.Empaque = *empaques }
+			if obs != nil { pd.Observaciones = *obs }
+			grouped[k] = pd
 		}
 		grouped[k].Meses[mes] += total
 		grouped[k].Cantidades[mes] += qty
