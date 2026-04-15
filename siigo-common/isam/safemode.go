@@ -6,9 +6,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
-	"unsafe"
 )
 
 // ---------------------------------------------------------------------------
@@ -116,53 +114,8 @@ func CheckWriteSafe(path string) error {
 	return nil
 }
 
-// ---------------------------------------------------------------------------
-// Windows file locking via LockFileEx / UnlockFileEx
-// ---------------------------------------------------------------------------
-
-var (
-	modkernel32      = syscall.NewLazyDLL("kernel32.dll")
-	procLockFileEx   = modkernel32.NewProc("LockFileEx")
-	procUnlockFileEx = modkernel32.NewProc("UnlockFileEx")
-)
-
+// lock constants used by safemode_windows.go
 const (
-	lockfileExclusiveLock = 0x02
+	lockfileExclusiveLock   = 0x02
 	lockfileFailImmediately = 0x01
 )
-
-func lockFileExclusive(f *os.File) error {
-	// OVERLAPPED struct (zeroed = lock from start of file)
-	var overlapped syscall.Overlapped
-
-	handle := syscall.Handle(f.Fd())
-	// LockFileEx(handle, EXCLUSIVE|FAIL_IMMEDIATELY, reserved=0, nBytesLow=1, nBytesHigh=0, &overlapped)
-	ret, _, err := procLockFileEx.Call(
-		uintptr(handle),
-		uintptr(lockfileExclusiveLock|lockfileFailImmediately),
-		0,    // reserved
-		1,    // lock 1 byte
-		0,    // high bytes
-		uintptr(unsafe.Pointer(&overlapped)),
-	)
-	if ret == 0 {
-		return fmt.Errorf("LockFileEx failed: %w", err)
-	}
-	return nil
-}
-
-func unlockFile(f *os.File) error {
-	var overlapped syscall.Overlapped
-	handle := syscall.Handle(f.Fd())
-	ret, _, err := procUnlockFileEx.Call(
-		uintptr(handle),
-		0, // reserved
-		1, // unlock 1 byte
-		0,
-		uintptr(unsafe.Pointer(&overlapped)),
-	)
-	if ret == 0 {
-		return fmt.Errorf("UnlockFileEx failed: %w", err)
-	}
-	return nil
-}

@@ -7,7 +7,6 @@ import (
 	"os"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 	"unsafe"
 
@@ -432,14 +431,12 @@ type IsamFile struct {
 	CallCount  int        // Total EXTFH calls made on this file
 }
 
-// DLL management
+// DLL management (platform-agnostic state; init/call in extfh_windows.go or extfh_other.go)
 var (
-	extfhDLL  *syscall.LazyDLL
-	extfhProc *syscall.LazyProc
-	dllOnce   sync.Once
-	dllErr    error
-	dllAvail  bool
-	dllPath   string
+	dllOnce  sync.Once
+	dllErr   error
+	dllAvail bool
+	dllPath  string
 )
 
 // ExtfhDebug enables verbose EXTFH logging when true
@@ -487,65 +484,6 @@ func setupEnvironment(dllDir string) {
 	}
 }
 
-func initDLL() {
-	var paths []string
-
-	// Check COBDIR environment variable first (most specific)
-	if cobdir := os.Getenv("COBDIR"); cobdir != "" {
-		paths = append(paths,
-			cobdir+`\bin64\cblrtsm.dll`,
-			cobdir+`\bin\cblrtsm.dll`,
-		)
-	}
-
-	// Siigo's own installation directory
-	paths = append(paths,
-		`C:\Siigo\cblrtsm.dll`,
-	)
-
-	// Micro Focus standard install locations
-	paths = append(paths,
-		`C:\Microfocus\bin64\cblrtsm.dll`,
-		`C:\Microfocus\bin\cblrtsm.dll`,
-	)
-
-	// Program Files locations (both 64-bit and 32-bit)
-	for _, pf := range []string{
-		os.Getenv("ProgramFiles"),
-		os.Getenv("ProgramFiles(x86)"),
-	} {
-		if pf == "" {
-			continue
-		}
-		paths = append(paths,
-			pf+`\Micro Focus\Visual COBOL\bin64\cblrtsm.dll`,
-			pf+`\Micro Focus\Visual COBOL\bin\cblrtsm.dll`,
-			pf+`\Micro Focus\COBOL Server\bin64\cblrtsm.dll`,
-			pf+`\Micro Focus\COBOL Server\bin\cblrtsm.dll`,
-		)
-	}
-
-	for _, p := range paths {
-		if _, err := os.Stat(p); err != nil {
-			continue
-		}
-
-		// Setup environment before loading the DLL
-		dllDir := p[:strings.LastIndex(p, `\`)]
-		setupEnvironment(dllDir)
-
-		extfhDLL = syscall.NewLazyDLL(p)
-		extfhProc = extfhDLL.NewProc("EXTFH")
-		if err := extfhProc.Find(); err != nil {
-			continue
-		}
-		dllAvail = true
-		dllPath = p
-		return
-	}
-	dllErr = fmt.Errorf("cblrtsm.dll not found (checked COBDIR, Siigo, Microfocus, Program Files)")
-}
-
 // ExtfhAvailable returns true if the Micro Focus EXTFH DLL is loaded
 func ExtfhAvailable() bool {
 	dllOnce.Do(initDLL)
@@ -576,19 +514,6 @@ func opcodeName(opcode uint16) string {
 		return name
 	}
 	return fmt.Sprintf("0x%04X", opcode)
-}
-
-func callEXTFH(opcode uint16, fcd *FCD3) FileStatus {
-	op := [2]byte{byte(opcode >> 8), byte(opcode & 0xFF)}
-	extfhProc.Call(
-		uintptr(unsafe.Pointer(&op[0])),
-		uintptr(unsafe.Pointer(fcd)),
-	)
-	st := FileStatus{fcd.FileStatus[0], fcd.FileStatus[1]}
-	if ExtfhDebug {
-		log.Printf("[EXTFH] %s -> %s", opcodeName(opcode), st.Error())
-	}
-	return st
 }
 
 // callEXTFHRetry calls EXTFH with automatic retry on lock status (9/065, 9/068).
