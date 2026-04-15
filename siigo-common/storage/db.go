@@ -1118,6 +1118,9 @@ func (db *DB) migrate() error {
 		`ALTER TABLE ventas_productos ADD COLUMN empaque TEXT DEFAULT ''`,
 		`ALTER TABLE ventas_productos ADD COLUMN observaciones TEXT DEFAULT ''`,
 
+		// Migration: cartera_cxc — vencido column (monto vencido = saldo when dias<0)
+		`ALTER TABLE cartera_cxc ADD COLUMN vencido REAL DEFAULT 0`,
+
 		// Cartera CxC table (from Z07 cuenta 1305 - real cartera per invoice)
 		`CREATE TABLE IF NOT EXISTS cartera_cxc (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1131,6 +1134,7 @@ func (db *DB) migrate() error {
 			fecha_vencimiento TEXT DEFAULT '',
 			dias INTEGER DEFAULT 0,
 			saldo REAL DEFAULT 0,
+			vencido REAL DEFAULT 0,
 			hash TEXT NOT NULL,
 			sync_status TEXT DEFAULT 'pending',
 			sync_action TEXT DEFAULT 'add',
