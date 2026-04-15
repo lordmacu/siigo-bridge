@@ -354,19 +354,19 @@ export default function Config() {
                           try {
                             await fetch(`/api/repopulate?table=${table}`, {
                               method: 'POST',
-                              headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
+                              headers: { Authorization: `Bearer ${localStorage.getItem('siigo_token')}` }
                             });
                             // Poll until done
                             const checkStatus = async () => {
                               try {
                                 const res = await fetch(`/api/repopulate?table=${table}`, {
-                                  headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
+                                  headers: { Authorization: `Bearer ${localStorage.getItem('siigo_token')}` }
                                 });
                                 const data = await res.json();
                                 if (!data.running) {
                                   setRepopulating(p => ({...p, [table]: false}));
                                   setRepopulateDone(p => ({...p, [table]: data.last || `${data.count} registros`}));
-                                  showToast('success', `${TABLE_LABELS[table]}: ${data.last || data.count + ' registros'}`);
+                                  showToast('success', `${TABLE_LABELS[table]}: ${data.last || (data.count + ' registros')}`);
                                 } else {
                                   setTimeout(checkStatus, 1500);
                                 }
