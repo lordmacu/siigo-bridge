@@ -1113,6 +1113,11 @@ func (db *DB) migrate() error {
 		`CREATE INDEX IF NOT EXISTS idx_cartera_num_documento ON cartera(num_documento)`,
 		`CREATE INDEX IF NOT EXISTS idx_cartera_documento_ref ON cartera(documento_ref)`,
 
+		// Migration: ventas_productos — Z49 fields (fecha_despacho, empaque, observaciones)
+		`ALTER TABLE ventas_productos ADD COLUMN fecha_despacho TEXT DEFAULT ''`,
+		`ALTER TABLE ventas_productos ADD COLUMN empaque TEXT DEFAULT ''`,
+		`ALTER TABLE ventas_productos ADD COLUMN observaciones TEXT DEFAULT ''`,
+
 		// Cartera CxC table (from Z07 cuenta 1305 - real cartera per invoice)
 		`CREATE TABLE IF NOT EXISTS cartera_cxc (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1151,6 +1156,9 @@ func (db *DB) migrate() error {
 			num_documento INTEGER DEFAULT 0,
 			orden_compra TEXT DEFAULT '',
 			lote TEXT DEFAULT '',
+			fecha_despacho TEXT DEFAULT '',
+			empaque TEXT DEFAULT '',
+			observaciones TEXT DEFAULT '',
 			total_venta REAL DEFAULT 0,
 			precio_unitario REAL DEFAULT 0,
 			cantidad REAL DEFAULT 0,
