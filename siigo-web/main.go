@@ -2112,10 +2112,11 @@ func (s *Server) diffVentasProductos() {
 			continue
 		}
 
-		// Dedup: only for international clients (NIT 444444xxx) who generate
-		// two invoices per sale (national + export)
+		// Dedup: only when the exact same document number appears twice
+		// (can happen with ISAM reads of 444444xxx export clients).
+		// Include numDoc in key so different invoices with coincident totals are NOT deduped.
 		if strings.HasPrefix(recNit, "444444") {
-			dedupKey := fmt.Sprintf("%s|%s|%s|%.2f", recNit, codProdFull, fecha, total)
+			dedupKey := fmt.Sprintf("%s|%s|%s|%d|%.2f", recNit, codProdFull, fecha, numDoc, total)
 			if seen[dedupKey] {
 				continue
 			}
