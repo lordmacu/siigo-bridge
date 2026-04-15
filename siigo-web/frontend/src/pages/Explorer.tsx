@@ -210,7 +210,10 @@ const QB_OPERATORS = [
 let qbFilterId = 0;
 
 export default function Explorer() {
-  const [activeTab, setActiveTab] = useState<'sql' | 'builder'>('sql');
+  const [activeTab, setActiveTab] = useState<'sql' | 'builder' | 'files'>('sql');
+  const [isamFileName, setIsamFileName] = useState('');
+  const [isamDownloading, setIsamDownloading] = useState(false);
+  const [isamError, setIsamError] = useState('');
   const [tables, setTables] = useState<TableInfo[]>([]);
   const [query, setQuery] = useState('SELECT * FROM clients');
   const [limit, setLimit] = useState(20);
@@ -713,6 +716,12 @@ export default function Explorer() {
           >
             SQL Avanzado
           </button>
+          <button
+            className={`explorer-tab ${activeTab === 'files' ? 'active' : ''}`}
+            onClick={() => setActiveTab('files')}
+          >
+            Archivos ISAM
+          </button>
         </div>
 
         {/* Tab: Query Builder */}
@@ -1048,6 +1057,68 @@ export default function Explorer() {
               </EmptyState>
             )}
           </>
+        )}
+
+        {/* Tab: Archivos ISAM */}
+        {activeTab === 'files' && (
+          <div style={{ maxWidth: 480, margin: '2rem auto' }}>
+            <div className="card" style={{ padding: '1.5rem' }}>
+              <h3 style={{ margin: '0 0 0.5rem' }}>Descargar archivo ISAM</h3>
+              <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', margin: '0 0 1.2rem' }}>
+                Escribe el nombre del archivo dentro de la carpeta de datos de Siigo (ej: <code>Z49</code>, <code>Z072026</code>, <code>Z09YYYY</code>).
+              </p>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <input
+                  type="text"
+                  placeholder="Nombre del archivo (ej: Z49)"
+                  value={isamFileName}
+                  onChange={e => { setIsamFileName(e.target.value.toUpperCase()); setIsamError(''); }}
+                  onKeyDown={e => { if (e.key === 'Enter') document.getElementById('btn-isam-download')?.click(); }}
+                  style={{ flex: 1, padding: '0.5rem 0.75rem', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-secondary)', color: 'var(--text)', fontSize: '0.95rem' }}
+                />
+                <button
+                  id="btn-isam-download"
+                  className="btn btn-primary"
+                  disabled={!isamFileName.trim() || isamDownloading}
+                  onClick={async () => {
+                    const name = isamFileName.trim();
+                    if (!name) return;
+                    setIsamDownloading(true);
+                    setIsamError('');
+                    try {
+                      const token = localStorage.getItem('siigo_token') || '';
+                      const res = await fetch(`/api/siigo-file?name=${encodeURIComponent(name)}`, {
+                        headers: { Authorization: `Bearer ${token}` },
+                      });
+                      if (!res.ok) {
+                        const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+                        setIsamError(err.error || `Error ${res.status}`);
+                        return;
+                      }
+                      const blob = await res.blob();
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement('a');
+                      a.href = url;
+                      a.download = name;
+                      document.body.appendChild(a);
+                      a.click();
+                      document.body.removeChild(a);
+                      URL.revokeObjectURL(url);
+                    } catch (e) {
+                      setIsamError('Error de conexión');
+                    } finally {
+                      setIsamDownloading(false);
+                    }
+                  }}
+                >
+                  {isamDownloading ? 'Descargando...' : 'Descargar'}
+                </button>
+              </div>
+              {isamError && (
+                <p style={{ color: 'var(--error)', marginTop: '0.75rem', fontSize: '0.85rem' }}>{isamError}</p>
+              )}
+            </div>
+          </div>
         )}
       </div>
     </>

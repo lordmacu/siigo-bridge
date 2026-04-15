@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"math"
@@ -820,6 +821,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/logs", s.permMiddleware(s.handleLogs))
 	mux.HandleFunc("/api/sync-now", s.authMiddleware(s.handleSyncNow))
 	mux.HandleFunc("/api/repopulate", s.authMiddleware(s.handleRepopulate))
+	mux.HandleFunc("/api/siigo-file", s.authMiddleware(s.handleSiigoFileDownload))
 	mux.HandleFunc("/api/pause", s.authMiddleware(s.handlePause))
 	mux.HandleFunc("/api/resume", s.authMiddleware(s.handleResume))
 	mux.HandleFunc("/api/sync-status", s.authMiddleware(s.handleSyncStatus))
@@ -4217,6 +4219,49 @@ func (s *Server) handleSyncNow(w http.ResponseWriter, r *http.Request) {
 // handleRepopulate clears a table and re-runs its diff function from scratch.
 // POST /api/repopulate?table=X  → start
 // GET  /api/repopulate?table=X  → status
+// handleSiigoFileDownload serves a raw file from the configured Siigo data path.
+// GET /api/siigo-file?name=Z49  → streams the file as a download.
+// Only allows simple filenames (no path separators, no dots) to prevent traversal.
+func (s *Server) handleSiigoFileDownload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		jsonError(w, "GET only", 405)
+		return
+	}
+	name := r.URL.Query().Get("name")
+	if name == "" {
+		jsonError(w, "name required", 400)
+		return
+	}
+	// Reject anything with path separators or dots (no traversal, no extensions needed)
+	for _, c := range name {
+		if c == '/' || c == '\\' || c == '.' || c == ':' {
+			jsonError(w, "nombre de archivo inválido", 400)
+			return
+		}
+	}
+	dataPath := s.cfg.Siigo.DataPath
+	if dataPath == "" {
+		jsonError(w, "ruta de datos Siigo no configurada", 400)
+		return
+	}
+	filePath := filepath.Join(dataPath, name)
+	f, err := os.Open(filePath)
+	if err != nil {
+		jsonError(w, "Archivo no encontrado: "+name, 404)
+		return
+	}
+	defer f.Close()
+	stat, err := f.Stat()
+	if err != nil {
+		jsonError(w, "error leyendo archivo", 500)
+		return
+	}
+	w.Header().Set("Content-Disposition", "attachment; filename="+name)
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", stat.Size()))
+	io.Copy(w, f)
+}
+
 func (s *Server) handleRepopulate(w http.ResponseWriter, r *http.Request) {
 	table := r.URL.Query().Get("table")
 	if table == "" {
