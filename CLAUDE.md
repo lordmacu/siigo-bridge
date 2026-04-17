@@ -50,7 +50,7 @@ Every parser MUST check `isam.ExtfhAvailable()` and use dual offsets.
 - **ZDANE**: codigo@0(5), nombre@5(40)
 
 ### 4. Data directory
-Siigo data lives in `C:\SIIWI02` (configured in `C:\Siigo\FILEPATH.TXT`).
+Siigo data lives in `C:\SIIWIS\SIIWI02` (configured in `C:\Siigo\FILEPATH.TXT`).
 Files use Windows-1252 encoding — decode with `golang.org/x/text/encoding/charmap`.
 
 ### 5. Packed decimal (BCD) decoder

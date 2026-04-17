@@ -821,6 +821,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/logs", s.permMiddleware(s.handleLogs))
 	mux.HandleFunc("/api/sync-now", s.authMiddleware(s.handleSyncNow))
 	mux.HandleFunc("/api/repopulate", s.authMiddleware(s.handleRepopulate))
+	mux.HandleFunc("/api/repopulate-intervals", s.authMiddleware(s.handleRepopulateIntervals))
 	mux.HandleFunc("/api/siigo-file", s.handleSiigoFileDownload)
 	mux.HandleFunc("/api/pause", s.authMiddleware(s.handlePause))
 	mux.HandleFunc("/api/resume", s.authMiddleware(s.handleResume))
@@ -1494,10 +1495,11 @@ func (s *Server) diffGeneric(def *SyncTableDef) {
 
 func (s *Server) startSyncLoop() {
 	s.paused = false
-	s.stopCh = make(chan bool, 2)
-	s.db.AddLog("info", "SYNC", "Loops started (detect + send independent)")
+	s.stopCh = make(chan bool, 4)
+	s.db.AddLog("info", "SYNC", "Loops started (detect + send + repopulate independent)")
 
 	go s.startDetectLoop()
+	go s.startRepopulateLoop()
 	s.startSendLoop()
 }
 
@@ -1596,6 +1598,90 @@ func (s *Server) startSendLoop() {
 	}
 }
 
+// repopulateTables are populated on a fixed timer (not change-detection).
+var repopulateTablesList = []string{"cartera_cxc", "ventas_productos", "recaudo"}
+
+// startRepopulateLoop clears and repopulates cartera_cxc, ventas_productos, and recaudo
+// on per-table intervals (configurable, default 600s). Checks every 30s which tables are due.
+func (s *Server) startRepopulateLoop() {
+	// Track last repopulate time per table
+	lastRepopulate := map[string]time.Time{}
+
+	// Initial repopulate on startup
+	s.runRepopulateTables(repopulateTablesList)
+	now := time.Now()
+	for _, t := range repopulateTablesList {
+		lastRepopulate[t] = now
+	}
+
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			if !s.paused && s.cfg.SetupComplete {
+				var due []string
+				for _, table := range repopulateTablesList {
+					secs := s.cfg.Sync.GetRepopulateIntervalSeconds(table)
+					if time.Since(lastRepopulate[table]) >= time.Duration(secs)*time.Second {
+						due = append(due, table)
+					}
+				}
+				if len(due) > 0 {
+					s.runRepopulateTables(due)
+					now := time.Now()
+					for _, t := range due {
+						lastRepopulate[t] = now
+					}
+				}
+			}
+		case <-s.stopCh:
+			s.db.AddLog("info", "REPOPULATE", "Repopulate loop stopped")
+			return
+		}
+	}
+}
+
+// runRepopulateTables clears and repopulates the given tables sequentially.
+func (s *Server) runRepopulateTables(tables []string) {
+	if s.repopulating == nil {
+		s.repopulating = map[string]bool{}
+	}
+	if s.repopulateDone == nil {
+		s.repopulateDone = map[string]string{}
+	}
+	conn := s.db.GetConn()
+	s.db.AddLog("info", "REPOPULATE", fmt.Sprintf("--- Auto-repopulate: %s ---", strings.Join(tables, ", ")))
+	for _, table := range tables {
+		if !s.cfg.SetupComplete || s.paused {
+			break
+		}
+		if !s.cfg.IsDetectEnabled(table) {
+			continue
+		}
+		if s.repopulating[table] {
+			s.db.AddLog("info", "REPOPULATE", fmt.Sprintf("Skipping %s (already running)", table))
+			continue
+		}
+		diffFn := s.getDiffFunc(table)
+		if diffFn == nil {
+			continue
+		}
+		s.db.AddLog("info", "REPOPULATE", fmt.Sprintf("Repopulating %s...", table))
+		conn.Exec("DELETE FROM " + table)
+		s.repopulating[table] = true
+		start := time.Now()
+		diffFn()
+		var count int
+		conn.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&count)
+		elapsed := time.Since(start).Round(time.Second)
+		s.repopulateDone[table] = fmt.Sprintf("%d registros en %s", count, elapsed)
+		s.repopulating[table] = false
+		s.db.AddLog("info", "REPOPULATE", fmt.Sprintf("Table %s: %d records in %s", table, count, elapsed))
+	}
+}
+
 // doDetectTables processes only the specified tables (triggered by file watcher).
 func (s *Server) doDetectTables(tables []string) {
 	s.detecting = true
@@ -1605,31 +1691,8 @@ func (s *Server) doDetectTables(tables []string) {
 		s.syncRegistry = initSyncTables(s.cfg.Siigo.DataPath)
 	}
 
-	s.db.AddLog("info", "DETECT", fmt.Sprintf("--- File change detected → scanning %d table(s): %s ---", len(tables), strings.Join(tables, ", ")))
-
-	// Temporary: Telegram notification for watcher testing
-	if s.bot != nil {
-		s.bot.Send(fmt.Sprintf("📂 <b>File watcher triggered</b>\n\nChanged tables: %s", strings.Join(tables, ", ")))
-	}
-
-	scanned := 0
-	for _, table := range tables {
-		if !s.cfg.SetupComplete || s.paused {
-			s.db.AddLog("info", "DETECT", "Detection aborted (setup incomplete or paused)")
-			return
-		}
-		if !s.cfg.IsDetectEnabled(table) {
-			continue
-		}
-		scanned++
-		if def, ok := s.syncRegistry[table]; ok {
-			s.diffGeneric(def)
-		} else if fn := s.getDiffFunc(table); fn != nil {
-			fn()
-		}
-	}
-
-	s.db.AddLog("info", "DETECT", fmt.Sprintf("--- Watcher scan completed --- %d table(s) processed", scanned))
+	// Table detection is disabled — all tables use timed repopulate loop. Ignore watcher events.
+	s.db.AddLog("info", "DETECT", fmt.Sprintf("File change detected (%s) — skipped (repopulate loop handles all tables)", strings.Join(tables, ", ")))
 
 	// Update stats and notify
 	stats := s.db.GetStats()
@@ -1655,17 +1718,9 @@ func (s *Server) doDetectCycle() {
 		s.syncRegistry = initSyncTables(s.cfg.Siigo.DataPath)
 	}
 
-	// Detection order (matches config.AllSyncTables)
-	detectOrder := []string{
-		"clients", "products", "cartera",
-		"documentos",
-		"condiciones_pago", "codigos_dane",
-		"audit_trail_terceros",
-		"formulas",
-		"vendedores_areas",
-		"notas_documentos", "facturas_electronicas", "detalle_movimientos",
-		"cartera_cxc", "ventas_productos",
-	}
+	// All table detection disabled — repopulate loop handles cartera_cxc, ventas_productos, recaudo.
+	// Other tables are not consumed and are skipped for now.
+	detectOrder := []string{}
 
 	enabledCount := 0
 	for _, table := range detectOrder {
@@ -4369,6 +4424,44 @@ func (s *Server) handleRepopulate(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	jsonResponse(w, map[string]string{"message": "Repopulating " + table + " from ISAM..."})
+}
+
+// GET  /api/repopulate-intervals → {"cartera_cxc":600, "ventas_productos":600, "recaudo":600}
+// POST /api/repopulate-intervals → body {"intervals":{"cartera_cxc":300,...}} saves per-table seconds
+func (s *Server) handleRepopulateIntervals(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "GET" {
+		result := map[string]int{}
+		for _, table := range repopulateTablesList {
+			result[table] = s.cfg.Sync.GetRepopulateIntervalSeconds(table)
+		}
+		jsonResponse(w, result)
+		return
+	}
+	if r.Method != "POST" {
+		jsonError(w, "GET or POST only", 405)
+		return
+	}
+	var body struct {
+		Intervals map[string]int `json:"intervals"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonError(w, err.Error(), 400)
+		return
+	}
+	if s.cfg.Sync.RepopulateIntervals == nil {
+		s.cfg.Sync.RepopulateIntervals = map[string]int{}
+	}
+	for _, table := range repopulateTablesList {
+		if secs, ok := body.Intervals[table]; ok && secs >= 60 {
+			s.cfg.Sync.RepopulateIntervals[table] = secs
+		}
+	}
+	if err := s.cfg.Save("config.json"); err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	s.db.AddLog("info", "CONFIG", fmt.Sprintf("Repopulate intervals updated: %v", s.cfg.Sync.RepopulateIntervals))
+	jsonResponse(w, map[string]string{"status": "ok"})
 }
 
 func (s *Server) handlePause(w http.ResponseWriter, r *http.Request) {

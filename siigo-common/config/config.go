@@ -136,15 +136,17 @@ type FinearomConfig struct {
 }
 
 type SyncConfig struct {
-	IntervalSeconds         int      `json:"interval_seconds"`
-	SendIntervalSeconds     int      `json:"send_interval_seconds"`
-	BatchSize               int      `json:"batch_size"`
-	BatchDelayMs            int      `json:"batch_delay_ms"`
-	MaxRetries              int      `json:"max_retries"`
-	RetryDelaySeconds       int      `json:"retry_delay_seconds"`
-	CircuitBreakerThreshold int      `json:"circuit_breaker_threshold,omitempty"` // consecutive failures before auto-pause (default 4)
-	Files                   []string `json:"files"`
-	StatePath               string   `json:"state_path"`
+	IntervalSeconds           int            `json:"interval_seconds"`
+	SendIntervalSeconds       int            `json:"send_interval_seconds"`
+	BatchSize                 int            `json:"batch_size"`
+	BatchDelayMs              int            `json:"batch_delay_ms"`
+	MaxRetries                int            `json:"max_retries"`
+	RetryDelaySeconds         int            `json:"retry_delay_seconds"`
+	CircuitBreakerThreshold   int            `json:"circuit_breaker_threshold,omitempty"`
+	RepopulateIntervalSeconds int            `json:"repopulate_interval_seconds,omitempty"` // global default (600s)
+	RepopulateIntervals       map[string]int `json:"repopulate_intervals,omitempty"`         // per-table override in seconds
+	Files                     []string       `json:"files"`
+	StatePath                 string         `json:"state_path"`
 }
 
 // GetCircuitBreakerThreshold returns the configured threshold or default of 4
@@ -153,6 +155,20 @@ func (s *SyncConfig) GetCircuitBreakerThreshold() int {
 		return s.CircuitBreakerThreshold
 	}
 	return 4
+}
+
+// GetRepopulateIntervalSeconds returns the per-table repopulate interval (seconds),
+// falling back to the global default (RepopulateIntervalSeconds or 600).
+func (s *SyncConfig) GetRepopulateIntervalSeconds(table string) int {
+	if s.RepopulateIntervals != nil {
+		if secs, ok := s.RepopulateIntervals[table]; ok && secs > 0 {
+			return secs
+		}
+	}
+	if s.RepopulateIntervalSeconds > 0 {
+		return s.RepopulateIntervalSeconds
+	}
+	return 600
 }
 
 func Load(path string) (*Config, error) {
@@ -183,14 +199,15 @@ func Default() *Config {
 			Password: "",
 		},
 		Sync: SyncConfig{
-			IntervalSeconds:     60,
-			SendIntervalSeconds: 30,
-			BatchSize:           50,
-			BatchDelayMs:        500,
-			MaxRetries:          3,
-			RetryDelaySeconds:   30,
-			Files:             []string{"Z17", "Z04", "Z49", "Z092024"},
-			StatePath:         "sync_state.json",
+			IntervalSeconds:           60,
+			SendIntervalSeconds:       30,
+			RepopulateIntervalSeconds: 600,
+			BatchSize:                 50,
+			BatchDelayMs:              500,
+			MaxRetries:                3,
+			RetryDelaySeconds:         30,
+			Files:                     []string{"Z17", "Z04", "Z49", "Z092024"},
+			StatePath:                 "sync_state.json",
 		},
 		PublicAPI: PublicAPIConfig{
 			Enabled:     true,

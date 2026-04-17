@@ -90,6 +90,11 @@ export default function Config() {
   const [sendEnabled, setSendEnabled] = useState<Record<string, boolean>>({});
   const [repopulating, setRepopulating] = useState<Record<string, boolean>>({});
   const [repopulateDone, setRepopulateDone] = useState<Record<string, string>>({});
+  const [repopulateIntervals, setRepopulateIntervals] = useState<Record<string, number>>({
+    cartera_cxc: 600, ventas_productos: 600, recaudo: 600,
+  });
+
+  const REPOPULATE_TABLES = new Set(['cartera_cxc', 'ventas_productos', 'recaudo']);
 
   // --- Avanzado ---
   const [batchSize, setBatchSize] = useState(50);
@@ -173,6 +178,7 @@ export default function Config() {
     fetch('/api/global-send', { headers: { 'Authorization': `Bearer ${localStorage.getItem('siigo_token')}` } }).then(r => r.json()).then(r => setGlobalSend(r.enabled === true)).catch(() => {});
     api.getDetectEnabled().then(setDetectEnabled).catch(() => {});
     api.getSendEnabled().then(setSendEnabled).catch(() => {});
+    api.getRepopulateIntervals().then(setRepopulateIntervals).catch(() => {});
     api.getWebhookConfig().then(cfg => {
       setWhEnabled(cfg.enabled === true);
       setWhHooks(cfg.hooks || []);
@@ -311,7 +317,7 @@ export default function Config() {
                   <span className="sync-col-table">Tabla</span>
                   <span className="sync-col-toggle sync-col-detect">Deteccion</span>
                   <span className="sync-col-toggle sync-col-send">Envio</span>
-                  <span className="sync-col-toggle" style={{minWidth:110}}>Repoblar</span>
+                  <span className="sync-col-toggle" style={{minWidth:170}}>Repoblar / Cada</span>
                 </div>
                 {Object.keys(TABLE_LABELS).map(table => (
                   <div key={table} className="sync-toggles-row">
@@ -343,10 +349,10 @@ export default function Config() {
                         } catch { showToast('error', 'Error al guardar'); }
                       }} />
                     </span>
-                    <span className="sync-col-toggle" style={{minWidth:110}}>
+                    <span className="sync-col-toggle" style={{minWidth:170, display:'flex', alignItems:'center', gap:6}}>
                       <button
                         className="btn-test"
-                        style={{fontSize:'0.72rem',padding:'2px 8px',opacity: repopulating[table] ? 0.6 : 1}}
+                        style={{fontSize:'0.72rem',padding:'2px 8px',opacity: repopulating[table] ? 0.6 : 1, flexShrink:0}}
                         disabled={repopulating[table]}
                         onClick={async () => {
                           setRepopulating(p => ({...p, [table]: true}));
@@ -356,7 +362,6 @@ export default function Config() {
                               method: 'POST',
                               headers: { Authorization: `Bearer ${localStorage.getItem('siigo_token')}` }
                             });
-                            // Poll until done
                             const checkStatus = async () => {
                               try {
                                 const res = await fetch(`/api/repopulate?table=${table}`, {
@@ -381,6 +386,28 @@ export default function Config() {
                       >
                         {repopulating[table] ? '⟳ ...' : 'Repoblar'}
                       </button>
+                      {REPOPULATE_TABLES.has(table) && (
+                        <span style={{display:'inline-flex', alignItems:'center', gap:3}}>
+                          <input
+                            type="number"
+                            min={1}
+                            max={1440}
+                            value={Math.round((repopulateIntervals[table] ?? 600) / 60)}
+                            onChange={e => {
+                              const mins = Math.max(1, parseInt(e.target.value) || 1);
+                              setRepopulateIntervals(p => ({ ...p, [table]: mins * 60 }));
+                            }}
+                            onBlur={async () => {
+                              try {
+                                await api.saveRepopulateIntervals(repopulateIntervals);
+                                showToast('success', `${TABLE_LABELS[table]}: cada ${Math.round((repopulateIntervals[table] ?? 600) / 60)} min`);
+                              } catch { showToast('error', 'Error al guardar intervalo'); }
+                            }}
+                            style={{width:46, fontSize:'0.7rem', padding:'2px 4px', background:'#1e293b', border:'1px solid #334155', borderRadius:4, color:'#e2e8f0', textAlign:'center'}}
+                          />
+                          <span style={{fontSize:'0.7rem', color:'#64748b'}}>min</span>
+                        </span>
+                      )}
                     </span>
                   </div>
                 ))}

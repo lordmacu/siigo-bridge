@@ -23,8 +23,12 @@ func (s *Server) doShutdown() {
 		s.db.AddLog("info", "APP", "Server stopped (graceful shutdown)")
 	}
 
-	// Stop sync loops (detect + send)
+	// Stop sync loops (detect + send + repopulate)
 	if s.stopCh != nil {
+		select {
+		case s.stopCh <- true:
+		default:
+		}
 		select {
 		case s.stopCh <- true:
 		default:
