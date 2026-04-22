@@ -90,11 +90,7 @@ export default function Config() {
   const [sendEnabled, setSendEnabled] = useState<Record<string, boolean>>({});
   const [repopulating, setRepopulating] = useState<Record<string, boolean>>({});
   const [repopulateDone, setRepopulateDone] = useState<Record<string, string>>({});
-  const [repopulateIntervals, setRepopulateIntervals] = useState<Record<string, number>>({
-    cartera_cxc: 600, ventas_productos: 600, recaudo: 600,
-  });
-
-  const REPOPULATE_TABLES = new Set(['cartera_cxc', 'ventas_productos', 'recaudo']);
+  const [repopulateIntervals, setRepopulateIntervals] = useState<Record<string, number>>({});
 
   // --- Avanzado ---
   const [batchSize, setBatchSize] = useState(50);
@@ -386,28 +382,36 @@ export default function Config() {
                       >
                         {repopulating[table] ? '⟳ ...' : 'Repoblar'}
                       </button>
-                      {REPOPULATE_TABLES.has(table) && (
-                        <span style={{display:'inline-flex', alignItems:'center', gap:3}}>
-                          <input
-                            type="number"
-                            min={1}
-                            max={1440}
-                            value={Math.round((repopulateIntervals[table] ?? 600) / 60)}
-                            onChange={e => {
-                              const mins = Math.max(1, parseInt(e.target.value) || 1);
-                              setRepopulateIntervals(p => ({ ...p, [table]: mins * 60 }));
-                            }}
-                            onBlur={async () => {
-                              try {
-                                await api.saveRepopulateIntervals(repopulateIntervals);
-                                showToast('success', `${TABLE_LABELS[table]}: cada ${Math.round((repopulateIntervals[table] ?? 600) / 60)} min`);
-                              } catch { showToast('error', 'Error al guardar intervalo'); }
-                            }}
-                            style={{width:46, fontSize:'0.7rem', padding:'2px 4px', background:'#1e293b', border:'1px solid #334155', borderRadius:4, color:'#e2e8f0', textAlign:'center'}}
-                          />
-                          <span style={{fontSize:'0.7rem', color:'#64748b'}}>min</span>
-                        </span>
-                      )}
+                      <span style={{display:'inline-flex', alignItems:'center', gap:3}}>
+                        <input
+                          type="number"
+                          min={0}
+                          max={1440}
+                          placeholder="off"
+                          title="Intervalo en minutos para auto-repoblar. Vacío = desactivado."
+                          value={repopulateIntervals[table] ? Math.round(repopulateIntervals[table] / 60) : ''}
+                          onChange={e => {
+                            const raw = e.target.value;
+                            setRepopulateIntervals(p => {
+                              const next = { ...p };
+                              if (raw === '') { delete next[table]; }
+                              else { next[table] = Math.max(1, parseInt(raw) || 1) * 60; }
+                              return next;
+                            });
+                          }}
+                          onBlur={async () => {
+                            try {
+                              const payload = { ...repopulateIntervals };
+                              if (!(table in payload)) payload[table] = 0;
+                              await api.saveRepopulateIntervals(payload);
+                              const v = repopulateIntervals[table];
+                              showToast('success', v ? `${TABLE_LABELS[table]}: cada ${Math.round(v / 60)} min` : `${TABLE_LABELS[table]}: auto-repoblado desactivado`);
+                            } catch { showToast('error', 'Error al guardar intervalo'); }
+                          }}
+                          style={{width:46, fontSize:'0.7rem', padding:'2px 4px', background:'#1e293b', border:'1px solid #334155', borderRadius:4, color:repopulateIntervals[table] ? '#e2e8f0' : '#64748b', textAlign:'center'}}
+                        />
+                        <span style={{fontSize:'0.7rem', color:'#64748b'}}>min</span>
+                      </span>
                     </span>
                   </div>
                 ))}

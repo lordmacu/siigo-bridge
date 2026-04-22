@@ -1598,20 +1598,44 @@ func (s *Server) startSendLoop() {
 	}
 }
 
-// repopulateTables are populated on a fixed timer (not change-detection).
-var repopulateTablesList = []string{"cartera_cxc", "ventas_productos", "recaudo"}
+// repopulateTablesList returns every table the timer-driven repopulate loop manages.
+// Change detection is disabled: all tables refresh on their configured interval.
+func repopulateTablesList() []string {
+	extras := []string{"recaudo", "audit_trail_terceros"}
+	tables := append([]string{}, config.AllSyncTables()...)
+	seen := map[string]bool{}
+	for _, t := range tables {
+		seen[t] = true
+	}
+	for _, e := range extras {
+		if !seen[e] {
+			tables = append(tables, e)
+			seen[e] = true
+		}
+	}
+	return tables
+}
 
-// startRepopulateLoop clears and repopulates cartera_cxc, ventas_productos, and recaudo
-// on per-table intervals (configurable, default 600s). Checks every 30s which tables are due.
+// startRepopulateLoop clears and repopulates every table that has an explicit
+// auto-repopulate interval configured. Tables without an interval set are skipped.
+// Checks every 30s which tables are due.
 func (s *Server) startRepopulateLoop() {
 	// Track last repopulate time per table
 	lastRepopulate := map[string]time.Time{}
 
-	// Initial repopulate on startup
-	s.runRepopulateTables(repopulateTablesList)
-	now := time.Now()
-	for _, t := range repopulateTablesList {
-		lastRepopulate[t] = now
+	// Initial repopulate on startup — only tables with an explicit interval.
+	var initial []string
+	for _, t := range repopulateTablesList() {
+		if s.cfg.Sync.HasRepopulateInterval(t) {
+			initial = append(initial, t)
+		}
+	}
+	if len(initial) > 0 {
+		s.runRepopulateTables(initial)
+		now := time.Now()
+		for _, t := range initial {
+			lastRepopulate[t] = now
+		}
 	}
 
 	ticker := time.NewTicker(30 * time.Second)
@@ -1622,9 +1646,13 @@ func (s *Server) startRepopulateLoop() {
 		case <-ticker.C:
 			if !s.paused && s.cfg.SetupComplete {
 				var due []string
-				for _, table := range repopulateTablesList {
+				for _, table := range repopulateTablesList() {
+					if !s.cfg.Sync.HasRepopulateInterval(table) {
+						continue
+					}
 					secs := s.cfg.Sync.GetRepopulateIntervalSeconds(table)
-					if time.Since(lastRepopulate[table]) >= time.Duration(secs)*time.Second {
+					last, seen := lastRepopulate[table]
+					if !seen || time.Since(last) >= time.Duration(secs)*time.Second {
 						due = append(due, table)
 					}
 				}
@@ -1656,9 +1684,6 @@ func (s *Server) runRepopulateTables(tables []string) {
 	for _, table := range tables {
 		if !s.cfg.SetupComplete || s.paused {
 			break
-		}
-		if !s.cfg.IsDetectEnabled(table) {
-			continue
 		}
 		if s.repopulating[table] {
 			s.db.AddLog("info", "REPOPULATE", fmt.Sprintf("Skipping %s (already running)", table))
@@ -4426,13 +4451,17 @@ func (s *Server) handleRepopulate(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, map[string]string{"message": "Repopulating " + table + " from ISAM..."})
 }
 
-// GET  /api/repopulate-intervals → {"cartera_cxc":600, "ventas_productos":600, "recaudo":600}
-// POST /api/repopulate-intervals → body {"intervals":{"cartera_cxc":300,...}} saves per-table seconds
+// GET  /api/repopulate-intervals → {"cartera_cxc":600, ...} only tables with explicit interval.
+//     Tables without an entry are NOT auto-repopulated.
+// POST /api/repopulate-intervals → body {"intervals":{"clients":300,...}} saves per-table seconds
 func (s *Server) handleRepopulateIntervals(w http.ResponseWriter, r *http.Request) {
+	tables := repopulateTablesList()
 	if r.Method == "GET" {
 		result := map[string]int{}
-		for _, table := range repopulateTablesList {
-			result[table] = s.cfg.Sync.GetRepopulateIntervalSeconds(table)
+		for _, table := range tables {
+			if s.cfg.Sync.HasRepopulateInterval(table) {
+				result[table] = s.cfg.Sync.GetRepopulateIntervalSeconds(table)
+			}
 		}
 		jsonResponse(w, result)
 		return
@@ -4451,10 +4480,19 @@ func (s *Server) handleRepopulateIntervals(w http.ResponseWriter, r *http.Reques
 	if s.cfg.Sync.RepopulateIntervals == nil {
 		s.cfg.Sync.RepopulateIntervals = map[string]int{}
 	}
-	for _, table := range repopulateTablesList {
-		if secs, ok := body.Intervals[table]; ok && secs >= 60 {
-			s.cfg.Sync.RepopulateIntervals[table] = secs
+	for _, table := range tables {
+		secs, ok := body.Intervals[table]
+		if !ok {
+			continue
 		}
+		if secs <= 0 {
+			delete(s.cfg.Sync.RepopulateIntervals, table)
+			continue
+		}
+		if secs < 60 {
+			continue
+		}
+		s.cfg.Sync.RepopulateIntervals[table] = secs
 	}
 	if err := s.cfg.Save("config.json"); err != nil {
 		jsonError(w, err.Error(), 500)

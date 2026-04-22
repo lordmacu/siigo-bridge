@@ -171,6 +171,16 @@ func (s *SyncConfig) GetRepopulateIntervalSeconds(table string) int {
 	return 600
 }
 
+// HasRepopulateInterval reports whether the user has explicitly set an auto-repopulate
+// interval for this table. Tables without an explicit interval are NOT auto-repopulated.
+func (s *SyncConfig) HasRepopulateInterval(table string) bool {
+	if s.RepopulateIntervals == nil {
+		return false
+	}
+	secs, ok := s.RepopulateIntervals[table]
+	return ok && secs > 0
+}
+
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
