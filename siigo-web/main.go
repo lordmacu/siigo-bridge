@@ -1704,6 +1704,9 @@ func (s *Server) runRepopulateTables(tables []string) {
 		s.repopulateDone[table] = fmt.Sprintf("%d registros en %s", count, elapsed)
 		s.repopulating[table] = false
 		s.db.AddLog("info", "REPOPULATE", fmt.Sprintf("Table %s: %d records in %s", table, count, elapsed))
+		interval := s.cfg.Sync.GetRepopulateIntervalSeconds(table)
+		details := fmt.Sprintf("%d registros en %s (intervalo: %ds)", count, elapsed, interval)
+		s.db.AddAudit("system", "repopulate", table, "", details)
 	}
 }
 
@@ -4437,6 +4440,7 @@ func (s *Server) handleRepopulate(w http.ResponseWriter, r *http.Request) {
 	s.repopulateDone[table] = ""
 	s.db.AddLog("info", "REPOPULATE", fmt.Sprintf("Table %s cleared, re-running detect...", table))
 
+	username := s.getUsernameFromRequest(r)
 	go func() {
 		start := time.Now()
 		diffFn()
@@ -4446,6 +4450,7 @@ func (s *Server) handleRepopulate(w http.ResponseWriter, r *http.Request) {
 		s.repopulateDone[table] = fmt.Sprintf("%d registros en %s", count, elapsed)
 		s.repopulating[table] = false
 		s.db.AddLog("info", "REPOPULATE", fmt.Sprintf("Table %s repopulated: %d records in %s", table, count, elapsed))
+		s.db.AddAudit(username, "repopulate_manual", table, "", fmt.Sprintf("%d registros en %s", count, elapsed))
 	}()
 
 	jsonResponse(w, map[string]string{"message": "Repopulating " + table + " from ISAM..."})
